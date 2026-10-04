@@ -1,0 +1,60 @@
+/* Replicas, live logs and shells. Classes mirror docs/blueprint.html (.logs, .toggle). */
+
+.sm-note { font-size: 12px; font-weight: 400; }
+.replicas td { white-space: nowrap; }
+.replicas .row-acts { text-align: right; }
+.replicas .row-acts .btn + .btn { margin-left: 6px; }
+
+/* ---------- toggles (blueprint .toggle) ---------- */
+.toggle { display: inline-flex; align-items: center; gap: 8px; font-size: 13px; border: 0; background: none; padding: 2px 0; color: var(--ink-2); }
+.toggle i { width: 30px; height: 17px; border-radius: 9px; background: var(--line); position: relative; flex: none; transition: background .15s; }
+.toggle i::after { content: ""; position: absolute; top: 2px; left: 2px; width: 13px; height: 13px; border-radius: 50%; background: #fff; transition: left .15s; }
+.toggle[aria-checked="true"] i { background: var(--accent); }
+.toggle[aria-checked="true"] i::after { left: 15px; }
+.toggle:disabled { opacity: .5; cursor: not-allowed; }
+.toolbar .push { margin-left: auto; }
+.seg button:disabled { cursor: not-allowed; opacity: .6; }
+
+/* ---------- logs ---------- */
+.logviewer { display: grid; gap: 10px; min-width: 0; }
+.logsearch { display: inline-flex; align-items: center; gap: 8px; }
+.logsearch .input { width: 200px; }
+.logsearch .count { font-size: 12px; color: var(--muted); white-space: nowrap; }
+.logpanel { position: relative; background: var(--term-bg); color: var(--term-ink); border-radius: 8px; overflow: hidden; display: grid; min-width: 0; }
+.logv { overflow: auto; font-family: var(--mono); font-size: 12.3px; padding: 10px 0; outline: none; }
+.logv:focus-visible { box-shadow: inset 0 0 0 2px var(--term-acc); }
+.logv-in { position: relative; min-width: 100%; width: max-content; }
+.logv .row { height: 20px; line-height: 20px; white-space: pre; padding: 0 14px; }
+.logv .row.cur { background: rgba(147, 178, 255, .14); }
+.logv .ts, .logv .cut { color: var(--term-dim); }
+.logv .p1 { color: #93B2FF; } .logv .p2 { color: #6CCB97; } .logv .p3 { color: #E9BE62; } .logv .p4 { color: #D59BF0; }
+.logv .er { color: #FF8E7A; } .logv .wn { color: #E9BE62; }
+.logv mark { background: rgba(233, 190, 98, .25); color: inherit; border-radius: 2px; }
+.logempty { padding: 14px; color: var(--term-dim); font-family: var(--mono); font-size: 12.3px; }
+.logfoot { display: flex; flex-wrap: wrap; gap: 6px 14px; align-items: center; padding: 7px 14px 9px; border-top: 1px solid rgba(255, 255, 255, .07); font-family: var(--mono); font-size: 12px; color: var(--term-dim); }
+.logfoot .err { color: #FF8E7A; }
+.logfoot .wn { color: var(--term-warn); }
+.logfoot .podnote { color: var(--term-ink); }
+.logpanel .btn { background: rgba(255, 255, 255, .06); border-color: rgba(255, 255, 255, .14); color: var(--term-ink); }
+.logpanel .btn:hover { border-color: rgba(255, 255, 255, .35); }
+.logpanel .jump { position: absolute; right: 18px; bottom: 46px; box-shadow: 0 4px 14px rgba(0, 0, 0, .35); background: #1B2333; }
+
+/* ---------- shell ---------- */
+.shell-dlg { border: 1px solid var(--line); border-radius: 12px; padding: 0; width: min(1100px, calc(100vw - 32px)); height: min(720px, calc(100vh - 48px)); background: var(--surface); color: var(--ink); box-shadow: 0 20px 50px rgba(0, 0, 0, .3); overflow: hidden; }
+.shell-dlg[open] { display: grid; grid-template-rows: auto minmax(0, 1fr) auto; }
+.shell-dlg::backdrop { background: rgba(10, 14, 22, .55); }
+.shell-head { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; padding: 10px 14px; border-bottom: 1px solid var(--line-2); font-size: 13px; }
+.shell-head .mono { font-family: var(--mono); font-size: 12.5px; overflow-wrap: anywhere; }
+.shell-head .input { width: auto; padding: 4px 8px; font-size: 13px; }
+.shell-head .push { margin-left: auto; }
+.shell-pick { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); font-size: 12.5px; }
+.shell-term { background: var(--term-bg); padding: 8px 4px 8px 10px; min-height: 0; min-width: 0; }
+.shell-term .xterm { height: 100%; }
+.shell-foot { display: flex; flex-wrap: wrap; gap: 6px 12px; align-items: center; padding: 8px 14px; border-top: 1px solid var(--line-2); font-size: 12.5px; background: var(--surface-2); }
+.shell-foot .err { color: var(--bad); }
+
+@media (max-width: 760px) {
+  .logsearch, .logsearch .input { width: 100%; }
+  .toolbar .push { margin-left: 0; }
+  .shell-dlg { width: 100vw; height: 100dvh; max-width: none; max-height: none; border-radius: 0; }
+}

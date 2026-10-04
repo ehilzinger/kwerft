@@ -76,6 +76,7 @@ func (a *api) register(mux *http.ServeMux) {
 
 	a.registerWorkloads(mux)
 	a.registerJobs(mux)
+	a.registerPods(mux)
 }
 
 // ---- setup -----------------------------------------------------------------

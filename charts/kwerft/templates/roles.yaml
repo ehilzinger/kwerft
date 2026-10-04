@@ -108,3 +108,35 @@ subjects:
   - apiGroup: rbac.authorization.k8s.io
     kind: Group
     name: kwerft:role:viewer
+---
+# Pods of a project: read them, their logs and their CPU/memory (metrics-server).
+# Not bound cluster-wide: the Project reconciler binds it in each project
+# namespace to all four role groups, so no console role reaches the pods or
+# logs of kube-system or kwerft-system.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: kwerft:pods-read
+  labels: {{- include "kwerft.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: [pods, pods/log]
+    verbs: [get, list, watch]
+  - apiGroups: [metrics.k8s.io]
+    resources: [pods]
+    verbs: [get, list]
+---
+# A shell in a project's containers (the console records every session).
+# Bound per project namespace to owner, admin and developer, never viewer.
+# Exec over WebSocket is an HTTP GET, which Kubernetes authorizes as "get"
+# and, for the upgrade, also as "create"; exec over SPDY is a POST ("create").
+# Both verbs, so the console can use WebSocket and fall back to SPDY.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: kwerft:pods-exec
+  labels: {{- include "kwerft.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: [pods/exec]
+    verbs: [get, create]

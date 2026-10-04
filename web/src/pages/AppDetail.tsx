@@ -6,6 +6,7 @@ import { AppStatus } from "../components/AppStatus";
 import { Dialog } from "../components/Dialog";
 import { Field } from "../components/Field";
 import { Icon } from "../components/Icon";
+import { Replicas } from "../components/Replicas";
 import { abilities, ago, sizes, workloads, type App, type Phase, type Revision } from "../workloads";
 import { AppLogs } from "./AppLogs";
 import { AppSettings } from "./AppSettings";
@@ -39,6 +40,7 @@ export function AppDetail() {
   const q = useQuery({ queryKey: key, queryFn: () => workloads.app(project, name), refetchInterval: 5000 });
 
   const [tab, setTab] = useState<Tab>("overview");
+  const [logPod, setLogPod] = useState<string>(); // a replica's Logs button
   const [dialog, setDialog] = useState<"scale" | "delete" | "run" | { rollback: Revision }>();
   const [notice, setNotice] = useState<{ kind: "info" | "bad"; text: string }>();
 
@@ -122,7 +124,8 @@ export function AppDetail() {
 
       <div className="tabpanel" role="tabpanel" id={`panel-${tab}`} aria-labelledby={`tab-${tab}`}>
         {tab === "overview" && <Overview app={app} canDeploy={can.deploy} onRollback={(rev) => setDialog({ rollback: rev })} />}
-        {tab === "logs" && <AppLogs app={app} />}
+        {tab === "overview" && <Replicas app={app} onLogs={(pod) => { setLogPod(pod); setTab("logs"); }} />}
+        {tab === "logs" && <AppLogs app={app} pod={logPod} />}
         {tab === "builds" && (
           <div className="empty">
             <h2>{git ? "Builds arrive in Phase 2" : "No builds for image apps"}</h2>

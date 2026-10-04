@@ -51,6 +51,13 @@ type Config struct {
 	// (see api_workloads.go for when that is allowed).
 	Kube      *kube.Impersonator
 	KubeCache client.Reader
+	// RecordingsDir keeps the asciinema recordings of shell sessions; empty
+	// disables shells, since none may run unrecorded (see api_shell.go).
+	RecordingsDir string
+
+	// podsHook lets tests swap Kubernetes and the limits of the pod
+	// endpoints (logs, shells) for fakes; see api_pods.go.
+	podsHook func(*podsAPI)
 }
 
 // New returns an http.Server ready to ListenAndServe.
@@ -160,6 +167,10 @@ func (s *statusRecorder) WriteHeader(code int) {
 	s.status = code
 	s.ResponseWriter.WriteHeader(code)
 }
+
+// Unwrap lets http.ResponseController reach Flush, Hijack and deadlines of
+// the real writer (log streams and WebSockets need them).
+func (s *statusRecorder) Unwrap() http.ResponseWriter { return s.ResponseWriter }
 
 func logRequests(log *slog.Logger, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

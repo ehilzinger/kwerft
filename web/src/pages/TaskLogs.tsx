@@ -1,19 +1,29 @@
+import { useQuery } from "@tanstack/react-query";
 import type { Task } from "../jobs";
+import { podsApi, taskLogsPath } from "../pods";
+import { LogViewer } from "../components/LogViewer";
 
-// Placeholder for the logs of one run in Task detail. The live LogViewer
-// (built alongside the App logs) replaces this component: a Task's pods carry
-// the label kwerft.dev/task=<name> in namespace <project>, and
-// task.status.pod names the most recent one (a retry starts a new pod).
-// Finished runs keep their pod, and so their logs, until the Task expires or
-// its Schedule prunes it.
+// The logs of one run in Task detail. A retry starts a new pod, so the
+// replica selector lists every pod of the Task; finished runs keep their pod
+// (and logs) until the Task expires or its Schedule prunes it.
 export function TaskLogs({ task }: { task: Task }) {
-  const ns = task.metadata.namespace;
-  const pod = task.status?.pod;
+  const project = task.metadata.namespace;
+  const name = task.metadata.name;
+  const running = task.status?.phase === "Pending" || task.status?.phase === "Running";
+  const pods = useQuery({
+    queryKey: ["task-pods", project, name],
+    queryFn: () => podsApi.taskPods(project, name),
+    refetchInterval: running ? 5000 : false,
+  });
+
+  if (!task.status?.pod) return <p className="dim">No pod has started yet.</p>;
   return (
-    <div className="logs-placeholder">
-      <p>Live logs for this run arrive with log streaming. Until then:</p>
-      <code>{pod ? `kubectl logs -n ${ns} ${pod}${task.status?.phase === "Running" ? " -f" : ""}` : `kubectl logs -n ${ns} -l kwerft.dev/task=${task.metadata.name}`}</code>
-      {!pod && <p className="dim">No pod has started yet.</p>}
-    </div>
+    <LogViewer
+      path={taskLogsPath(project, name)}
+      replicas={pods.data?.pods}
+      pod={task.status.pod}
+      follow={running}
+      downloadName={name}
+    />
   );
 }

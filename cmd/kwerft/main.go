@@ -131,8 +131,9 @@ func main() {
 		DataKey:         key,
 		PasskeyOrigins:  passkeyOrigins,
 
-		Kube:      kubeImp,
-		KubeCache: kubeCache,
+		Kube:          kubeImp,
+		KubeCache:     kubeCache,
+		RecordingsDir: filepath.Join(*dataDir, "recordings"),
 	})
 
 	go func() {
