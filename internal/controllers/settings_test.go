@@ -12,6 +12,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/client-go/util/retry"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	gwv1 "sigs.k8s.io/gateway-api/apis/v1"
 
@@ -71,23 +72,30 @@ func issue(t *testing.T, name string, hosts ...string) {
 	ctx := context.Background()
 	cert := &unstructured.Unstructured{}
 	cert.SetGroupVersionKind(certificateGVK)
-	err := k8s.Get(ctx, client.ObjectKey{Namespace: GatewayNamespace, Name: name}, cert)
-	if apierrors.IsNotFound(err) {
-		cert.SetNamespace(GatewayNamespace)
-		cert.SetName(name)
-		dns := []any{}
-		for _, h := range hosts {
-			dns = append(dns, h)
+	// A reconciler may touch the Certificate between our read and write
+	// (annotations): retry on conflict instead of failing the test.
+	err := retry.RetryOnConflict(retry.DefaultRetry, func() error {
+		cert = &unstructured.Unstructured{}
+		cert.SetGroupVersionKind(certificateGVK)
+		err := k8s.Get(ctx, client.ObjectKey{Namespace: GatewayNamespace, Name: name}, cert)
+		if apierrors.IsNotFound(err) {
+			cert.SetNamespace(GatewayNamespace)
+			cert.SetName(name)
+			dns := []any{}
+			for _, h := range hosts {
+				dns = append(dns, h)
+			}
+			_ = unstructured.SetNestedSlice(cert.Object, dns, "spec", "dnsNames")
+			err = k8s.Create(ctx, cert)
 		}
-		_ = unstructured.SetNestedSlice(cert.Object, dns, "spec", "dnsNames")
-		err = k8s.Create(ctx, cert)
-	}
+		if err != nil {
+			return err
+		}
+		_ = unstructured.SetNestedField(cert.Object, time.Now().Add(90*24*time.Hour).UTC().Format(time.RFC3339), "status", "notAfter")
+		_ = unstructured.SetNestedSlice(cert.Object, []any{map[string]any{"type": "Ready", "status": "True", "message": "Certificate is up to date"}}, "status", "conditions")
+		return k8s.Update(ctx, cert)
+	})
 	if err != nil {
-		t.Fatal(err)
-	}
-	_ = unstructured.SetNestedField(cert.Object, time.Now().Add(90*24*time.Hour).UTC().Format(time.RFC3339), "status", "notAfter")
-	_ = unstructured.SetNestedSlice(cert.Object, []any{map[string]any{"type": "Ready", "status": "True", "message": "Certificate is up to date"}}, "status", "conditions")
-	if err := k8s.Update(ctx, cert); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = k8s.Delete(context.Background(), cert) })
