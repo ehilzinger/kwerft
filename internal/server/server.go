@@ -11,6 +11,9 @@ import (
 	"strings"
 	"time"
 
+	"sigs.k8s.io/controller-runtime/pkg/client"
+
+	"github.com/ehilzinger/kwerft/internal/kube"
 	"github.com/ehilzinger/kwerft/internal/setup"
 	"github.com/ehilzinger/kwerft/internal/store"
 	"github.com/ehilzinger/kwerft/internal/version"
@@ -42,6 +45,12 @@ type Config struct {
 	// means https://<ConsoleDomain>. The relying party ID is ConsoleDomain, and
 	// passkeys are off when that is empty.
 	PasskeyOrigins []string
+
+	// Kube enables the workload API (projects, apps); it acts as the
+	// signed-in user. KubeCache, optional, serves list endpoints for speed
+	// (see api_workloads.go for when that is allowed).
+	Kube      *kube.Impersonator
+	KubeCache client.Reader
 }
 
 // New returns an http.Server ready to ListenAndServe.

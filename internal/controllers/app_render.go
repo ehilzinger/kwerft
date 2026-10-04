@@ -116,7 +116,11 @@ func (a *appRender) podTemplate() *corev1ac.PodTemplateSpecApplyConfiguration {
 	if src := a.app.Spec.Source.Image; src != nil && src.PullSecret != "" {
 		spec.WithImagePullSecrets(corev1ac.LocalObjectReference().WithName(src.PullSecret))
 	}
-	return corev1ac.PodTemplateSpec().WithLabels(a.labels).WithSpec(spec)
+	tpl := corev1ac.PodTemplateSpec().WithLabels(a.labels).WithSpec(spec)
+	if at := a.app.Annotations[kwerftv1.AnnotationRestartedAt]; at != "" {
+		tpl.WithAnnotations(map[string]string{kwerftv1.AnnotationRestartedAt: at})
+	}
+	return tpl
 }
 
 func (a *appRender) deployment() *appsv1ac.DeploymentApplyConfiguration {

@@ -73,6 +73,8 @@ func (a *api) register(mux *http.ServeMux) {
 
 	mux.HandleFunc("GET /api/v1/audit", a.requireUser(a.requireRole(a.auditList, store.RoleOwner, store.RoleAdmin)))
 	a.registerMFA(mux)
+
+	a.registerWorkloads(mux)
 }
 
 // ---- setup -----------------------------------------------------------------

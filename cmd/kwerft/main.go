@@ -76,8 +76,9 @@ func main() {
 
 	var tokens setup.TokenSource = setup.NewStaticTokenSource("", 0) // expired: no setup possible
 	var ready atomic.Bool
+	var mgr ctrl.Manager
 	if *runControllers {
-		mgr, err := newManager(log, *leaderElect, &controllers.DomainReconciler{
+		mgr, err = newManager(log, *leaderElect, &controllers.DomainReconciler{
 			ConsoleDomain: *consoleDomain,
 			GatewayClass:  *gatewayClass,
 			ClusterIssuer: *clusterIssuer,
@@ -114,6 +115,7 @@ func main() {
 		}
 		passkeyOrigins = devPasskeyOrigins(*listen)
 	}
+	kubeImp, kubeCache := workloadAccess(log, mgr)
 
 	srv := server.New(server.Config{
 		Listen:        *listen,
@@ -128,6 +130,9 @@ func main() {
 		InsecureCookies: *dev,
 		DataKey:         key,
 		PasskeyOrigins:  passkeyOrigins,
+
+		Kube:      kubeImp,
+		KubeCache: kubeCache,
 	})
 
 	go func() {

@@ -1,0 +1,110 @@
+# Console roles as Kubernetes RBAC. The console impersonates each signed-in
+# user as "kwerft:<email>" in the group "kwerft:role:<role>" (plus
+# system:authenticated), so these bindings decide what every console user may
+# do. Single team, cluster-wide for now; Phase 4 binds per project namespace.
+#
+# Nobody gets Secrets through this path. Developers can point an App at a
+# Secret by name; the pod reads it, the user never does.
+#
+# Keep template directives on lines of their own: the API tests apply this
+# file to a test API server after dropping every line with a template action.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: kwerft:owner
+  labels: {{- include "kwerft.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [kwerft.dev]
+    resources: ["*"]
+    verbs: ["*"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: kwerft:admin
+  labels: {{- include "kwerft.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [kwerft.dev]
+    resources: ["*"]
+    verbs: ["*"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: kwerft:developer
+  labels: {{- include "kwerft.labels" . | nindent 4 }}
+rules:
+  # Workloads: deploy, change, roll back, restart, scale, delete.
+  - apiGroups: [kwerft.dev]
+    resources: [apps, domains, tasks, schedules, volumes]
+    verbs: [get, list, watch, create, update, patch, delete]
+  # Everything else Kwerft defines (projects, builds, ...): read only.
+  - apiGroups: [kwerft.dev]
+    resources: ["*"]
+    verbs: [get, list, watch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: kwerft:viewer
+  labels: {{- include "kwerft.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [kwerft.dev]
+    resources: ["*"]
+    verbs: [get, list, watch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: kwerft:owner
+  labels: {{- include "kwerft.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: kwerft:owner
+subjects:
+  - apiGroup: rbac.authorization.k8s.io
+    kind: Group
+    name: kwerft:role:owner
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: kwerft:admin
+  labels: {{- include "kwerft.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: kwerft:admin
+subjects:
+  - apiGroup: rbac.authorization.k8s.io
+    kind: Group
+    name: kwerft:role:admin
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: kwerft:developer
+  labels: {{- include "kwerft.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: kwerft:developer
+subjects:
+  - apiGroup: rbac.authorization.k8s.io
+    kind: Group
+    name: kwerft:role:developer
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: kwerft:viewer
+  labels: {{- include "kwerft.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: kwerft:viewer
+subjects:
+  - apiGroup: rbac.authorization.k8s.io
+    kind: Group
+    name: kwerft:role:viewer

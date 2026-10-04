@@ -64,6 +64,12 @@ type GitSource struct {
 	// +kubebuilder:default=true
 	// +optional
 	AutoDeploy *bool `json:"autoDeploy,omitempty"`
+
+	// PinnedImage runs this image (an earlier build) instead of the latest
+	// successful build. The console sets it on rollback; clear it to follow
+	// builds again.
+	// +optional
+	PinnedImage string `json:"pinnedImage,omitempty"`
 }
 
 // AppPort exposes a container port inside the cluster and optionally on a
