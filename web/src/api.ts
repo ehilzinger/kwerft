@@ -2,6 +2,8 @@
 // error shapes and status handling live in one place. Session cookies are
 // HttpOnly; the browser sends them, this code never sees them.
 
+import type { PasskeyOptions } from "./webauthn";
+
 export class ApiError extends Error {
   constructor(
     public status: number,
@@ -44,6 +46,9 @@ async function request<T>(path: string, init?: RequestInit & { json?: unknown })
 export type VersionInfo = { version: string; commit: string; platform: "cloud" | "dedicated" };
 export type User = { id: string; email: string; name: string; role: "owner" | "admin" | "developer" | "viewer" };
 export type SetupStatus = { complete: boolean };
+/** A right password for an account with a second factor: these methods can finish the sign-in. */
+export type SecondFactorNeeded = { secondFactor: SecondFactor[] };
+export type SecondFactor = "passkey" | "totp" | "recovery";
 
 export const api = {
   version: () => request<VersionInfo>("/version"),
@@ -54,8 +59,55 @@ export const api = {
     request<User>("/setup/owner", { method: "POST", json: owner }),
 
   session: () => request<User>("/session"),
-  login: (email: string, password: string) => request<User>("/session", { method: "POST", json: { email, password } }),
+  login: (email: string, password: string) =>
+    request<User | SecondFactorNeeded>("/session", { method: "POST", json: { email, password } }),
   logout: () => request<void>("/session", { method: "DELETE" }),
 };
 
 export const isUnauthorized = (e: unknown) => e instanceof ApiError && e.status === 401;
+
+// ---- second factors and the account page ----------------------------------
+
+export type Passkey = { id: string; name: string; createdAt: string; lastUsedAt: string | null };
+export type AccountSession = { id: string; current: boolean; createdAt: string; lastSeenAt: string; ip: string; userAgent: string };
+export type Account = {
+  user: User;
+  totp: boolean;
+  passkeys: Passkey[];
+  recoveryCodesLeft: number;
+  sessions: AccountSession[];
+  available: { totp: boolean; passkeys: boolean };
+};
+export type TOTPSetup = { secret: string; uri: string; qr: string };
+/** Recovery codes come back only when they were (re)generated: the one time they are shown. */
+export type MaybeCodes = { recoveryCodes?: string[] };
+
+const post = <T,>(path: string, json?: unknown) => request<T>(path, { method: "POST", json: json ?? {} });
+
+export const mfaApi = {
+  totp: (code: string) => post<User>("/session/second-factor/totp", { code }),
+  recovery: (code: string) => post<User>("/session/second-factor/recovery", { code }),
+  passkeyBegin: () => post<PasskeyOptions>("/session/second-factor/passkey/begin"),
+  passkeyFinish: (credential: unknown) => post<User>("/session/second-factor/passkey/finish", credential),
+  /** Passwordless sign-in with a discoverable passkey. */
+  passwordlessBegin: () => post<PasskeyOptions>("/session/passkey/begin"),
+  passwordlessFinish: (credential: unknown) => post<User>("/session/passkey/finish", credential),
+};
+
+export const accountApi = {
+  get: () => request<Account>("/account"),
+  rename: (name: string) => request<User>("/account", { method: "PATCH", json: { name } }),
+  changePassword: (current: string, next: string) => post<{ signedOut: number }>("/account/password", { current, new: next }),
+  totpStart: (password: string) => post<TOTPSetup>("/account/totp", { password }),
+  totpConfirm: (code: string) => post<MaybeCodes>("/account/totp/confirm", { code }),
+  totpDisable: (password: string) => post<void>("/account/totp/disable", { password }),
+  regenerateCodes: (password: string) => post<Required<MaybeCodes>>("/account/recovery-codes", { password }),
+  passkeyBegin: (password: string) => post<PasskeyOptions>("/account/passkeys/begin", { password }),
+  passkeyFinish: (name: string, credential: unknown) =>
+    post<{ passkey: Passkey } & MaybeCodes>("/account/passkeys/finish", { name, credential }),
+  renamePasskey: (id: string, name: string) => request<void>(`/account/passkeys/${encodeURIComponent(id)}`, { method: "PATCH", json: { name } }),
+  removePasskey: (id: string, password: string) =>
+    request<void>(`/account/passkeys/${encodeURIComponent(id)}`, { method: "DELETE", json: { password } }),
+  signOutOthers: () => request<{ signedOut: number }>("/account/sessions", { method: "DELETE" }),
+  signOutSession: (id: string) => request<void>(`/account/sessions/${encodeURIComponent(id)}`, { method: "DELETE" }),
+};
