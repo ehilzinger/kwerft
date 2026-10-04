@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"encoding/base64"
 	"errors"
 	"net/url"
 	"strings"
@@ -111,7 +112,7 @@ func TestSealerRoundTripAndWrongKey(t *testing.T) {
 		t.Fatal(err)
 	}
 	sealed := s.Seal([]byte("totp seed"), "totp:user1")
-	if !strings.HasPrefix(sealed, "v1:") || strings.Contains(sealed, "totp seed") {
+	if !strings.HasPrefix(sealed, "v2:"+KeyID(key)+":") || strings.Contains(sealed, "totp seed") {
 		t.Errorf("sealed = %q", sealed)
 	}
 	if s.Seal([]byte("totp seed"), "totp:user1") == sealed {
@@ -128,9 +129,105 @@ func TestSealerRoundTripAndWrongKey(t *testing.T) {
 	if _, err := s2.Open(sealed, "totp:user1"); !errors.Is(err, ErrSealed) {
 		t.Errorf("wrong key: %v, want ErrSealed", err)
 	}
-	for _, bad := range []string{"", "v1:", "v1:!!!", "v2:" + sealed[3:], sealed[:len(sealed)-2]} {
+	body := sealed[len("v2:"+KeyID(key)+":"):]
+	for _, bad := range []string{"", "v1:", "v1:!!!", "v2:", "v2:" + body, "v2:00000000:" + body, "v3:" + sealed[3:], sealed[:len(sealed)-2]} {
 		if _, err := s.Open(bad, "totp:user1"); !errors.Is(err, ErrSealed) {
 			t.Errorf("Open(%q): %v, want ErrSealed", bad, err)
+		}
+	}
+}
+
+// sealV1 seals the way Kwerft 0.1 did: "v1:" and no key ID.
+func sealV1(t *testing.T, key []byte, pt, context string) string {
+	t.Helper()
+	k, err := newSealKey(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	nonce := make([]byte, k.aead.NonceSize())
+	out := k.aead.Seal(nonce, nonce, []byte(pt), []byte(context))
+	return "v1:" + base64.RawStdEncoding.EncodeToString(out)
+}
+
+func TestSealerRotation(t *testing.T) {
+	k1, _ := ParseDataKey(NewDataKey())
+	k2, _ := ParseDataKey(NewDataKey())
+	k3, _ := ParseDataKey(NewDataKey())
+	old, _ := NewSealer(k1)
+	v1 := sealV1(t, k1, "seed-a", "totp:a")
+	v2 := old.Seal([]byte("seed-b"), "totp:b")
+
+	// The upgrade path: a 0.1 value opens with the same key and reseals to v2.
+	if pt, err := old.Open(v1, "totp:a"); err != nil || string(pt) != "seed-a" {
+		t.Fatalf("v1 value: %q %v", pt, err)
+	}
+	if old.Current(v1) || !old.Current(v2) {
+		t.Errorf("Current: v1 %v, v2 %v", old.Current(v1), old.Current(v2))
+	}
+
+	// After a restart with KWERFT_DATA_KEY=k2 and the previous key k1.
+	s, err := NewSealer(k2, k1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := s.KeyIDs(); len(got) != 2 || got[0] != KeyID(k2) || got[1] != KeyID(k1) || s.PrimaryID() != KeyID(k2) {
+		t.Errorf("key IDs %v, primary %s", got, s.PrimaryID())
+	}
+	for sealed, want := range map[string]string{v1: "seed-a", v2: "seed-b"} {
+		ctx := "totp:a"
+		if want == "seed-b" {
+			ctx = "totp:b"
+		}
+		out, changed, err := s.Reseal(sealed, ctx)
+		if err != nil || !changed || !s.Current(out) {
+			t.Fatalf("reseal %q: %q %v %v", want, out, changed, err)
+		}
+		if again, changed, _ := s.Reseal(out, ctx); changed || again != out {
+			t.Error("resealing a current value changed it")
+		}
+		// The new key alone opens the resealed value.
+		only, _ := NewSealer(k2)
+		if pt, err := only.Open(out, ctx); err != nil || string(pt) != want {
+			t.Errorf("open with the new key alone: %q %v", pt, err)
+		}
+	}
+	if _, _, err := s.Reseal(v2, "totp:other"); !errors.Is(err, ErrSealed) {
+		t.Errorf("reseal with a wrong context: %v", err)
+	}
+
+	// Rotating in place: k3 seals, k2 and k1 still open until forgotten.
+	if err := s.Rotate(k3); err != nil {
+		t.Fatal(err)
+	}
+	if s.PrimaryID() != KeyID(k3) || len(s.KeyIDs()) != 3 {
+		t.Errorf("after rotate: %s %v", s.PrimaryID(), s.KeyIDs())
+	}
+	if _, err := s.Open(v2, "totp:b"); err != nil {
+		t.Errorf("old value after rotate: %v", err)
+	}
+	s.Forget()
+	if _, err := s.Open(v2, "totp:b"); !errors.Is(err, ErrSealed) {
+		t.Errorf("old value after forget: %v", err)
+	}
+	if ids := s.KeyIDs(); len(ids) != 1 || ids[0] != KeyID(k3) {
+		t.Errorf("after forget: %v", ids)
+	}
+	if _, err := NewSealer(k1, make([]byte, 8)); err == nil {
+		t.Error("short previous key accepted")
+	}
+}
+
+func TestAPITokenShape(t *testing.T) {
+	tok := NewAPIToken()
+	if !strings.HasPrefix(tok, "kwft_") || !LooksLikeAPIToken(tok) || NewAPIToken() == tok {
+		t.Fatalf("token %q", tok)
+	}
+	if h := APITokenHint(tok); !strings.HasPrefix(tok, strings.TrimSuffix(h, "…")) || len(h) > 16 {
+		t.Errorf("hint %q", h)
+	}
+	for _, bad := range []string{"", "kwft_", "kwft_short", NewToken(), "kwft_" + NewToken() + "x", "Kwft_" + NewToken(), "kwft_" + strings.Repeat("!", 43)} {
+		if LooksLikeAPIToken(bad) {
+			t.Errorf("%q looks like a token", bad)
 		}
 	}
 }

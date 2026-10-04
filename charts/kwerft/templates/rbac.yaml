@@ -59,6 +59,11 @@ rules:
   - apiGroups: [cilium.io]
     resources: [ciliumnetworkpolicies, ciliumclusterwidenetworkpolicies]
     verbs: [get, list, watch, create, update, patch, delete]
+  # The nodes' Cilium router IPs: Traefik's connections come from them, so
+  # only they may set X-Real-Ip (internal/server/clientip.go).
+  - apiGroups: [cilium.io]
+    resources: [ciliumnodes]
+    verbs: [get, list, watch]
   - apiGroups: [rbac.authorization.k8s.io]
     resources: [roles, rolebindings]
     verbs: [get, list, watch, create, update, patch, delete, bind, escalate]

@@ -28,6 +28,11 @@ type ConsoleSettingsSpecApplyConfiguration struct {
 	// kwerft-system, which owners and admins may write through the console
 	// but nobody reads back.
 	DNS *DNSSettingsApplyConfiguration `json:"dns,omitempty"`
+	// SSO is single sign-on through an OpenID Connect provider. The client
+	// secret lives in the Secret kwerft-oidc-client (key "clientSecret") in
+	// kwerft-system, which owners and admins may write through the console
+	// but nobody reads back.
+	SSO *SSOSettingsApplyConfiguration `json:"sso,omitempty"`
 }
 
 // ConsoleSettingsSpecApplyConfiguration constructs a declarative configuration of the ConsoleSettingsSpec type for use with
@@ -65,5 +70,13 @@ func (b *ConsoleSettingsSpecApplyConfiguration) WithTLS(value apiv1alpha1.TLSMod
 // If called multiple times, the DNS field is set to the value of the last call.
 func (b *ConsoleSettingsSpecApplyConfiguration) WithDNS(value *DNSSettingsApplyConfiguration) *ConsoleSettingsSpecApplyConfiguration {
 	b.DNS = value
+	return b
+}
+
+// WithSSO sets the SSO field in the declarative configuration to the given value
+// and returns the receiver, so that objects can be built by chaining "With" function invocations.
+// If called multiple times, the SSO field is set to the value of the last call.
+func (b *ConsoleSettingsSpecApplyConfiguration) WithSSO(value *SSOSettingsApplyConfiguration) *ConsoleSettingsSpecApplyConfiguration {
+	b.SSO = value
 	return b
 }

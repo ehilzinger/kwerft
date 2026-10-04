@@ -70,6 +70,59 @@ type ConsoleSettingsSpec struct {
 	// but nobody reads back.
 	// +optional
 	DNS *DNSSettings `json:"dns,omitempty"`
+
+	// SSO is single sign-on through an OpenID Connect provider. The client
+	// secret lives in the Secret kwerft-oidc-client (key "clientSecret") in
+	// kwerft-system, which owners and admins may write through the console
+	// but nobody reads back.
+	// +optional
+	SSO *SSOSettings `json:"sso,omitempty"`
+}
+
+// SSOSettings configures "Sign in with …" on the console's sign-in page.
+// Users are matched by the email address the provider verified; a first
+// sign-in links the provider account to the user.
+type SSOSettings struct {
+	// Enabled shows the button on the sign-in page.
+	Enabled bool `json:"enabled"`
+
+	// Provider is the preset: google, microsoft (Entra ID, one tenant),
+	// keycloak or oidc (any OpenID Connect provider).
+	// +kubebuilder:validation:Enum=google;microsoft;keycloak;oidc
+	Provider string `json:"provider"`
+
+	// Issuer is the provider's issuer URL; discovery reads
+	// <issuer>/.well-known/openid-configuration.
+	// +kubebuilder:validation:Pattern=`^https://[^\s?#]+$`
+	// +kubebuilder:validation:MaxLength=500
+	Issuer string `json:"issuer"`
+
+	// ClientID of the console's OAuth client at the provider.
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=500
+	ClientID string `json:"clientID"`
+
+	// DisplayName names the provider on the button ("Sign in with …").
+	// +kubebuilder:validation:MaxLength=60
+	// +optional
+	DisplayName string `json:"displayName,omitempty"`
+
+	// AllowedDomains, when set, admits only email addresses in these
+	// domains. Auto-join requires it.
+	// +kubebuilder:validation:MaxItems=20
+	// +optional
+	AllowedDomains []string `json:"allowedDomains,omitempty"`
+
+	// AutoJoin creates an account with DefaultRole for a verified address
+	// in AllowedDomains on its first sign-in. Off: only existing members and
+	// people with an open invite can sign in.
+	// +optional
+	AutoJoin bool `json:"autoJoin,omitempty"`
+
+	// DefaultRole for auto-joined accounts.
+	// +kubebuilder:validation:Enum=developer;viewer
+	// +optional
+	DefaultRole string `json:"defaultRole,omitempty"`
 }
 
 // CertificateState is one certificate the console itself depends on.

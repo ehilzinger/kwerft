@@ -166,7 +166,7 @@ func (a *api) loginPasskeyFinish(w http.ResponseWriter, r *http.Request) {
 		a.internalError(w, r, err)
 		return
 	}
-	a.finishLogin(w, r, hash, u, "password + passkey")
+	a.finishLogin(w, r, hash, u, "passkey")
 }
 
 // ---- passwordless sign-in with a discoverable passkey -----------------------

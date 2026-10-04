@@ -206,3 +206,39 @@ subjects:
   - apiGroup: rbac.authorization.k8s.io
     kind: Group
     name: kwerft:role:admin
+---
+# Settings › Single sign-on: the OpenID Connect client secret, the same way
+# as the DNS token (patch only; the Domain reconciler creates it empty; the
+# console reads it with its own identity). Its settings are
+# ConsoleSettings.spec.sso. The data key (kwerft-data-key) has no such role:
+# a patch answers with the object, so even a patch right would reveal it;
+# the console rotates it itself (internal/server/api_datakey.go).
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: kwerft:oidc-client
+  namespace: kwerft-system
+  labels: {{- include "kwerft.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: [secrets]
+    resourceNames: [kwerft-oidc-client]
+    verbs: [patch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: kwerft:oidc-client
+  namespace: kwerft-system
+  labels: {{- include "kwerft.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: kwerft:oidc-client
+subjects:
+  - apiGroup: rbac.authorization.k8s.io
+    kind: Group
+    name: kwerft:role:owner
+  - apiGroup: rbac.authorization.k8s.io
+    kind: Group
+    name: kwerft:role:admin

@@ -11,6 +11,21 @@ import (
 	"github.com/ehilzinger/kwerft/internal/auth"
 )
 
+// dataKeyPrevious returns the key a rotation replaces (KWERFT_DATA_KEY_PREVIOUS,
+// the "previous" key of the data-key Secret), if one is set: values sealed
+// with it are re-sealed with the current key at start-up.
+func dataKeyPrevious() ([][]byte, error) {
+	v := os.Getenv("KWERFT_DATA_KEY_PREVIOUS")
+	if v == "" {
+		return nil, nil
+	}
+	key, err := auth.ParseDataKey(v)
+	if err != nil {
+		return nil, fmt.Errorf("KWERFT_DATA_KEY_PREVIOUS: %w", err)
+	}
+	return [][]byte{key}, nil
+}
+
 // dataKey returns the key that encrypts secrets in the database (TOTP seeds).
 // Production reads KWERFT_DATA_KEY, which the Helm chart fills from the
 // kwerft-data-key Secret. --dev falls back to a key kept beside the database.

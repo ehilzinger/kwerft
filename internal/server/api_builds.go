@@ -405,10 +405,7 @@ func (b *buildsAPI) buildLogs(w http.ResponseWriter, r *http.Request) {
 
 	s := &logStream{
 		b: own, ns: builds.Namespace, pods: podsOf, q: lq, lim: b.logs,
-		alive: func(ctx context.Context) bool {
-			_, u, err := b.store.SessionByHash(ctx, pr.idHash, b.now())
-			return err == nil && u.Role == pr.user.Role
-		},
+		alive: func(ctx context.Context) bool { return b.stillValid(ctx, pr) },
 	}
 	h := w.Header()
 	h.Set("Content-Type", "text/event-stream")

@@ -3,12 +3,14 @@
 package main
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"flag"
 	"fmt"
 	"log/slog"
 	"net/http"
+	"net/netip"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -17,6 +19,7 @@ import (
 	"time"
 
 	"github.com/go-logr/logr"
+	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/cache"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -71,6 +74,11 @@ func main() {
 		os.Exit(2)
 	}
 
+	namespace := os.Getenv("POD_NAMESPACE")
+	if namespace == "" {
+		namespace = "kwerft-system"
+	}
+
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
@@ -81,6 +89,11 @@ func main() {
 	key, err := dataKey(log, *dev, *dataDir)
 	if err != nil {
 		log.Error("cannot start without a data key", "err", err)
+		os.Exit(1)
+	}
+	previousKeys, err := dataKeyPrevious()
+	if err != nil {
+		log.Error("invalid previous data key", "err", err)
 		os.Exit(1)
 	}
 	st, err := store.Open(ctx, filepath.Join(*dataDir, "kwerft.db"))
@@ -122,10 +135,6 @@ func main() {
 			log.Error("cannot start controllers", "err", err)
 			os.Exit(1)
 		}
-		namespace := os.Getenv("POD_NAMESPACE")
-		if namespace == "" {
-			namespace = "kwerft-system"
-		}
 		tokens = &setup.SecretTokenSource{Reader: mgr.GetAPIReader(), Writer: mgr.GetClient(), Namespace: namespace}
 		go waitUntilReady(ctx, log, mgr, &ready)
 		go func() {
@@ -156,9 +165,17 @@ func main() {
 	var system client.Client
 	var systemReader client.Reader
 	var metricsClient *metrics.Client
+	var trustedProxy func(netip.Addr) bool
+	var dataKeySecret types.NamespacedName
 	if mgr != nil {
 		system, systemReader = mgr.GetClient(), mgr.GetAPIReader()
 		metricsClient = metrics.New(observability.MetricsURL) // in-cluster only
+		// X-Real-Ip only from Traefik, i.e. from a node's address
+		// (internal/server/clientip.go).
+		peers := server.NewNodePeers(systemReader, log)
+		go peers.Run(ctx)
+		trustedProxy = peers.Trusted
+		dataKeySecret = types.NamespacedName{Namespace: namespace, Name: cmp.Or(os.Getenv("KWERFT_DATA_KEY_SECRET"), "kwerft-data-key")}
 	}
 
 	srv := server.New(server.Config{
@@ -173,6 +190,9 @@ func main() {
 		SetupTokens:     tokens,
 		InsecureCookies: *dev,
 		DataKey:         key,
+		DataKeyPrevious: previousKeys,
+		DataKeySecret:   dataKeySecret,
+		TrustedProxy:    trustedProxy,
 		PasskeyOrigins:  passkeyOrigins,
 
 		Kube:          kubeImp,
@@ -207,7 +227,8 @@ func main() {
 	log.Info("kwerft stopped")
 }
 
-// cleanSessions deletes expired sessions once an hour.
+// cleanSessions deletes expired sessions once an hour, and API tokens a
+// while after they expired.
 func cleanSessions(ctx context.Context, log *slog.Logger, st *store.Store) {
 	t := time.NewTicker(time.Hour)
 	defer t.Stop()
@@ -216,6 +237,11 @@ func cleanSessions(ctx context.Context, log *slog.Logger, st *store.Store) {
 			log.Error("session cleanup failed", "err", err)
 		} else if n > 0 {
 			log.Info("expired sessions removed", "count", n)
+		}
+		if n, err := st.DeleteExpiredTokens(ctx, time.Now(), server.TokenExpiredKeep); err != nil {
+			log.Error("API token cleanup failed", "err", err)
+		} else if n > 0 {
+			log.Info("expired API tokens removed", "count", n)
 		}
 		select {
 		case <-ctx.Done():

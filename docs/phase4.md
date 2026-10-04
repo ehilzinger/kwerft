@@ -170,6 +170,86 @@ the contract between them. Shared, already on main: `api/v1alpha1`
   accepts API tokens and impersonates the token's user (same groups as the
   console). The downloaded kubeconfig names the console URL and a token.
 
+### As built (W4)
+
+Code: `internal/auth/oidc.go` (+ `oidctest`, an in-process provider),
+`internal/server/api_sso.go`, `api_tokens.go`, `kubeproxy.go`,
+`clientip.go`, `api_datakey.go`; store migration 4 (`api_tokens`,
+`user_identities`); `ConsoleSettings.spec.sso`; UI in Login, Account ›
+API tokens, Settings › Single sign-on and Data key.
+
+- **Single sign-on.** coreos/go-oidc + x/oauth2: code flow, PKCE S256, a
+  state and a nonce per sign-in, kept server-side behind a SameSite=Lax
+  `__Host-` cookie (10 min, single use). Presets: Google (fixed issuer),
+  Microsoft Entra (one tenant ID; no `email_verified` claim, so the tenant
+  is trusted and `preferred_username` stands in for a missing email),
+  Keycloak and generic OIDC (`email_verified` must be true). GitHub is not
+  OIDC for sign-in; put Keycloak or Dex in front of it. Linking: a known
+  (issuer, subject) signs in as its user; otherwise the verified email of a
+  user links it (one subject per user and issuer — another account with the
+  same email is refused), or an open invite is accepted, or — with
+  auto-join, which requires allowed domains — a developer/viewer account is
+  made. Allowed domains apply to every sign-in. SSO-made accounts have no
+  password; a sign-in within 10 minutes stands in for it (to set a password
+  or a factor). Settings: owners and admins, written as the user; the
+  discovery document is fetched before saving; the client secret goes to
+  `kwerft-oidc-client` (Role `kwerft:oidc-client`: patch only), which the
+  Domain reconciler creates empty next to the DNS token and the console
+  reads with its own identity. Changing issuer or client ID needs the
+  secret again.
+- **2FA and "require 2FA" (W1).** A provider sign-in replaces the password,
+  not the member's own factors: `pendingSecondFactor` (api_mfa.go) parks
+  SSO sign-ins exactly like password sign-ins and the Login page continues
+  at `?second-factor=…`. W1's "require 2FA" check belongs in that same
+  place (or in `startSession`) so it covers both paths.
+- **API tokens.** 256-bit `kwft_…`, SHA-256 stored, hint shown in lists,
+  ≤ 50 active per user, 90 days default / 365 max, expired ones listed 30
+  days then deleted. Effective role = min(cap, the user's role now), copied
+  into the principal, so `requireRole` and impersonation need no changes.
+  Tokens may not use account/tokens/members/invites/SSO/data-key routes or
+  shells. Bearer requests skip the same-origin check, never fall back to
+  cookies, and are rate limited (20 failures per IP per 15 min block the
+  IP; 1200 requests per token per minute). Audited: `token.created`,
+  `token.revoked`, `token.rejected`, `token.denied`.
+- **Project restriction.** Impersonated groups cannot express it, so it is
+  enforced in front of Kubernetes: console routes must carry an allowed
+  `{project}` (plus `GET /api/v1/session`, `GET /api/v1/roles`); the proxy
+  allows only namespaced paths in those namespaces, the Project objects,
+  discovery and self-reviews. **For W1:** list routes without `{project}`
+  (apps, tasks, schedules, volumes, domains, logs, metrics, alerts) are
+  refused for restricted tokens today; once `projectScope` intersects with
+  `principal.token.Projects`, add them to `tokenProjectless` in
+  api_tokens.go.
+- **Kubernetes proxy `/k8s/`.** Bearer tokens only; strips Authorization,
+  Cookie, Impersonate-*, X-Forwarded-*, X-Remote-*; refuses requests that
+  carry Impersonate-* (`kubectl --as`), exec/attach/portforward/proxy
+  subresources, any Upgrade, encoded or unclean paths, the legacy `/watch/`
+  prefix, and **all Secrets** (a patch answers with the object, so the
+  "patch, never get" Secrets — DNS token, OIDC secret, Git and channel
+  credentials — would be readable through kubectl). Watches and
+  `logs -f` stream. Writes audited as `kube.write`, refusals as
+  `kube.denied`. Exec stays in the console, recorded.
+- **Client IP.** `ClientIP(r)` (W3's lock-out check) believes `X-Real-Ip`
+  only from loopback or a node address: Node InternalIP/ExternalIP and
+  CiliumNode `spec.addresses` (the CiliumInternalIP of cilium_host, which
+  is the source Traefik's connections from the host network carry),
+  refreshed every 30 s by `NodePeers` (new RBAC: ciliumnodes get/list).
+  To check on the server: `kubectl get ciliumnodes -o yaml` and compare
+  with the peer in the console log (`ip` of an audit entry from a direct
+  pod curl vs. a browser request).
+- **Data key.** Sealed values are now `v2:<key ID>:…` (0.1's `v1:` still
+  opens and is re-sealed at start-up). Settings › Data key (owners,
+  password): new key → Secret (`key` new, `previous` old) → re-seal in one
+  transaction → `previous` removed. The Secret is written with the
+  console's own identity on purpose: a patch right would let owners read
+  the key. Chart: `KWERFT_DATA_KEY_PREVIOUS` (optional) and
+  `KWERFT_DATA_KEY_SECRET` env, datakey.yaml keeps `previous`.
+- **Try SSO:** create an OAuth client (Google: Web application; Entra:
+  single-tenant app registration + client secret; Keycloak: confidential
+  client, standard flow) with the redirect URI
+  `https://<console>/api/v1/sso/callback` (shown in Settings), then fill in
+  Settings › Single sign-on.
+
 ## e2e install runs (Phase 5)
 
 Moved to Phase 5. The design stays: secret `HCLOUD_TOKEN` (a separate

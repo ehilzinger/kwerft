@@ -44,3 +44,12 @@ func (l *limiter) allow(key string) bool {
 	b.count++
 	return b.count <= l.max
 }
+
+// exceeded reports, without counting, whether key used up its window. With
+// allow called only on failures, it blocks a key after too many of them.
+func (l *limiter) exceeded(key string) bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	b, ok := l.buckets[key]
+	return ok && l.now().Sub(b.start) < l.window && b.count >= l.max
+}

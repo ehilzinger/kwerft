@@ -161,6 +161,35 @@ var migrations = []string{
 	CREATE UNIQUE INDEX invites_open_email ON invites(email) WHERE accepted_at IS NULL AND revoked_at IS NULL;
 	CREATE INDEX audit_actor ON audit(actor, id);
 	CREATE INDEX audit_action ON audit(action, id);`,
+	// Phase 4 identity (see tokens.go, identities.go). API tokens are stored
+	// as the SHA-256 of the token; role is the cap (never above the user's
+	// role at use), projects a JSON array ('' = every project the user
+	// reaches). user_identities links single sign-on subjects to users.
+	`CREATE TABLE api_tokens (
+		id           TEXT PRIMARY KEY,
+		user_id      TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+		name         TEXT NOT NULL,
+		kind         TEXT NOT NULL CHECK (kind IN ('api','kubeconfig')),
+		token_hash   TEXT NOT NULL UNIQUE,
+		hint         TEXT NOT NULL,
+		role         TEXT NOT NULL CHECK (role IN ('owner','admin','developer','viewer')),
+		projects     TEXT NOT NULL DEFAULT '',
+		created_at   INTEGER NOT NULL,
+		expires_at   INTEGER NOT NULL,
+		last_used_at INTEGER NOT NULL DEFAULT 0,
+		last_used_ip TEXT NOT NULL DEFAULT ''
+	);
+	CREATE INDEX api_tokens_user ON api_tokens(user_id);
+	CREATE TABLE user_identities (
+		issuer        TEXT NOT NULL,
+		subject       TEXT NOT NULL,
+		user_id       TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+		email         TEXT NOT NULL,
+		created_at    INTEGER NOT NULL,
+		last_login_at INTEGER NOT NULL,
+		PRIMARY KEY (issuer, subject)
+	);
+	CREATE UNIQUE INDEX user_identities_user ON user_identities(user_id, issuer);`,
 }
 
 func (s *Store) migrate(ctx context.Context) error {

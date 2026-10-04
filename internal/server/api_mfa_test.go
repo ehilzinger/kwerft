@@ -138,7 +138,7 @@ func TestTOTPEnrollmentNeedsPasswordAndAWorkingCode(t *testing.T) {
 	// The secret is encrypted at rest.
 	u, _ := e.store.UserByEmail(context.Background(), owner["email"])
 	row, _ := e.store.TOTPFor(context.Background(), u.ID)
-	if !strings.HasPrefix(row.Secret, "v1:") || strings.Contains(row.Secret, b32.EncodeToString(secret)) {
+	if !strings.HasPrefix(row.Secret, "v2:") || strings.Contains(row.Secret, b32.EncodeToString(secret)) {
 		t.Errorf("secret stored as %q", row.Secret)
 	}
 

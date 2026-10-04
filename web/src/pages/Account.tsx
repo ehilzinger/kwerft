@@ -1,15 +1,22 @@
-import { useState, type FormEvent, type ReactNode } from "react";
+import { createContext, useContext, useState, type FormEvent, type ReactNode } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { ApiError, accountApi, type Account as AccountData, type AccountSession, type Passkey, type TOTPSetup, type User } from "../api";
+import { ApiError, accountApi, type Account as AccountData, type AccountSession, type Passkey, type SSOIdentity, type TOTPSetup, type User } from "../api";
 import { Field } from "../components/Field";
 import { Icon } from "../components/Icon";
+import { identityApi, issuerHost, ssoPasswordHint } from "../identity";
 import { createPasskey, passkeyErrorMessage, passkeysSupported } from "../webauthn";
+import { TokensCard } from "./AccountTokens";
 
 const unreachable = "The console could not be reached. Check your connection and try again.";
 const errText = (e: unknown) => (e instanceof ApiError ? e.message : unreachable);
 const fmt = (iso: string) => new Date(iso).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
 
-// The account page: profile, password, two-factor sign-in and sessions.
+// False for an account without a password: it confirms changes with an
+// empty password soon after signing in with single sign-on.
+const HasPassword = createContext(true);
+
+// The account page: profile, password, single sign-on, two-factor sign-in,
+// API tokens and sessions.
 export function Account() {
   const account = useQuery({ queryKey: ["account"], queryFn: accountApi.get });
   if (account.isPending) return <div className="view"><p className="dim">Loading…</p></div>;
@@ -23,10 +30,14 @@ export function Account() {
           <p>{a.user.email} · <span className="cap">{a.user.role}</span></p>
         </div>
       </div>
-      <ProfileCard user={a.user} />
-      <PasswordCard />
-      <TwoFactorCard account={a} />
-      <SessionsCard sessions={a.sessions} />
+      <HasPassword.Provider value={a.hasPassword}>
+        <ProfileCard user={a.user} />
+        <PasswordCard hasPassword={a.hasPassword} />
+        {a.identities.length > 0 && <SSOCard identities={a.identities} hasPassword={a.hasPassword} />}
+        <TwoFactorCard account={a} />
+        <TokensCard role={a.user.role} />
+        <SessionsCard sessions={a.sessions} />
+      </HasPassword.Provider>
     </div>
   );
 }
@@ -85,7 +96,12 @@ function ProfileCard({ user }: { user: User }) {
   );
 }
 
-function PasswordCard() {
+function PasswordCard({ hasPassword }: { hasPassword: boolean }) {
+  if (!hasPassword) return <SetPasswordCard />;
+  return <ChangePasswordCard />;
+}
+
+function ChangePasswordCard() {
   const refresh = useRefresh();
   const [form, setForm] = useState({ current: "", next: "", confirm: "" });
   const [error, setError] = useState<{ field?: string; message: string }>();
@@ -134,10 +150,84 @@ function PasswordCard() {
   );
 }
 
+// An account made by single sign-on has no password. It may set one soon
+// after signing in; the server then needs no current password.
+function SetPasswordCard() {
+  const refresh = useRefresh();
+  const [next, setNext] = useState("");
+  const [error, setError] = useState<{ field?: string; message: string }>();
+  const [busy, setBusy] = useState(false);
+
+  async function submit(e: FormEvent) {
+    e.preventDefault();
+    setBusy(true);
+    setError(undefined);
+    try {
+      await accountApi.changePassword("", next);
+      setNext("");
+      await refresh();
+    } catch (err) {
+      setError(err instanceof ApiError ? { field: err.field, message: err.message } : { message: unreachable });
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Card title="Password" note="Your account signs in with single sign-on. Set a password to also sign in without it.">
+      <form className="inline-form" onSubmit={submit}>
+        <Field id="pw-set" label="New password" type="password" value={next} onChange={(e) => setNext(e.target.value)}
+          autoComplete="new-password" required minLength={12} error={error?.field === "new" ? error.message : undefined}
+          hint="At least 12 characters. Works within 10 minutes of signing in with single sign-on." />
+        <button className="btn pri" disabled={busy || next === ""}>{busy ? "Setting…" : "Set a password"}</button>
+      </form>
+      {error && error.field !== "new" && <p className="form-error" role="alert">{error.message}</p>}
+    </Card>
+  );
+}
+
+// ---- single sign-on ---------------------------------------------------------------
+
+function SSOCard({ identities, hasPassword }: { identities: SSOIdentity[]; hasPassword: boolean }) {
+  return (
+    <Card title="Single sign-on" note="Accounts at a sign-in provider linked to yours. Kwerft links one the first time you sign in with it.">
+      <ul className="rows">{identities.map((i) => <IdentityRow key={i.issuer} identity={i} canUnlink={hasPassword} />)}</ul>
+      {!hasPassword && <p className="dim note">Set a password before you unlink single sign-on, so you can still sign in.</p>}
+    </Card>
+  );
+}
+
+function IdentityRow({ identity, canUnlink }: { identity: SSOIdentity; canUnlink: boolean }) {
+  const refresh = useRefresh();
+  const [unlinking, setUnlinking] = useState(false);
+  const host = issuerHost(identity.issuer);
+  return (
+    <li>
+      <div className="row">
+        <Icon name="shield" />
+        <div className="grow">
+          <b>{host}</b>
+          <small>
+            {identity.email} · linked {fmt(identity.linkedAt)} · {identity.lastLoginAt ? `last sign-in ${fmt(identity.lastLoginAt)}` : "never used to sign in"}
+          </small>
+        </div>
+        {canUnlink && !unlinking && <button className="btn sm danger" onClick={() => setUnlinking(true)}>Unlink</button>}
+      </div>
+      {unlinking && (
+        <Confirm id={`sso-unlink-${host}`} submit="Unlink" onCancel={() => setUnlinking(false)}
+          run={async (pw) => { await identityApi.unlink(identity.issuer, pw); await refresh(); }}>
+          <p className="note">You then sign in with your password. Signing in with {host} again links it again.</p>
+        </Confirm>
+      )}
+    </li>
+  );
+}
+
 // ---- two-factor sign-in --------------------------------------------------------
 
 // Confirm asks for the password (or a current authenticator code) before a
-// change to how the account signs in.
+// change to how the account signs in. An account without a password may
+// leave it empty soon after signing in with single sign-on.
 function Confirm({ id, label, submit, run, onCancel, children }: {
   id: string;
   label?: string;
@@ -146,6 +236,7 @@ function Confirm({ id, label, submit, run, onCancel, children }: {
   onCancel: () => void;
   children?: ReactNode;
 }) {
+  const hasPassword = useContext(HasPassword);
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string>();
   const [busy, setBusy] = useState(false);
@@ -166,7 +257,8 @@ function Confirm({ id, label, submit, run, onCancel, children }: {
     <form className="confirm" onSubmit={go}>
       {children}
       <Field id={id} label={label ?? "Confirm with your password"} type="password" value={password}
-        onChange={(e) => setPassword(e.target.value)} autoComplete="current-password" autoFocus required error={error} />
+        onChange={(e) => setPassword(e.target.value)} autoComplete="current-password" autoFocus required={hasPassword} error={error}
+        hint={hasPassword ? undefined : ssoPasswordHint} />
       <div className="actions">
         <button type="button" className="btn" onClick={onCancel} disabled={busy}>Cancel</button>
         <button className="btn pri" disabled={busy}>{busy ? "Working…" : submit}</button>

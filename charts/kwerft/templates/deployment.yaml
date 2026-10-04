@@ -45,6 +45,11 @@ spec:
               valueFrom: { fieldRef: { fieldPath: metadata.namespace } }
             - name: KWERFT_DATA_KEY
               valueFrom: { secretKeyRef: { name: {{ include "kwerft.fullname" . }}-data-key, key: key } }
+            # Set only while a data-key rotation is unfinished (docs/plan.md).
+            - name: KWERFT_DATA_KEY_PREVIOUS
+              valueFrom: { secretKeyRef: { name: {{ include "kwerft.fullname" . }}-data-key, key: previous, optional: true } }
+            - name: KWERFT_DATA_KEY_SECRET
+              value: {{ include "kwerft.fullname" . }}-data-key
           ports:
             - name: http
               containerPort: 8080

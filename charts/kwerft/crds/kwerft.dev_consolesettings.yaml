@@ -101,6 +101,69 @@ spec:
                 required:
                 - provider
                 type: object
+              sso:
+                description: |-
+                  SSO is single sign-on through an OpenID Connect provider. The client
+                  secret lives in the Secret kwerft-oidc-client (key "clientSecret") in
+                  kwerft-system, which owners and admins may write through the console
+                  but nobody reads back.
+                properties:
+                  allowedDomains:
+                    description: |-
+                      AllowedDomains, when set, admits only email addresses in these
+                      domains. Auto-join requires it.
+                    items:
+                      type: string
+                    maxItems: 20
+                    type: array
+                  autoJoin:
+                    description: |-
+                      AutoJoin creates an account with DefaultRole for a verified address
+                      in AllowedDomains on its first sign-in. Off: only existing members and
+                      people with an open invite can sign in.
+                    type: boolean
+                  clientID:
+                    description: ClientID of the console's OAuth client at the provider.
+                    maxLength: 500
+                    minLength: 1
+                    type: string
+                  defaultRole:
+                    description: DefaultRole for auto-joined accounts.
+                    enum:
+                    - developer
+                    - viewer
+                    type: string
+                  displayName:
+                    description: DisplayName names the provider on the button ("Sign
+                      in with …").
+                    maxLength: 60
+                    type: string
+                  enabled:
+                    description: Enabled shows the button on the sign-in page.
+                    type: boolean
+                  issuer:
+                    description: |-
+                      Issuer is the provider's issuer URL; discovery reads
+                      <issuer>/.well-known/openid-configuration.
+                    maxLength: 500
+                    pattern: ^https://[^\s?#]+$
+                    type: string
+                  provider:
+                    description: |-
+                      Provider is the preset: google, microsoft (Entra ID, one tenant),
+                      keycloak or oidc (any OpenID Connect provider).
+                    enum:
+                    - google
+                    - microsoft
+                    - keycloak
+                    - oidc
+                    type: string
+                required:
+                - clientID
+                - enabled
+                - issuer
+                - provider
+                type: object
               tls:
                 default: http01
                 description: TLS is how app certificates are issued.

@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"net"
 	"net/http"
 	"net/mail"
 	"net/url"
@@ -34,10 +33,11 @@ type api struct {
 	tokens   setup.TokenSource
 	now      func() time.Time
 	cookies  cookieNames
-	setupLim *limiter // token guesses per IP
-	loginIP  *limiter // logins per IP
-	loginAcc *limiter // logins per account
-	mfa      *mfa     // second factors, see api_mfa.go
+	setupLim *limiter   // token guesses per IP
+	loginIP  *limiter   // logins per IP
+	loginAcc *limiter   // logins per account
+	mfa      *mfa       // second factors, see api_mfa.go
+	tok      *tokenAuth // API token rate limits, see api_tokens.go
 	// vlogs reads VictoriaLogs: log search and log history (api_logsearch.go).
 	vlogs *logs.Client
 
@@ -57,15 +57,18 @@ func newAPI(cfg Config) *api {
 		// __Host- cookies must be Secure, host-only and Path=/; browsers enforce it.
 		names = cookieNames{session: "__Host-kwerft_session", setup: "__Host-kwerft_setup"}
 	}
-	return &api{
+	a := &api{
 		cfg: cfg, store: cfg.Store, tokens: cfg.SetupTokens, now: now, cookies: names,
 		setupLim: newLimiter(10, 15*time.Minute, now),
 		loginIP:  newLimiter(30, 15*time.Minute, now),
 		loginAcc: newLimiter(10, 15*time.Minute, now),
 		grants:   map[string]time.Time{},
 		mfa:      newMFA(cfg, now),
+		tok:      newTokenAuth(now),
 		vlogs:    logs.New(cmp.Or(cfg.LogsURL, observability.LogsURL)),
 	}
+	a.resealAtStart(context.Background())
+	return a
 }
 
 func (a *api) register(mux *http.ServeMux) {
@@ -78,7 +81,11 @@ func (a *api) register(mux *http.ServeMux) {
 	mux.HandleFunc("DELETE /api/v1/session", a.sameOrigin(a.requireUser(a.logout)))
 
 	a.registerMFA(mux)
-	a.registerMembers(mux) // members, invites, roles, audit log
+	a.registerMembers(mux)   // members, invites, roles, audit log
+	a.registerSSO(mux)       // single sign-on (api_sso.go)
+	a.registerDataKey(mux)   // data-key rotation (api_datakey.go)
+	a.registerTokens(mux)    // API tokens and kubeconfigs (api_tokens.go)
+	a.registerKubeProxy(mux) // kubectl through the console (kubeproxy.go)
 
 	a.registerWorkloads(mux)
 	a.registerJobs(mux)
@@ -229,9 +236,28 @@ func (a *api) setupOwner(w http.ResponseWriter, r *http.Request) {
 
 type ctxKey struct{}
 
+// principal is who a request acts as: a session (idHash) or an API token
+// (token, see api_tokens.go). For a token, user is a copy of the user whose
+// Role is the token's effective role (the lower of the token's cap and the
+// user's role), so role checks and impersonation honour the cap unchanged.
 type principal struct {
 	user   *store.User
 	idHash string
+	// sessionCreated is when the session's sign-in happened (zero for tokens).
+	sessionCreated time.Time
+	token          *store.APIToken
+}
+
+// stillValid reports whether the session or token behind a long-lived stream
+// still exists and acts with the same role: a stream was authorized for the
+// role it started with.
+func (a *api) stillValid(ctx context.Context, pr *principal) bool {
+	if pr.token != nil {
+		t, u, err := a.store.APITokenByHash(ctx, pr.token.TokenHash, a.now())
+		return err == nil && effectiveRole(t.Role, u.Role) == pr.user.Role
+	}
+	_, u, err := a.store.SessionByHash(ctx, pr.idHash, a.now())
+	return err == nil && u.Role == pr.user.Role
 }
 
 func (a *api) startSession(w http.ResponseWriter, r *http.Request, u *store.User) error {
@@ -250,9 +276,18 @@ func (a *api) startSession(w http.ResponseWriter, r *http.Request, u *store.User
 }
 
 // requireUser resolves the session cookie, slides its expiry and rejects
-// anonymous requests with 401.
+// anonymous requests with 401. A request with an Authorization header is
+// authenticated by its API token alone, never by a cookie (api_tokens.go).
 func (a *api) requireUser(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		if hasAuthorization(r) {
+			p, ok := a.tokenPrincipal(w, r)
+			if !ok || !a.tokenMayUse(w, r, p) {
+				return
+			}
+			next(w, r.WithContext(context.WithValue(r.Context(), ctxKey{}, p)))
+			return
+		}
 		c, err := r.Cookie(a.cookies.session)
 		if err != nil {
 			writeError(w, http.StatusUnauthorized, "Sign in to continue.")
@@ -279,7 +314,7 @@ func (a *api) requireUser(next http.HandlerFunc) http.HandlerFunc {
 				a.setCookie(w, a.cookies.session, c.Value, expires)
 			}
 		}
-		next(w, r.WithContext(context.WithValue(r.Context(), ctxKey{}, &principal{user: u, idHash: idHash})))
+		next(w, r.WithContext(context.WithValue(r.Context(), ctxKey{}, &principal{user: u, idHash: idHash, sessionCreated: sess.CreatedAt})))
 	}
 }
 
@@ -325,6 +360,13 @@ func (a *api) login(w http.ResponseWriter, r *http.Request) {
 		a.internalError(w, r, err)
 		return
 	}
+	if u.PasswordHash == "" {
+		// Single sign-on only (api_sso.go): no password to check.
+		auth.DummyVerify(req.Password)
+		a.audit(r, "anonymous", "session.login_failed", u.Email, "no password (single sign-on account)")
+		writeError(w, http.StatusUnauthorized, wrong)
+		return
+	}
 	ok, err := auth.VerifyPassword(u.PasswordHash, req.Password)
 	if err != nil || !ok {
 		a.audit(r, "anonymous", "session.login_failed", u.Email, "wrong password")
@@ -358,8 +400,17 @@ func (a *api) logout(w http.ResponseWriter, r *http.Request) {
 // sameOrigin rejects state-changing requests from other sites (CSRF). Browsers
 // send Origin on every cross-site POST/DELETE, and Sec-Fetch-Site when they
 // can't. Non-browser clients send neither and carry no cookies anyway.
+//
+// A request with a bearer token skips the check: a browser never attaches
+// one by itself (a cross-site page would need CORS, which the console never
+// grants), and requireUser then ignores cookies, so there is no ambient
+// credential to forge a request with.
 func (a *api) sameOrigin(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		if _, ok := bearerToken(r); ok {
+			next(w, r)
+			return
+		}
 		if origin := r.Header.Get("Origin"); origin != "" {
 			u, err := url.Parse(origin)
 			if err != nil || u.Host != r.Host {
@@ -399,19 +450,6 @@ func (a *api) audit(r *http.Request, actor, action, target, detail string) {
 func (a *api) internalError(w http.ResponseWriter, r *http.Request, err error) {
 	a.cfg.Logger.Error("request failed", "path", r.URL.Path, "err", err)
 	writeError(w, http.StatusInternalServerError, "Something went wrong on the server. Details are in the console logs.")
-}
-
-// clientIP prefers X-Real-Ip, which Traefik sets (overwriting any client
-// value) for traffic it proxies. TODO(phase-4): only trust it from Traefik.
-func clientIP(r *http.Request) string {
-	if ip := strings.TrimSpace(r.Header.Get("X-Real-Ip")); net.ParseIP(ip) != nil {
-		return ip
-	}
-	host, _, err := net.SplitHostPort(r.RemoteAddr)
-	if err != nil {
-		return r.RemoteAddr
-	}
-	return host
 }
 
 func decode(w http.ResponseWriter, r *http.Request, v any) bool {

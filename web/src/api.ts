@@ -71,8 +71,13 @@ export const isUnauthorized = (e: unknown) => e instanceof ApiError && e.status 
 
 export type Passkey = { id: string; name: string; createdAt: string; lastUsedAt: string | null };
 export type AccountSession = { id: string; current: boolean; createdAt: string; lastSeenAt: string; ip: string; userAgent: string };
+/** An account at a single sign-on provider linked to this one. */
+export type SSOIdentity = { issuer: string; email: string; linkedAt: string; lastLoginAt: string | null };
 export type Account = {
   user: User;
+  /** False for accounts that only ever signed in with single sign-on. */
+  hasPassword: boolean;
+  identities: SSOIdentity[];
   totp: boolean;
   passkeys: Passkey[];
   recoveryCodesLeft: number;
@@ -98,6 +103,7 @@ export const mfaApi = {
 export const accountApi = {
   get: () => request<Account>("/account"),
   rename: (name: string) => request<User>("/account", { method: "PATCH", json: { name } }),
+  /** current is empty when an account without a password sets one (soon after signing in with single sign-on). */
   changePassword: (current: string, next: string) => post<{ signedOut: number }>("/account/password", { current, new: next }),
   totpStart: (password: string) => post<TOTPSetup>("/account/totp", { password }),
   totpConfirm: (code: string) => post<MaybeCodes>("/account/totp/confirm", { code }),
