@@ -213,7 +213,11 @@ func (r *AppReconciler) reconcileDomains(ctx context.Context, app *kwerftv1.App,
 // reconcileRoutes applies the desired HTTPRoutes and removes ones for ports
 // that are no longer public.
 func (r *AppReconciler) reconcileRoutes(ctx context.Context, app *kwerftv1.App, rd *appRender) error {
-	desired := rd.routes()
+	held, err := wonHostnames(ctx, r.Client, app.Namespace)
+	if err != nil {
+		return err
+	}
+	desired := rd.routes(held)
 	for _, route := range desired {
 		if err := apply(ctx, r.Client, route); err != nil {
 			if meta.IsNoMatchError(err) {
@@ -238,6 +242,56 @@ func (r *AppReconciler) reconcileRoutes(ctx context.Context, app *kwerftv1.App, 
 		}
 	}
 	return nil
+}
+
+// wonHostnames maps each hostname the project (namespace) holds to the
+// Gateway listener serving it. A project holds a hostname when one of its
+// Domains for it won the claim: the Domain reconciler set status.listener
+// for the Domain's current generation (only it writes Domain status; no
+// developer role may) and the hostname cannot change after creation.
+//
+// This is the isolation guarantee for the shared wildcard listener, which
+// admits routes from every project namespace: only the App reconciler
+// writes HTTPRoutes in project namespaces (no console role may), and it
+// attaches one to a listener only for a hostname held here.
+func wonHostnames(ctx context.Context, c client.Reader, namespace string) (map[string]string, error) {
+	var domains kwerftv1.DomainList
+	if err := c.List(ctx, &domains, client.InNamespace(namespace)); err != nil {
+		return nil, err
+	}
+	out := map[string]string{}
+	for _, d := range domains.Items {
+		if d.Status.Listener == "" || d.Status.ObservedGeneration != d.Generation || !d.DeletionTimestamp.IsZero() {
+			continue
+		}
+		if d.Status.Listener != WildcardListener && d.Status.Listener != ListenerName(d.Spec.Hostname) {
+			continue // not a listener this hostname can have
+		}
+		out[d.Spec.Hostname] = d.Status.Listener
+	}
+	return out, nil
+}
+
+// appsForDomain enqueues the Apps a Domain's state matters to: its owner and
+// every App in the project with a port on its hostname (a hand-made Domain).
+func (r *AppReconciler) appsForDomain(ctx context.Context, obj client.Object) []reconcile.Request {
+	d, ok := obj.(*kwerftv1.Domain)
+	if !ok {
+		return nil
+	}
+	var apps kwerftv1.AppList
+	if err := r.List(ctx, &apps, client.InNamespace(d.Namespace)); err != nil {
+		return nil
+	}
+	var reqs []reconcile.Request
+	for _, a := range apps.Items {
+		owns := metav1.IsControlledBy(d, &a)
+		uses := slices.ContainsFunc(a.Spec.Ports, func(p kwerftv1.AppPort) bool { return p.Public == d.Spec.Hostname })
+		if owns || uses {
+			reqs = append(reqs, reconcile.Request{NamespacedName: client.ObjectKeyFromObject(&a)})
+		}
+	}
+	return reqs
 }
 
 // resolveImage returns the image to run. Git apps run the image of their last
@@ -286,7 +340,8 @@ func (r *AppReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Owns(&corev1.Service{}).
 		Owns(&networkingv1.NetworkPolicy{}).
 		Owns(&gwv1.HTTPRoute{}).
-		Owns(&kwerftv1.Domain{}).
+		// Owned or hand-made: a Domain's claim decides whether routes attach.
+		Watches(&kwerftv1.Domain{}, handler.EnqueueRequestsFromMapFunc(r.appsForDomain)).
 		Named("app").
 		Complete(r)
 }

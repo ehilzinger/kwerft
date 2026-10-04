@@ -8,9 +8,12 @@ import (
 // Gateway. Apps create a Domain for each public port automatically; the
 // Domain reconciler gives it a Gateway listener and a certificate.
 type DomainSpec struct {
-	// Hostname, lowercase, e.g. api.example.com. Wildcards come with DNS-01.
+	// Hostname, lowercase, e.g. api.example.com. Fixed once created: a
+	// Domain's claim and listener belong to one hostname. Hostnames one label
+	// below the apps domain share the wildcard listener when it has DNS-01.
 	// +kubebuilder:validation:Pattern=`^([a-z0-9]([-a-z0-9]*[a-z0-9])?\.)+[a-z]([-a-z0-9]*[a-z0-9])?$`
 	// +kubebuilder:validation:MaxLength=253
+	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="hostname cannot be changed; create a new Domain"
 	Hostname string `json:"hostname"`
 }
 

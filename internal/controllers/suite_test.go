@@ -84,6 +84,8 @@ func TestMain(m *testing.M) {
 	must((&AppReconciler{Client: mgr.GetClient()}).SetupWithManager(mgr))
 	must((&DomainReconciler{
 		Client:        mgr.GetClient(),
+		APIReader:     mgr.GetAPIReader(),
+		Now:           domainClock.Now,
 		ConsoleDomain: testConsoleDomain,
 		GatewayClass:  "traefik",
 		ClusterIssuer: "letsencrypt",
@@ -100,6 +102,10 @@ func TestMain(m *testing.M) {
 	_ = env.Stop()
 	os.Exit(code)
 }
+
+// domainClock is the Domain reconciler's, separate from testClock so moving
+// it (the console's redirect grace period) does not make Schedules due.
+var domainClock = &offsetClock{}
 
 // testClock is the Task and Schedule reconcilers' clock: real time plus an
 // offset that tests move forward to make runs due.
