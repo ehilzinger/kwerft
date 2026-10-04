@@ -1,0 +1,14 @@
+# ko builds the console image without Docker (used by hack/dev-server.sh).
+# Keep the base image and flags in step with the Dockerfile.
+defaultBaseImage: gcr.io/distroless/static:nonroot
+builds:
+  - id: werft
+    main: ./cmd/werft
+    env:
+      - CGO_ENABLED=0
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w
+      - -X github.com/ehilzinger/werft/internal/version.Version={{.Env.VERSION}}
+      - -X github.com/ehilzinger/werft/internal/version.Commit={{.Env.COMMIT}}

@@ -129,6 +129,7 @@ Exit codes: 0 ok · 2 usage · 10 preflight · 20 network/DNS · 30 Kubernetes �
 - [x] `Project`, `App`, `Build` types with generated CRDs
 - [x] Go server: health, version, SPA serving, security headers
 - [x] React console shell with design tokens from the blueprint
+- [x] Dev deploy without Docker or a registry: `make dev-server HOST=root@<ip>` (ko image + `--image-archive`)
 - [ ] Run the installer on a Hetzner Cloud server and a dedicated server; fix chart values against the pinned versions
 - [ ] Measure the memory budget; decide on `--lite` defaults
 - [ ] e2e harness: create Cloud server via API, install, assert, destroy (+ nightly sweeper)

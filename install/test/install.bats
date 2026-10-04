@@ -92,3 +92,22 @@ setup() {
   [ "$DOMAIN" = "203.0.113.24.sslip.io" ]
   is_temp_domain
 }
+
+@test "--image needs a tag" {
+  run "$SCRIPT" --image ghcr.io/ehilzinger/werft
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"--image needs a tag"* ]]
+}
+
+@test "--image-archive needs --image" {
+  archive="$BATS_TEST_TMPDIR/werft.tar"; touch "$archive"
+  run "$SCRIPT" --image-archive "$archive"
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"--image-archive needs --image"* ]]
+}
+
+@test "--image with a registry port keeps the port in the repository" {
+  archive="$BATS_TEST_TMPDIR/werft.tar"; touch "$archive"
+  run "$SCRIPT" --dry-run --platform cloud --image registry.local:5000/werft:dev-1 --image-archive "$archive"
+  [ "$status" -eq 0 ]
+}

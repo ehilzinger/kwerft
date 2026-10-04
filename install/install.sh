@@ -61,6 +61,8 @@ JOIN_URL="${WERFT_JOIN_URL:-}"
 JOIN_TOKEN="${WERFT_JOIN_TOKEN:-}"
 JOIN_ROLE="${WERFT_JOIN_ROLE:-worker}"
 WERFT_CHART="${WERFT_CHART:-}"
+IMAGE="${WERFT_IMAGE:-}"
+IMAGE_ARCHIVE="${WERFT_IMAGE_ARCHIVE:-}"
 MODE="install"
 DRY_RUN=0
 ASSUME_YES=0
@@ -120,6 +122,11 @@ Join an existing cluster:
   --join URL --token T   Join the cluster whose console runs at URL
   --role R               worker | control-plane (default: worker)
 
+Development:
+  --image REF            Run this console image (repository:tag) instead of the release
+  --image-archive FILE   Import FILE (docker/OCI tarball) into k3s first; needs --image.
+                         hack/dev-server.sh uses both to test unreleased builds
+
 Maintenance:
   --reset-firewall       Remove Werft's host firewall rules (rescue)
   --uninstall            Remove Werft and k3s from this server
@@ -152,6 +159,8 @@ parse_args() {
       --join)           need_arg "$@"; JOIN_URL=$2; MODE="join"; shift 2 ;;
       --token)          need_arg "$@"; JOIN_TOKEN=$2; shift 2 ;;
       --role)           need_arg "$@"; JOIN_ROLE=$2; shift 2 ;;
+      --image)          need_arg "$@"; IMAGE=$2; shift 2 ;;
+      --image-archive)  need_arg "$@"; IMAGE_ARCHIVE=$2; shift 2 ;;
       --lite)           LITE=1; shift ;;
       --harden-ssh)     HARDEN_SSH=1; shift ;;
       --reset-firewall) MODE="reset-firewall"; shift ;;
@@ -169,6 +178,9 @@ parse_args() {
   case "$JOIN_ROLE" in worker|control-plane) ;; *) die $EXIT_USAGE "--role must be worker or control-plane" ;; esac
   if [[ "$MODE" == "join" && -z "$JOIN_TOKEN" ]]; then die $EXIT_USAGE "--join needs --token"; fi
   if [[ -n "$CONFIG_FILE" && ! -r "$CONFIG_FILE" ]]; then die $EXIT_USAGE "Config file not readable: $CONFIG_FILE"; fi
+  if [[ -n "$IMAGE" && "${IMAGE##*/}" != *:* ]]; then die $EXIT_USAGE "--image needs a tag, e.g. ghcr.io/ehilzinger/werft:dev-abc123"; fi
+  if [[ -n "$IMAGE_ARCHIVE" && -z "$IMAGE" ]]; then die $EXIT_USAGE "--image-archive needs --image to say which image it contains"; fi
+  if [[ -n "$IMAGE_ARCHIVE" && ! -r "$IMAGE_ARCHIVE" ]]; then die $EXIT_USAGE "Image archive not readable: $IMAGE_ARCHIVE"; fi
 
   # A config file may provide domain and email; flags still win.
   if [[ -n "$CONFIG_FILE" ]]; then
@@ -583,7 +595,7 @@ stage_werft() {
       --from-file=config.yaml="$CONFIG_FILE" --dry-run=client -o yaml | kc apply -f - >/dev/null
   fi
 
-  local ref version_args=()
+  local ref version_args=() image_args=()
   ref=$(chart_ref)
   [[ "$ref" == oci://* ]] && version_args=(--version "$WERFT_VERSION")
   helmk upgrade --install werft "$ref" ${version_args[@]+"${version_args[@]}"} \
@@ -591,10 +603,20 @@ stage_werft() {
     --set console.domain="$DOMAIN" \
     --set acme.email="$ACME_EMAIL" \
     --set platform="$PLATFORM" \
-    --set image.tag="$WERFT_VERSION" \
+    "${image_args[@]}" \
     >>"$LOG_FILE" 2>&1 || die $EXIT_WERFT "Werft installation failed (chart: $ref)"
   printf '%s\n' "$DOMAIN" >"$DOMAIN_FILE"
-  echo "control plane $WERFT_VERSION ready"
+  echo "control plane ${IMAGE:-$WERFT_VERSION} ready"
+  if [[ -n "$IMAGE" ]]; then
+    if [[ -n "$IMAGE_ARCHIVE" ]]; then
+      k3s ctr --namespace k8s.io images import "$IMAGE_ARCHIVE" >>"$LOG_FILE" 2>&1 \
+        || die $EXIT_WERFT "Could not import $IMAGE_ARCHIVE into k3s"
+    fi
+    # IfNotPresent: an imported image is used as-is and never pulled.
+    image_args=(--set image.repository="${IMAGE%:*}" --set image.tag="${IMAGE##*:}" --set image.pullPolicy=IfNotPresent)
+  else
+    image_args=(--set image.tag="$WERFT_VERSION")
+  fi
 }
 
 stage_handoff() {

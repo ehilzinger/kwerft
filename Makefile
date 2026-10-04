@@ -54,7 +54,7 @@ lint: dist-stub ## gofmt, go vet, web typecheck
 
 .PHONY: test-install
 test-install: ## shellcheck + bats for the installer
-	shellcheck install/install.sh install/join.sh
+	shellcheck install/install.sh install/join.sh hack/dev-server.sh
 	bats install/test
 
 .PHONY: helm-lint
@@ -70,6 +70,11 @@ check: lint test test-install helm-lint ## Everything CI runs
 .PHONY: dev-api
 dev-api: dist-stub ## Run the API on :8080 (pair with `make dev-web`)
 	$(GO) run ./cmd/werft --listen=127.0.0.1:8080 --console-domain=localhost --platform=cloud
+
+.PHONY: dev-server
+dev-server: ## Install/upgrade on a test server: make dev-server HOST=root@1.2.3.4 ARGS="--domain ops.example.com"
+	@test -n "$(HOST)" || { echo "Set HOST, e.g. make dev-server HOST=root@203.0.113.24"; exit 1; }
+	hack/dev-server.sh $(HOST) $(ARGS)
 
 .PHONY: dev-web
 dev-web: ## Run Vite on :5173, proxying /api to :8080

@@ -61,6 +61,13 @@ make generate   # regenerate deepcopy + CRDs after editing api/v1alpha1
 make check      # everything CI runs
 ```
 
+Try a change on a real server (no Docker or registry needed — the image is
+built locally with ko and copied over SSH):
+
+```bash
+make dev-server HOST=root@203.0.113.24 ARGS="--domain ops.example.com"
+```
+
 Run the console locally with live UI reload — `make dev-api` in one terminal,
 `make dev-web` in another, then open http://localhost:5173.
 
