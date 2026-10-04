@@ -6,7 +6,9 @@ import { Overview } from "./pages/Overview";
 import { Apps } from "./pages/Apps";
 import { AppDetail } from "./pages/AppDetail";
 import { Deploy } from "./pages/Deploy";
-import { Planned } from "./pages/Planned";
+import { ClustersList } from "./pages/ClustersList";
+import { ClusterOverview } from "./pages/ClusterOverview";
+import { ClusterNodes } from "./pages/ClusterNodes";
 import { MonitoringAlerts } from "./pages/MonitoringAlerts";
 import { MonitoringMetrics } from "./pages/MonitoringMetrics";
 import { MonitoringLogs, logsSearch } from "./pages/MonitoringLogs";
@@ -82,8 +84,6 @@ const authed = createRoute({
 
 const projectSearch = (s: Record<string, unknown>): { project?: string } => (typeof s.project === "string" ? { project: s.project } : {});
 
-const planned = (path: string, title: string, phase: string, summary: string) =>
-  createRoute({ getParentRoute: () => authed, path, component: () => <Planned title={title} phase={phase} summary={summary} /> });
 
 const routeTree = root.addChildren([
   setupRoute,
@@ -127,7 +127,10 @@ const routeTree = root.addChildren([
     createRoute({ getParentRoute: () => authed, path: "/monitoring/logs", component: MonitoringLogs, validateSearch: logsSearch }),
     createRoute({ getParentRoute: () => authed, path: "/monitoring/rules", component: MonitoringRules }),
     createRoute({ getParentRoute: () => authed, path: "/monitoring/channels", component: MonitoringChannels }),
-    planned("/clusters", "Clusters & nodes", "Phase 5", "Add Hetzner Cloud servers through the API or join dedicated servers with one command; manage more clusters through an outbound agent."),
+    // Clusters & nodes (Phase 5): the list, and per cluster Overview and Nodes.
+    createRoute({ getParentRoute: () => authed, path: "/clusters", component: ClustersList }),
+    createRoute({ getParentRoute: () => authed, path: "/clusters/$name", component: ClusterOverview }),
+    createRoute({ getParentRoute: () => authed, path: "/clusters/$name/nodes", component: ClusterNodes }),
     // Access tabs; /access/recordings is the Recordings tab's own route.
     createRoute({ getParentRoute: () => authed, path: "/access", component: AccessMembers }),
     createRoute({ getParentRoute: () => authed, path: "/access/roles", component: AccessRoles }),

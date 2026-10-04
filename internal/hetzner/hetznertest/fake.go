@@ -25,6 +25,38 @@ type Server struct {
 	writes int
 	// Fail, when set, answers every request with this status.
 	fail int
+	// handlers serve other Cloud API resources (servers, firewalls, ...),
+	// registered by the files that fake them; by first path segment.
+	handlers map[string]Handler
+	// State is free for those handlers, guarded by the server's lock.
+	State map[string]any
+}
+
+// Handler serves one Cloud API resource family (e.g. "servers") under the
+// fake's lock, after the token check. parts is the path split at "/".
+type Handler func(s *Server, w http.ResponseWriter, r *http.Request, parts []string)
+
+// Handle registers h for paths whose first segment is resource. Call it
+// before the first request; files that fake a resource family do it in a
+// constructor of their own (e.g. NewCloud) so each family stays in its own
+// file.
+func (s *Server) Handle(resource string, h Handler) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.handlers == nil {
+		s.handlers = map[string]Handler{}
+	}
+	s.handlers[resource] = h
+}
+
+// Lock and Unlock let tests and handlers' helpers inspect State safely.
+func (s *Server) Lock()   { s.mu.Lock() }
+func (s *Server) Unlock() { s.mu.Unlock() }
+
+// WriteJSON and WriteError answer like the Cloud API does.
+func WriteJSON(w http.ResponseWriter, status int, v any) { writeJSON(w, status, v) }
+func WriteError(w http.ResponseWriter, status int, code, msg string) {
+	writeErr(w, status, code, msg)
 }
 
 type zone struct {
@@ -149,6 +181,13 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	parts := strings.Split(strings.Trim(r.URL.Path, "/"), "/")
+	if h, ok := s.handlers[parts[0]]; ok {
+		if s.State == nil {
+			s.State = map[string]any{}
+		}
+		h(s, w, r, parts)
+		return
+	}
 	noMore := map[string]any{"pagination": map[string]any{"next_page": nil}}
 
 	if len(parts) == 1 && parts[0] == "zones" && r.Method == http.MethodGet {

@@ -124,7 +124,7 @@ Exit codes: 0 ok · 2 usage · 10 preflight · 20 network/DNS · 30 Kubernetes �
 | `ConsoleSettings` (singleton `kwerft`) | Console hostname (with a staged move), apps domain, certificate method (HTTP-01 per host or DNS-01 wildcard via Hetzner), managed DNS records (`spec.dns.manageRecords`, written by the DNS reconciler into `status.dns`); the DNS token lives in the write-only Secret `kwerft-dns-token` | reconciler, API, UI ✔ |
 | `TrafficRule` | CiliumNetworkPolicies `<rule>.traffic-in` (this project's apps receive) and `<rule>.traffic-out` (they send out), additive only; crossing projects needs a rule on the receiving side; Hubble allowed/dropped counts in status | reconciler ✔, API ✔, UI ✔ |
 | `FirewallRule` (cluster-scoped) | Host rules through a node agent (Phase 4); Hetzner Cloud Firewall sync (Phase 5) | types ✔ |
-| `NodePool`, `Cluster` | Hetzner Cloud servers + cloud-init join; agent for remote clusters | Phase 5 |
+| `NodePool`, `Cluster` (cluster-scoped, management cluster) | Hetzner Cloud servers + cloud-init join; agent for remote clusters | types ✔, Phase 5 |
 | `AlertRule`, `NotificationChannel` (cluster-scoped) | VMRule + Alertmanager route and receivers | types ✔, Phase 3 |
 | `BackupPlan` | Velero Schedule | Phase 6 |
 | `Environment` (name tentative) | Per-target overrides (hostnames, storage class, quota, replicas) applied when a Project is pushed to another instance | Phase 7 |
@@ -222,6 +222,18 @@ Exit codes: 0 ok · 2 usage · 10 preflight · 20 network/DNS · 30 Kubernetes �
 - [x] Cut the first release and do the one-time GitHub setup (packages public, install repo, token): v0.1.0-rc.1/rc.2, then **v0.1.0** (2026-10-04, the first stable: top-level `install.sh` in kwerft-install, image `:latest`)
 - [x] Exit criterion on a fresh Cloud server from the published release (rc.2, 2026-10-04): app on HTTPS in 7:06; a schedule restarted an app on success
 - [ ] Not yet: shared storage for pending logins before running more than one replica (admin reset of second factors, "require 2FA" and data-key rotation: done in Phase 4)
+
+### Phase 5 checklist
+
+Work split and contracts: `docs/phase5.md`. Full multi-cluster; verification on Hetzner Cloud servers only (the dedicated server comes later), decided 2026-10-05.
+
+- [x] Types: `Cluster`, `NodePool`; `internal/clusters` (Registry); pluggable Hetzner fake; Clusters page skeleton
+- [ ] W1 Hetzner Cloud integrations: Cloud API token, Cloud Firewall sync, hcloud CCM + CSI, optional Load Balancer
+- [ ] W2 Node pools & HA: Cloud servers as nodes (join, replace, drain, delete), 3-node HA control plane, build pools scaling to zero, dedicated join and remove, vSwitch coupling (fakes)
+- [ ] W3 Multi-cluster core: `kwerft agent` tunnel, Cluster reconciler (local, Hetzner Cloud, adopted), agent mode in the installer and chart
+- [ ] W4 Multi-cluster console: every API and page cluster-aware through the Registry, observability per cluster
+- [ ] W5 e2e install runs per release tag and nightly, sweeper
+- [ ] Exit criteria on real Cloud servers: a node lost with apps reachable; a second cluster managed; a release tag passes e2e
 
 ### Phase 4 checklist
 

@@ -30,6 +30,12 @@ func ForKind(kind schema.GroupVersionKind) interface{} {
 		return &apiv1alpha1.AppVolumeApplyConfiguration{}
 	case v1alpha1.SchemeGroupVersion.WithKind("CertificateState"):
 		return &apiv1alpha1.CertificateStateApplyConfiguration{}
+	case v1alpha1.SchemeGroupVersion.WithKind("Cluster"):
+		return &apiv1alpha1.ClusterApplyConfiguration{}
+	case v1alpha1.SchemeGroupVersion.WithKind("ClusterSpec"):
+		return &apiv1alpha1.ClusterSpecApplyConfiguration{}
+	case v1alpha1.SchemeGroupVersion.WithKind("ClusterStatus"):
+		return &apiv1alpha1.ClusterStatusApplyConfiguration{}
 	case v1alpha1.SchemeGroupVersion.WithKind("ConsoleSettings"):
 		return &apiv1alpha1.ConsoleSettingsApplyConfiguration{}
 	case v1alpha1.SchemeGroupVersion.WithKind("ConsoleSettingsSpec"):
@@ -68,8 +74,16 @@ func ForKind(kind schema.GroupVersionKind) interface{} {
 		return &apiv1alpha1.GitSourceApplyConfiguration{}
 	case v1alpha1.SchemeGroupVersion.WithKind("GitWebhookStatus"):
 		return &apiv1alpha1.GitWebhookStatusApplyConfiguration{}
+	case v1alpha1.SchemeGroupVersion.WithKind("HetznerClusterSpec"):
+		return &apiv1alpha1.HetznerClusterSpecApplyConfiguration{}
 	case v1alpha1.SchemeGroupVersion.WithKind("ImageSource"):
 		return &apiv1alpha1.ImageSourceApplyConfiguration{}
+	case v1alpha1.SchemeGroupVersion.WithKind("NodePool"):
+		return &apiv1alpha1.NodePoolApplyConfiguration{}
+	case v1alpha1.SchemeGroupVersion.WithKind("NodePoolSpec"):
+		return &apiv1alpha1.NodePoolSpecApplyConfiguration{}
+	case v1alpha1.SchemeGroupVersion.WithKind("NodePoolStatus"):
+		return &apiv1alpha1.NodePoolStatusApplyConfiguration{}
 	case v1alpha1.SchemeGroupVersion.WithKind("NotificationChannel"):
 		return &apiv1alpha1.NotificationChannelApplyConfiguration{}
 	case v1alpha1.SchemeGroupVersion.WithKind("NotificationChannelSpec"):
@@ -78,6 +92,8 @@ func ForKind(kind schema.GroupVersionKind) interface{} {
 		return &apiv1alpha1.NotificationChannelStatusApplyConfiguration{}
 	case v1alpha1.SchemeGroupVersion.WithKind("NtfySettings"):
 		return &apiv1alpha1.NtfySettingsApplyConfiguration{}
+	case v1alpha1.SchemeGroupVersion.WithKind("PoolNode"):
+		return &apiv1alpha1.PoolNodeApplyConfiguration{}
 	case v1alpha1.SchemeGroupVersion.WithKind("Project"):
 		return &apiv1alpha1.ProjectApplyConfiguration{}
 	case v1alpha1.SchemeGroupVersion.WithKind("ProjectMember"):
