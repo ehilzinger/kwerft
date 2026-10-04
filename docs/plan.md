@@ -17,6 +17,9 @@ the same plan in long form.
 | Local development | **Kwerft for Mac, a native app on Apple's `container`, after the beta** (Phase 7) | Runs the same Kwerft binary and resources in a local Kubernetes VM, so a Project developed on a Mac can be pushed to a Hetzner instance unchanged except for per-target overrides. Apple silicon and macOS 26+ only. |
 | Local cluster for Kwerft for Mac | **k3s in an Apple `container machine`, set up by `install.sh`, on Kwerft's own kernel** (spike, 2026-10-04: `docs/spike-mac.md`) | The machine survives restarts with its volumes; `container k8s` (kind) cannot come back after a stop. The production stack runs unchanged through the same installer. Neither kernel `container` offers runs Cilium, so the app ships a kernel built from Apple's config plus `hack/spike-mac/kernel/kwerft.config`. |
 | Name & hosting | **Kwerft, under the personal GitHub account `ehilzinger`** | Module `github.com/ehilzinger/kwerft`, image `ghcr.io/ehilzinger/kwerft`, chart `oci://ghcr.io/ehilzinger/charts/kwerft`. Can move to an organisation later. The installer is served from GitHub raw until Kwerft has its own domain (then `get.kwerft.dev`). |
+| Distribution (2026-10-04) | **Code private, container packages public** | Image and chart on GHCR are public so servers install without credentials; the install script is published to a small public companion repo (e.g. `ehilzinger/kwerft-install`), because raw files of a private repo are not reachable. |
+| Members (2026-10-04) | **Invites pulled forward into Phase 1** | Owner/admin invite by email with a role via a single-use link (no email sending yet); member list, role changes, removal, last-owner protection. Per-project roles stay in Phase 4. |
+| Test servers (2026-10-04) | **Hetzner Cloud now, a dedicated server later** | The e2e harness runs on Cloud servers with a test-project API token stored as a GitHub secret; the dedicated-server run follows when one is available. |
 
 ## Principles
 
