@@ -612,8 +612,10 @@ stage_observability() {
 # ---------------------------------------------------------------------------
 chart_ref() {
   if [[ -n "$KWERFT_CHART" ]]; then echo "$KWERFT_CHART"; return; fi
-  local here
-  here=$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd || true)
+  # Piped from curl there is no script file, so no directory to look in.
+  local dir here=""
+  dir=$(dirname "${BASH_SOURCE[0]:-$0}")
+  if [[ -d "$dir" ]]; then here=$(cd "$dir" && pwd); fi
   if [[ -n "$here" && -f "$here/../charts/kwerft/Chart.yaml" ]]; then
     echo "$here/../charts/kwerft"      # running from a repository checkout
   else
