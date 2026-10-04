@@ -81,15 +81,22 @@ func TestBuildsListGetAndCancel(t *testing.T) {
 	makeBuild(t, "ci", "web", sha('c'), kwerftv1.BuildStatus{Phase: kwerftv1.BuildPending})
 	makeBuild(t, "ci-other", "api", sha('e'), kwerftv1.BuildStatus{Phase: kwerftv1.BuildPending})
 
-	// The App reconciler (W2) records which build a revision ran.
-	var app kwerftv1.App
-	if err := cluster.admin.Get(ctx, client.ObjectKey{Namespace: "ci", Name: "api"}, &app); err != nil {
-		t.Fatal(err)
-	}
-	app.Status.History = []kwerftv1.AppRevision{{Number: 4, Image: first.Status.Image, Generation: 1, Build: first.Name, Commit: sha('a'), Time: done}}
-	if err := cluster.admin.Status().Update(ctx, &app); err != nil {
-		t.Fatal(err)
-	}
+	// The App reconciler rolls out the succeeded build and records it in a
+	// revision.
+	var deployed int64
+	eventually(t, func() error {
+		var app kwerftv1.App
+		if err := cluster.admin.Get(ctx, client.ObjectKey{Namespace: "ci", Name: "api"}, &app); err != nil {
+			return err
+		}
+		for _, rev := range app.Status.History {
+			if rev.Build == first.Name {
+				deployed = rev.Number
+				return nil
+			}
+		}
+		return fmt.Errorf("no revision for %s yet: %+v", first.Name, app.Status.History)
+	})
 
 	// Every role reads builds; the list holds this App's, newest first.
 	var list []buildJSON
@@ -101,7 +108,7 @@ func TestBuildsListGetAndCancel(t *testing.T) {
 	}
 	b1 := list[1]
 	if b1.Number != 1 || b1.Phase != "succeeded" || b1.Message != "Add order export" || b1.Author != "Aiko Tanaka" ||
-		b1.Trigger != "push" || !b1.Deploy || b1.DeployedRevision != 4 || !b1.Current || b1.Source.Builder != "dockerfile" ||
+		b1.Trigger != "push" || !b1.Deploy || b1.DeployedRevision != deployed || !b1.Current || b1.Source.Builder != "dockerfile" ||
 		b1.Source.Repository != "https://github.com/acme/api.git" || b1.DurationSeconds == nil || *b1.DurationSeconds != 91 {
 		t.Errorf("first build = %+v", b1)
 	}
@@ -117,7 +124,7 @@ func TestBuildsListGetAndCancel(t *testing.T) {
 	}
 
 	var one buildJSON
-	if code := c.viewer.do(t, "GET", "/api/v1/projects/ci/builds/"+first.Name, nil, &one); code != http.StatusOK || one.Name != first.Name || one.Image == "" || one.DeployedRevision != 4 {
+	if code := c.viewer.do(t, "GET", "/api/v1/projects/ci/builds/"+first.Name, nil, &one); code != http.StatusOK || one.Name != first.Name || one.Image == "" || one.DeployedRevision != deployed {
 		t.Errorf("get: %d %+v", code, one)
 	}
 	if code := c.viewer.do(t, "GET", "/api/v1/projects/ci-other/builds/"+first.Name, nil, &e); code != http.StatusNotFound {

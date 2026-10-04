@@ -27,6 +27,12 @@ const (
 	RegistryService   = "kwerft-registry"
 	RegistryNamespace = "kwerft-system"
 	RegistryPort      = 5000
+	// RegistryClusterIP is the registry Service's fixed ClusterIP: build
+	// pods map RegistryHost to it (hostAliases), nodes' k3s mirror points at it.
+	RegistryClusterIP = "10.43.0.50"
+	// KeepTagPrefix marks the tags Kwerft sets on images that an App
+	// revision runs; the registry's retention keeps them.
+	KeepTagPrefix = "keep-"
 
 	// LabelBuild marks a build Job and its pod with the Build's name; the
 	// Build's namespace is in LabelProject (controllers.LabelProject).
@@ -44,7 +50,17 @@ const (
 	KeyWebhookSecret  = "webhook-secret"
 	labelApp          = "kwerft.dev/app"
 	shortCommitLength = 12
+
+	// Containers of a build pod, in the order they run. The build log is
+	// their logs one after the other: clone (init), prepare (init, Railpack
+	// only), build. A container that never ran has no log.
+	ContainerClone   = "clone"
+	ContainerPrepare = "prepare"
+	ContainerBuild   = "build"
 )
+
+// LogContainers lists the build pod's containers in log order.
+var LogContainers = []string{ContainerClone, ContainerPrepare, ContainerBuild}
 
 // CredentialsSecret is the Secret name for a GitConnection.
 func CredentialsSecret(connection string) string { return SecretPrefix + connection }

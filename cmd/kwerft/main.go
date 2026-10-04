@@ -45,6 +45,11 @@ func main() {
 		clusterIssuer  = flag.String("cluster-issuer", "letsencrypt", "cert-manager ClusterIssuer for HTTPS listeners; empty disables certificates")
 		debugImage     = flag.String("debug-image", server.DefaultDebugImage, "toolbox image for debug shells into containers without a shell")
 		dev            = flag.Bool("dev", false, "local development: plain-HTTP cookies and a setup token printed to the log")
+
+		buildkitImage       = flag.String("buildkit-image", controllers.DefaultBuildKitImage, "rootless BuildKit image for builds (also clones the repository)")
+		railpackImage       = flag.String("railpack-image", controllers.DefaultRailpackImage, "Railpack frontend image (railpack prepare and the BuildKit frontend)")
+		maxConcurrentBuilds = flag.Int("max-concurrent-builds", 1, "builds running at once in the cluster; more wait in a queue")
+		buildTimeout        = flag.Duration("build-timeout", controllers.DefaultBuildTimeout, "a build running longer fails")
 	)
 	flag.Parse()
 
@@ -53,6 +58,10 @@ func main() {
 
 	if *platform != "cloud" && *platform != "dedicated" {
 		log.Error("invalid --platform", "value", *platform)
+		os.Exit(2)
+	}
+	if *maxConcurrentBuilds < 1 || *buildTimeout <= 0 {
+		log.Error("invalid build settings", "max-concurrent-builds", *maxConcurrentBuilds, "build-timeout", *buildTimeout)
 		os.Exit(2)
 	}
 
@@ -84,6 +93,11 @@ func main() {
 			ConsoleDomain: *consoleDomain,
 			GatewayClass:  *gatewayClass,
 			ClusterIssuer: *clusterIssuer,
+		}, &controllers.BuildReconciler{
+			BuildKitImage:       *buildkitImage,
+			RailpackImage:       *railpackImage,
+			MaxConcurrentBuilds: *maxConcurrentBuilds,
+			Timeout:             *buildTimeout,
 		})
 		if err != nil {
 			log.Error("cannot start controllers", "err", err)
@@ -194,7 +208,8 @@ func cleanSessions(ctx context.Context, log *slog.Logger, st *store.Store) {
 // not-ready (so `helm --wait` fails) instead of passing silently.
 func waitUntilReady(ctx context.Context, log *slog.Logger, mgr ctrl.Manager, ready *atomic.Bool) {
 	types := []client.Object{&kwerftv1.Project{}, &kwerftv1.App{}, &kwerftv1.Domain{},
-		&kwerftv1.Volume{}, &kwerftv1.Task{}, &kwerftv1.Schedule{}, &kwerftv1.ConsoleSettings{}, &kwerftv1.GitConnection{}}
+		&kwerftv1.Volume{}, &kwerftv1.Task{}, &kwerftv1.Schedule{}, &kwerftv1.ConsoleSettings{},
+		&kwerftv1.GitConnection{}, &kwerftv1.Build{}}
 	for _, obj := range types {
 		for {
 			_, err := mgr.GetCache().GetInformer(ctx, obj, cache.BlockUntilSynced(false))
@@ -214,7 +229,7 @@ func waitUntilReady(ctx context.Context, log *slog.Logger, mgr ctrl.Manager, rea
 	}
 }
 
-func newManager(log *slog.Logger, leaderElect bool, domains *controllers.DomainReconciler) (ctrl.Manager, error) {
+func newManager(log *slog.Logger, leaderElect bool, domains *controllers.DomainReconciler, builds *controllers.BuildReconciler) (ctrl.Manager, error) {
 	ctrl.SetLogger(logr.FromSlogHandler(log.Handler()))
 	cfg, err := ctrl.GetConfig()
 	if err != nil {
@@ -237,7 +252,8 @@ func newManager(log *slog.Logger, leaderElect bool, domains *controllers.DomainR
 	if err := (&controllers.ProjectReconciler{Client: mgr.GetClient()}).SetupWithManager(mgr); err != nil {
 		return nil, err
 	}
-	if err := (&controllers.AppReconciler{Client: mgr.GetClient()}).SetupWithManager(mgr); err != nil {
+	apps := &controllers.AppReconciler{Client: mgr.GetClient(), Registry: &controllers.RegistryKeeper{URL: controllers.DefaultRegistryURL}}
+	if err := apps.SetupWithManager(mgr); err != nil {
 		return nil, err
 	}
 	domains.Client = mgr.GetClient()
@@ -266,6 +282,11 @@ func newManager(log *slog.Logger, leaderElect bool, domains *controllers.DomainR
 	commitStatus := &controllers.CommitStatusReconciler{Client: mgr.GetClient(), APIReader: mgr.GetAPIReader(),
 		Git: gitFactory, ConsoleDomain: domains.ConsoleDomain}
 	if err := commitStatus.SetupWithManager(mgr); err != nil {
+		return nil, err
+	}
+	builds.Client = mgr.GetClient()
+	builds.APIReader = mgr.GetAPIReader()
+	if err := builds.SetupWithManager(mgr); err != nil {
 		return nil, err
 	}
 	return mgr, nil

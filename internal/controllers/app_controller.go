@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -17,6 +18,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
+	"sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 	gwv1 "sigs.k8s.io/gateway-api/apis/v1"
@@ -32,6 +34,9 @@ const maxHistory = 20
 // rollout progress and revisions in App.status.
 type AppReconciler struct {
 	client.Client
+	// Registry tags the images of Git apps' revisions so the registry's
+	// retention keeps them; nil leaves the registry alone.
+	Registry *RegistryKeeper
 }
 
 func (r *AppReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
@@ -60,6 +65,14 @@ func (r *AppReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.R
 	if isTerminal(err) {
 		return ctrl.Result{}, nil
 	}
+	if err == nil && r.Registry != nil && app.Spec.Source.Git != nil {
+		if kerr := r.Registry.Keep(ctx, app.Namespace, app.Name, app.Status.History); kerr != nil {
+			// The rollout is done; only the protection of older images is
+			// missing. Retry without holding anything up.
+			log.FromContext(ctx).Error(kerr, "cannot protect the App's images in the registry")
+			return ctrl.Result{RequeueAfter: 5 * time.Minute}, nil
+		}
+	}
 	return ctrl.Result{}, err
 }
 
@@ -79,11 +92,15 @@ func (r *AppReconciler) reconcile(ctx context.Context, app *kwerftv1.App) (*read
 		return nil, terminalf("NotInProject", "namespace %q is not a Kwerft project; create a Project first", app.Namespace)
 	}
 
-	image, ok := resolveImage(app)
-	if !ok {
+	resolved, err := resolveImage(ctx, r.Client, app)
+	if err != nil {
+		return nil, err
+	}
+	if resolved == nil {
 		return &readiness{metav1.ConditionFalse, "AwaitingBuild",
 			"Waiting for the first successful build of " + app.Spec.Source.Git.Repository}, nil
 	}
+	image := resolved.image
 
 	missing, err := missingVolumes(ctx, r.Client, app.Namespace, app.Spec.Volumes)
 	if err != nil {
@@ -137,7 +154,8 @@ func (r *AppReconciler) reconcile(ctx context.Context, app *kwerftv1.App) (*read
 	// Revisions: a new one whenever the spec or the resolved image changes.
 	if h := app.Status.History; len(h) == 0 || h[0].Image != image || h[0].Generation != app.Generation {
 		app.Status.Revision++
-		rev := kwerftv1.AppRevision{Number: app.Status.Revision, Image: image, Generation: app.Generation, Time: metav1.Now()}
+		rev := kwerftv1.AppRevision{Number: app.Status.Revision, Image: image, Generation: app.Generation,
+			Build: resolved.build, Commit: resolved.commit, Time: metav1.Now()}
 		app.Status.History = append([]kwerftv1.AppRevision{rev}, app.Status.History...)
 		if len(app.Status.History) > maxHistory {
 			app.Status.History = app.Status.History[:maxHistory]
@@ -294,20 +312,84 @@ func (r *AppReconciler) appsForDomain(ctx context.Context, obj client.Object) []
 	return reqs
 }
 
-// resolveImage returns the image to run. Git apps run the image of their last
-// successful build, recorded in status by the Build reconciler (Phase 2),
-// unless a rollback pinned an earlier one.
-func resolveImage(app *kwerftv1.App) (string, bool) {
+// resolvedImage is what an App (or a Task from it) runs, and for Git apps
+// the Build and commit it came from.
+type resolvedImage struct {
+	image, build, commit string
+}
+
+// resolveImage returns the image to run, or nil while a Git app has none
+// yet. Image apps run their reference. Git apps run spec.source.git.pinnedImage
+// when a rollback set it, else the image of their newest Succeeded Build with
+// spec.deploy (by completion time), pinned to its digest. Once all builds
+// are gone, the image already running stays.
+func resolveImage(ctx context.Context, c client.Reader, app *kwerftv1.App) (*resolvedImage, error) {
 	if src := app.Spec.Source.Image; src != nil {
-		return src.Ref, true
+		return &resolvedImage{image: src.Ref}, nil
 	}
-	if git := app.Spec.Source.Git; git != nil && git.PinnedImage != "" {
-		return git.PinnedImage, true
+	git := app.Spec.Source.Git
+	if git == nil {
+		return nil, nil
 	}
-	if app.Status.Image != "" {
-		return app.Status.Image, true
+	var list kwerftv1.BuildList
+	if err := c.List(ctx, &list, client.InNamespace(app.Namespace)); err != nil {
+		return nil, err
 	}
-	return "", false
+	var newest *kwerftv1.Build
+	for i := range list.Items {
+		b := &list.Items[i]
+		if b.Spec.App != app.Name || b.Status.Phase != kwerftv1.BuildSucceeded || b.Status.Image == "" {
+			continue
+		}
+		if git.PinnedImage != "" {
+			if deployImage(b) == git.PinnedImage || b.Status.Image == git.PinnedImage {
+				return &resolvedImage{image: git.PinnedImage, build: b.Name, commit: b.Spec.Commit}, nil
+			}
+			continue
+		}
+		if b.Spec.Deploy && newerBuild(b, newest) {
+			newest = b
+		}
+	}
+	switch {
+	case git.PinnedImage != "":
+		return &resolvedImage{image: git.PinnedImage}, nil // its build was pruned
+	case newest != nil:
+		return &resolvedImage{image: deployImage(newest), build: newest.Name, commit: newest.Spec.Commit}, nil
+	case app.Status.Image != "":
+		r := &resolvedImage{image: app.Status.Image}
+		if h := app.Status.History; len(h) > 0 && h[0].Image == app.Status.Image {
+			r.build, r.commit = h[0].Build, h[0].Commit
+		}
+		return r, nil
+	}
+	return nil, nil
+}
+
+// newerBuild reports whether b completed after cur (nil: any b is newer).
+func newerBuild(b, cur *kwerftv1.Build) bool {
+	if cur == nil {
+		return true
+	}
+	bt, ct := b.Status.CompletionTime, cur.Status.CompletionTime
+	switch {
+	case bt == nil && ct == nil, bt != nil && ct != nil && bt.Equal(ct):
+		return b.Status.Number > cur.Status.Number
+	case bt == nil:
+		return false
+	case ct == nil:
+		return true
+	}
+	return ct.Before(bt)
+}
+
+// appsForBuild enqueues a successful Build's App: it may be the image to run.
+func appsForBuild(_ context.Context, obj client.Object) []reconcile.Request {
+	b, ok := obj.(*kwerftv1.Build)
+	if !ok || b.Status.Phase != kwerftv1.BuildSucceeded {
+		return nil
+	}
+	return []reconcile.Request{{NamespacedName: client.ObjectKey{Namespace: b.Namespace, Name: b.Spec.App}}}
 }
 
 // appsMountingVolume enqueues the Apps that mount a Volume, so an App waiting
@@ -326,8 +408,6 @@ func (r *AppReconciler) appsMountingVolume(ctx context.Context, vol client.Objec
 	return reqs
 }
 
-// TODO(phase-2): watch Builds and enqueue their App — a finished build changes
-// only App.status, which the generation predicate below ignores.
 func (r *AppReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		// Status writes do not bump the generation, so they do not re-trigger.
@@ -335,6 +415,8 @@ func (r *AppReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		For(&kwerftv1.App{}, builder.WithPredicates(predicate.Or(
 			predicate.GenerationChangedPredicate{}, predicate.AnnotationChangedPredicate{}))).
 		Watches(&kwerftv1.Volume{}, handler.EnqueueRequestsFromMapFunc(r.appsMountingVolume)).
+		// A successful build is a new image to roll out (Git apps).
+		Watches(&kwerftv1.Build{}, handler.EnqueueRequestsFromMapFunc(appsForBuild)).
 		Owns(&appsv1.Deployment{}).
 		Owns(&appsv1.StatefulSet{}).
 		Owns(&corev1.Service{}).
