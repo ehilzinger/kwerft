@@ -39,10 +39,17 @@ export type Recording = {
   id: string;
   user: string;
   project: string;
-  app: string;
+  /** What the pod belonged to: an App's replica or a Task's run. */
+  kind: "app" | "task";
+  app?: string;
+  task?: string;
   pod: string;
   container: string;
   shell: string;
+  /** The toolbox container a debug shell ran in. */
+  debugContainer?: string;
+  /** The session is still running. Not ended and not live: it was cut short. */
+  live?: boolean;
   ip: string;
   started: string;
   ended?: string;
@@ -60,10 +67,17 @@ const taskBase = (project: string, task: string) => `/projects/${enc(project)}/t
 export const podsApi = {
   appPods: (project: string, app: string) => request<Replicas>(`${appBase(project, app)}/pods`),
   taskPods: (project: string, task: string) => request<Replicas>(`${taskBase(project, task)}/pods`),
-  /** Owners and admins only. */
-  recordings: () => request<Recording[]>("/recordings"),
-  recordingURL: (id: string) => `/api/v1/recordings/${enc(id)}`,
+  /** Owners and admins only; newest first, at most 500. */
+  recordings: (f: RecordingFilter = {}) => {
+    const q = new URLSearchParams(Object.entries(f).filter((e): e is [string, string] => !!e[1]));
+    const s = q.toString();
+    return request<Recording[]>(`/recordings${s ? `?${s}` : ""}`);
+  },
+  /** The .cast file; `play` audits it as a playback instead of a download. */
+  recordingURL: (id: string, o: { play?: boolean } = {}) => `/api/v1/recordings/${enc(id)}${o.play ? "?play=1" : ""}`,
 };
+
+export type RecordingFilter = { user?: string; project?: string; app?: string; task?: string };
 
 /** Log stream paths for LogViewer. */
 export const appLogsPath = (project: string, app: string) => `${appBase(project, app)}/logs`;
@@ -71,11 +85,15 @@ export const taskLogsPath = (project: string, task: string) => `${taskBase(proje
 
 export type ShellKind = "auto" | "bash" | "sh" | "debug";
 
-export function shellURL(project: string, app: string, pod: string, o: { shell: ShellKind; container?: string; cols: number; rows: number }) {
+/** Where a shell's pod belongs: a replica of an App, or the pod of a running Task. */
+export type ShellOwner = { project: string; pod: string } & ({ app: string; task?: never } | { task: string; app?: never });
+
+export function shellURL(t: ShellOwner, o: { shell: ShellKind; container?: string; cols: number; rows: number }) {
   const scheme = location.protocol === "https:" ? "wss:" : "ws:";
   const q = new URLSearchParams({ shell: o.shell, cols: String(o.cols), rows: String(o.rows) });
   if (o.container) q.set("container", o.container);
-  return `${scheme}//${location.host}/api/v1${appBase(project, app)}/pods/${enc(pod)}/shell?${q}`;
+  const base = t.task !== undefined ? taskBase(t.project, t.task) : appBase(t.project, t.app);
+  return `${scheme}//${location.host}/api/v1${base}/pods/${enc(t.pod)}/shell?${q}`;
 }
 
 // ---- log streams -------------------------------------------------------------
