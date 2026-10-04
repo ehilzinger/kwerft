@@ -69,7 +69,7 @@ export const podsApi = {
 export const appLogsPath = (project: string, app: string) => `${appBase(project, app)}/logs`;
 export const taskLogsPath = (project: string, task: string) => `${taskBase(project, task)}/logs`;
 
-export type ShellKind = "auto" | "bash" | "sh";
+export type ShellKind = "auto" | "bash" | "sh" | "debug";
 
 export function shellURL(project: string, app: string, pod: string, o: { shell: ShellKind; container?: string; cols: number; rows: number }) {
   const scheme = location.protocol === "https:" ? "wss:" : "ws:";

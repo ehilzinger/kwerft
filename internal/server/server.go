@@ -54,6 +54,9 @@ type Config struct {
 	// RecordingsDir keeps the asciinema recordings of shell sessions; empty
 	// disables shells, since none may run unrecorded (see api_shell.go).
 	RecordingsDir string
+	// DebugImage is the toolbox image for debug shells; empty means
+	// DefaultDebugImage.
+	DebugImage string
 
 	// podsHook lets tests swap Kubernetes and the limits of the pod
 	// endpoints (logs, shells) for fakes; see api_pods.go.

@@ -51,6 +51,8 @@ type fakePods struct {
 	closed  atomic.Int32
 	calls   []corev1.PodLogOptions
 	exec    func(ctx context.Context, opts *corev1.PodExecOptions, s execStreams) error
+	// debugState is the status a debug toolbox gets; nil means running.
+	debugState *corev1.ContainerState
 }
 
 func newFakePods(pods ...corev1.Pod) *fakePods {

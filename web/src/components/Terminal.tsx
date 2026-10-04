@@ -14,14 +14,17 @@ export type ShellTarget = { project: string; app: string; pod: string; container
 
 type Started = { pod: string; container: string; shell: string; recording: string; idleSeconds: number; maxSeconds: number };
 type Status =
-  | { s: "connecting" }
+  | { s: "connecting"; message?: string }
   | { s: "open"; info: Started }
-  | { s: "closed"; message: string; bad?: boolean };
+  | { s: "closed"; message: string; bad?: boolean; reason?: string };
 
 const SHELLS: { id: ShellKind; label: string }[] = [
   { id: "auto", label: "bash, else sh" },
   { id: "bash", label: "bash" },
   { id: "sh", label: "sh" },
+  // For images without a shell (FROM scratch, distroless): a toolbox
+  // container added next to the app that sees its processes and network.
+  { id: "debug", label: "debug toolbox" },
 ];
 
 export function ShellDialog({ target, onClose }: { target: ShellTarget; onClose: () => void }) {
@@ -39,6 +42,10 @@ export function ShellDialog({ target, onClose }: { target: ShellTarget; onClose:
   }, []);
 
   const reconnect = () => setSession((x) => ({ n: x.n + 1, shell, container }));
+  const debug = () => {
+    setShell("debug");
+    setSession((x) => ({ n: x.n + 1, shell: "debug", container }));
+  };
   const changed = shell !== session.shell || container !== session.container;
 
   return (
@@ -65,6 +72,9 @@ export function ShellDialog({ target, onClose }: { target: ShellTarget; onClose:
       <Term key={session.n} target={target} shell={session.shell} container={session.container} onStatus={setStatus} />
       <div className="shell-foot" role="status">
         <StatusLine status={status} />
+        {status.s === "closed" && status.reason === "noShell" && (
+          <button type="button" className="btn sm pri" onClick={debug}>Open a debug shell</button>
+        )}
       </div>
     </dialog>
   );
@@ -73,13 +83,13 @@ export function ShellDialog({ target, onClose }: { target: ShellTarget; onClose:
 function StatusLine({ status }: { status: Status }) {
   switch (status.s) {
     case "connecting":
-      return <span>Connecting…</span>;
+      return <span>{status.message ?? "Connecting…"}</span>;
     case "open": {
       const i = status.info;
       return (
         <>
           <span className="pill info nodot">Recorded</span>
-          <span>{i.container} · {i.shell === "auto" ? "bash or sh" : i.shell}</span>
+          <span>{i.container} · {i.shell === "auto" ? "bash or sh" : i.shell === "debug" ? "debug toolbox (busybox sh)" : i.shell}</span>
           <span className="dim">Closes after {minutes(i.idleSeconds)} without input, ends after {minutes(i.maxSeconds)}. Keystrokes are not recorded; what the terminal shows is.</span>
         </>
       );
@@ -161,7 +171,9 @@ function Term({ target, shell, container, onStatus }: { target: ShellTarget; she
           return;
         }
         const msg = JSON.parse(ev.data) as { type: string; message?: string; reason?: string; code?: number } & Started;
-        if (msg.type === "started") {
+        if (msg.type === "status") {
+          onStatus({ s: "connecting", message: msg.message });
+        } else if (msg.type === "started") {
           onStatus({ s: "open", info: msg });
           term.focus();
         } else if (msg.type === "error") {
@@ -171,7 +183,12 @@ function Term({ target, shell, container, onStatus }: { target: ShellTarget; she
           ended = true;
           const text = msg.message || endings[msg.reason ?? ""] || "The session ended.";
           term.write(`\r\n\x1b[2m[${text}]\x1b[0m\r\n`);
-          onStatus({ s: "closed", message: text + (msg.code !== undefined && msg.reason === "exited" && !msg.message ? ` Exit code ${msg.code}.` : ""), bad: msg.reason === "error" });
+          onStatus({
+            s: "closed",
+            message: text + (msg.code !== undefined && msg.reason === "exited" && !msg.message ? ` Exit code ${msg.code}.` : ""),
+            bad: msg.reason === "error" || msg.reason === "noShell",
+            reason: msg.reason,
+          });
         }
       };
       ws.onclose = () => {

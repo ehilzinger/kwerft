@@ -64,20 +64,22 @@ type recorder struct {
 
 // recordingMeta is the sidecar <id>.json and what the list endpoint returns.
 type recordingMeta struct {
-	ID        string     `json:"id"`
-	User      string     `json:"user"`
-	Project   string     `json:"project"`
-	App       string     `json:"app"`
-	Pod       string     `json:"pod"`
-	Container string     `json:"container"`
-	Shell     string     `json:"shell"`
-	IP        string     `json:"ip"`
-	Started   time.Time  `json:"started"`
-	Ended     *time.Time `json:"ended,omitempty"`
-	Duration  float64    `json:"durationSeconds"`
-	Reason    string     `json:"reason,omitempty"` // why the session ended
-	ExitCode  *int       `json:"exitCode,omitempty"`
-	Bytes     int64      `json:"bytes"`
+	ID        string `json:"id"`
+	User      string `json:"user"`
+	Project   string `json:"project"`
+	App       string `json:"app"`
+	Pod       string `json:"pod"`
+	Container string `json:"container"`
+	Shell     string `json:"shell"`
+	// DebugContainer is the toolbox container a debug shell ran in.
+	DebugContainer string     `json:"debugContainer,omitempty"`
+	IP             string     `json:"ip"`
+	Started        time.Time  `json:"started"`
+	Ended          *time.Time `json:"ended,omitempty"`
+	Duration       float64    `json:"durationSeconds"`
+	Reason         string     `json:"reason,omitempty"` // why the session ended
+	ExitCode       *int       `json:"exitCode,omitempty"`
+	Bytes          int64      `json:"bytes"`
 	// Input is false: keystrokes are not recorded (see above).
 	Input bool `json:"inputRecorded"`
 }

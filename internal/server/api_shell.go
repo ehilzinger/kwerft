@@ -56,19 +56,24 @@ type shellLimits struct {
 	ping         time.Duration // WebSocket keepalive; a client silent for 2× is gone
 	writeTimeout time.Duration
 	maxMessage   int64
+	debugStart   time.Duration // how long a debug container may take to start (image pull)
+	debugPoll    time.Duration
 }
 
 var defaultShellLimits = shellLimits{
 	idle: 15 * time.Minute, maxDuration: time.Hour, sessionCheck: 30 * time.Second,
 	ping: 30 * time.Second, writeTimeout: 10 * time.Second, maxMessage: 64 << 10,
+	debugStart: 2 * time.Minute, debugPoll: time.Second,
 }
 
 // shellCommands are the only commands a shell session runs. Each sets a TERM
-// that matches xterm.js; "auto" prefers bash and falls back to sh.
+// that matches xterm.js; "auto" prefers bash and falls back to sh. "debug"
+// runs sh in a toolbox container added next to the target (api_debug.go).
 var shellCommands = map[string][]string{
-	"auto": {"sh", "-c", "TERM=xterm-256color; export TERM; if command -v bash >/dev/null 2>&1; then exec bash; fi; exec sh"},
-	"bash": {"bash", "-c", "export TERM=xterm-256color; exec bash"},
-	"sh":   {"sh", "-c", "TERM=xterm-256color; export TERM; exec sh"},
+	"debug": {"sh", "-c", "TERM=xterm-256color; export TERM; exec sh"},
+	"auto":  {"sh", "-c", "TERM=xterm-256color; export TERM; if command -v bash >/dev/null 2>&1; then exec bash; fi; exec sh"},
+	"bash":  {"bash", "-c", "export TERM=xterm-256color; exec bash"},
+	"sh":    {"sh", "-c", "TERM=xterm-256color; export TERM; exec sh"},
 }
 
 // wsOrigin enforces the handshake rules above before anything else runs.
@@ -109,7 +114,7 @@ func (p *podsAPI) appShell(w http.ResponseWriter, r *http.Request) {
 	}
 	command, ok := shellCommands[shell]
 	if !ok {
-		invalid(w, "shell", "Pick sh, bash or auto.")
+		invalid(w, "shell", "Pick sh, bash, auto or debug.")
 		return
 	}
 	cols, rows := clampInt(q.Get("cols"), 80, 10, 500), clampInt(q.Get("rows"), 24, 4, 200)
@@ -202,6 +207,7 @@ type shellSession struct {
 
 	project, app, pod, container string
 	shell                        string
+	debug                        string // the toolbox container of a debug shell
 	command                      []string
 	cols, rows                   int
 
@@ -248,17 +254,30 @@ func (s *shellSession) run(ctx context.Context) {
 		return
 	}
 
+	if s.shell == "debug" {
+		debug, msg := s.startDebug(ctx, b, pod)
+		if debug == "" {
+			s.fail(msg)
+			return
+		}
+		s.debug = debug
+	}
+
 	started := p.now()
 	s.rec, err = p.rec.start(recordingMeta{
 		User: email, Project: s.project, App: s.app, Pod: s.pod, Container: s.container,
-		Shell: s.shell, IP: clientIP(s.r), Started: started,
+		Shell: s.shell, DebugContainer: s.debug, IP: clientIP(s.r), Started: started,
 	}, s.cols, s.rows)
 	if err != nil {
 		p.cfg.Logger.Error("shell: cannot start the recording", "err", err)
 		s.fail("Shell sessions are recorded, and the recording could not be started. Nothing was run.")
 		return
 	}
-	p.audit(s.r, email, "pod.exec", s.target(), fmt.Sprintf("container %s, %s, recording %s", s.container, s.shell, s.rec.meta.ID))
+	detail := fmt.Sprintf("container %s, %s, recording %s", s.container, s.shell, s.rec.meta.ID)
+	if s.debug != "" {
+		detail = fmt.Sprintf("container %s, debug via %s, recording %s", s.container, s.debug, s.rec.meta.ID)
+	}
+	p.audit(s.r, email, "pod.exec", s.target(), detail)
 	_ = s.ws.json(map[string]any{
 		"type": "started", "pod": s.pod, "container": s.container, "shell": s.shell, "recording": s.rec.meta.ID,
 		"idleSeconds": int(p.shell.idle.Seconds()), "maxSeconds": int(p.shell.maxDuration.Seconds()),
@@ -276,7 +295,7 @@ func (s *shellSession) run(ctx context.Context) {
 	s.ws.close(websocket.CloseNormalClosure, end.reason)
 	_ = s.ws.c.Close() // ends the reader's ReadMessage
 	<-readerDone
-	detail := fmt.Sprintf("%s after %s, recording %s", end.reason, now.Sub(started).Round(time.Second), s.rec.meta.ID)
+	detail = fmt.Sprintf("%s after %s, recording %s", end.reason, now.Sub(started).Round(time.Second), s.rec.meta.ID)
 	if end.code != nil {
 		detail += fmt.Sprintf(", exit code %d", *end.code)
 	}
@@ -356,8 +375,12 @@ func (s *shellSession) loop(ctx context.Context, b podBackend) (ended, <-chan st
 	out := &shellOutput{s: s, cancel: cancel}
 	execErr := make(chan error, 1)
 	go func() {
+		container := s.container
+		if s.debug != "" {
+			container = s.debug
+		}
 		execErr <- b.exec(ctx, s.project, s.pod, &corev1.PodExecOptions{
-			Container: s.container, Command: s.command, Stdin: true, Stdout: true, TTY: true,
+			Container: container, Command: s.command, Stdin: true, Stdout: true, TTY: true,
 		}, execStreams{stdin: stdinR, stdout: out, resize: sizes})
 	}()
 
@@ -443,6 +466,10 @@ func exitOf(err, cause error) ended {
 	}
 	if apierrors.IsForbidden(err) {
 		return ended{reason: "error", message: "Your role does not allow opening a shell."}
+	}
+	if isNoShell(err) {
+		return ended{reason: "noShell", message: "This image has no shell. Images built FROM scratch and distroless images contain only the app. " +
+			"Open a debug shell instead: it adds a small toolbox container next to this one that sees its processes and network (the app's files are under /proc/1/root)."}
 	}
 	return ended{reason: "error", message: "The shell could not run: " + apiMessage(err)}
 }

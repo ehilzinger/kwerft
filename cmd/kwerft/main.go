@@ -42,6 +42,7 @@ func main() {
 		leaderElect    = flag.Bool("leader-elect", true, "use leader election so only one replica reconciles")
 		gatewayClass   = flag.String("gateway-class", "traefik", "GatewayClass of the shared Gateway")
 		clusterIssuer  = flag.String("cluster-issuer", "letsencrypt", "cert-manager ClusterIssuer for HTTPS listeners; empty disables certificates")
+		debugImage     = flag.String("debug-image", server.DefaultDebugImage, "toolbox image for debug shells into containers without a shell")
 		dev            = flag.Bool("dev", false, "local development: plain-HTTP cookies and a setup token printed to the log")
 	)
 	flag.Parse()
@@ -134,6 +135,7 @@ func main() {
 		Kube:          kubeImp,
 		KubeCache:     kubeCache,
 		RecordingsDir: filepath.Join(*dataDir, "recordings"),
+		DebugImage:    *debugImage,
 	})
 
 	go func() {

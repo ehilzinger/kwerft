@@ -86,6 +86,8 @@ func TestPodRolesFollowKubernetesRBAC(t *testing.T) {
 			{"shell in kwerft-system", "kwerft-system", "create", "", "pods", "exec", false},
 			// Exec over WebSocket is a GET: Kubernetes checks get and create.
 			{"exec over WebSocket", "pods-rbac", "get", "", "pods", "exec", role != "viewer"},
+			{"add a debug toolbox", "pods-rbac", "update", "", "pods", "ephemeralcontainers", role != "viewer"},
+			{"debug toolbox in kube-system", "kube-system", "update", "", "pods", "ephemeralcontainers", false},
 			{"attach", "pods-rbac", "create", "", "pods", "attach", false},
 			{"delete pods", "pods-rbac", "delete", "", "pods", "", false},
 		} {

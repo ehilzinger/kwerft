@@ -140,3 +140,7 @@ rules:
   - apiGroups: [""]
     resources: [pods/exec]
     verbs: [get, create]
+  # Debug shells add a toolbox container to images without a shell.
+  - apiGroups: [""]
+    resources: [pods/ephemeralcontainers]
+    verbs: [get, update, patch]

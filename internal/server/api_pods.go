@@ -116,6 +116,8 @@ type podBackend interface {
 	allowed(ctx context.Context, namespace, verb, subresource, name string) (bool, error)
 	logs(ctx context.Context, namespace, pod string, opts *corev1.PodLogOptions) (io.ReadCloser, error)
 	exec(ctx context.Context, namespace, pod string, opts *corev1.PodExecOptions, s execStreams) error
+	// addDebugContainer adds an ephemeral container to a running pod.
+	addDebugContainer(ctx context.Context, namespace, pod string, ec corev1.EphemeralContainer) error
 }
 
 type podUsage struct{ cpuMillis, memoryBytes int64 }
@@ -226,6 +228,17 @@ func (k *kubePods) allowed(ctx context.Context, namespace, verb, subresource, na
 
 func (k *kubePods) logs(ctx context.Context, namespace, pod string, opts *corev1.PodLogOptions) (io.ReadCloser, error) {
 	return k.cs.CoreV1().Pods(namespace).GetLogs(pod, opts).Stream(ctx)
+}
+
+func (k *kubePods) addDebugContainer(ctx context.Context, namespace, name string, ec corev1.EphemeralContainer) error {
+	pods := k.cs.CoreV1().Pods(namespace)
+	pod, err := pods.Get(ctx, name, metav1.GetOptions{})
+	if err != nil {
+		return err
+	}
+	pod.Spec.EphemeralContainers = append(pod.Spec.EphemeralContainers, ec)
+	_, err = pods.UpdateEphemeralContainers(ctx, name, pod, metav1.UpdateOptions{FieldManager: "kwerft"})
+	return err
 }
 
 // exec runs a command in a container over the WebSocket protocol (v5),
