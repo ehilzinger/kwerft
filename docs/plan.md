@@ -1,6 +1,6 @@
-# Werft implementation plan
+# Kwerft implementation plan
 
-Werft turns a rented Hetzner server (Cloud or dedicated) into a Kubernetes
+Kwerft turns a rented Hetzner server (Cloud or dedicated) into a Kubernetes
 platform with a web console, installed by one bash script. This document is
 the working plan; `docs/blueprint.html` holds the clickable UI mockups and
 the same plan in long form.
@@ -13,7 +13,7 @@ the same plan in long form.
 | Users | **One team** | Single organization with projects and roles; no tenant isolation in v1. Records carry an organization ID so tenancy can be added later without a migration. |
 | Sources | **Registry images and Git repositories in v1** | Adds Phase 2: the `Build` resource, rootless BuildKit, Railpack, an in-cluster zot registry. |
 | License | **To be decided before the public beta** | All dependencies chosen so far are Apache-2.0 or MIT, so every option stays open. No LICENSE file until then. |
-| Name & hosting | **Werft, under the personal GitHub account `ehilzinger`** | Module `github.com/ehilzinger/werft`, image `ghcr.io/ehilzinger/werft`, chart `oci://ghcr.io/ehilzinger/charts/werft`. Can move to an organisation later. The installer is served from GitHub raw until Werft has its own domain (then `get.werft.sh`). |
+| Name & hosting | **Kwerft, under the personal GitHub account `ehilzinger`** | Module `github.com/ehilzinger/kwerft`, image `ghcr.io/ehilzinger/kwerft`, chart `oci://ghcr.io/ehilzinger/charts/kwerft`. Can move to an organisation later. The installer is served from GitHub raw until Kwerft has its own domain (then `get.kwerft.dev`). |
 
 ## Principles
 
@@ -26,9 +26,9 @@ the same plan in long form.
 ## Architecture
 
 ```
-Clients        browser · werftctl · CI tokens · kubectl (scoped kubeconfig)
+Clients        browser · kwerftctl · CI tokens · kubectl (scoped kubeconfig)
 Edge :80/443   Traefik (hostNetwork DaemonSet, Gateway API) + cert-manager
-Werft          one Go binary: REST/WebSocket API, reconcilers, embedded React UI, SQLite
+Kwerft          one Go binary: REST/WebSocket API, reconcilers, embedded React UI, SQLite
 Platform       VictoriaMetrics · VictoriaLogs + Vector · Hubble · Velero · BuildKit · zot
 Kubernetes     k3s (embedded etcd, secrets encryption) · Cilium (kube-proxy replacement, WireGuard)
 Host           Ubuntu 22.04/24.04/26.04 · nftables baseline · chrony · unattended-upgrades
@@ -40,7 +40,7 @@ A change flows: UI → API checks the role → API writes the custom resource
 renders Deployment/Service/HTTPRoute/CiliumNetworkPolicy/PVC with server-side
 apply → status streams back over WebSocket from a shared informer cache.
 
-Remote clusters run `werft-agent`, which dials out to the console over an
+Remote clusters run `kwerft-agent`, which dials out to the console over an
 mTLS WebSocket tunnel, so they need no public Kubernetes API.
 
 ## Technology choices
@@ -70,7 +70,7 @@ Memory, measured 2026-10-04 on an idle Hetzner Cloud server (8 GB, Ubuntu
 | Traefik, cert-manager | 180 MB | 125 MB |
 | VictoriaMetrics stack, VictoriaLogs, Vector, node-exporter | 550 MB | 625 MB |
 | CoreDNS, metrics-server, local-path | — | 45 MB |
-| Werft | 150 MB | 13 MB |
+| Kwerft | 150 MB | 13 MB |
 | zot registry (Phase 2) | 60 MB | — |
 | **Platform total** | **≈ 1.9 GB** | **≈ 2.4 GB** (host: 3.0 GB used incl. OS) |
 
@@ -80,23 +80,23 @@ item) — e.g. drop vmalert/Alertmanager and shorten retention.
 
 ## Installer (`install/install.sh`)
 
-Stages, each idempotent and recorded in `/var/lib/werft/stages/`:
+Stages, each idempotent and recorded in `/var/lib/kwerft/stages/`:
 
 1. **Preflight** — platform detection, root, Ubuntu version, arch, RAM, disk, cgroup v2, ports 80/443, outbound HTTPS.
 2. **System** — packages, kernel modules, sysctls, swap off, chrony, unattended-upgrades, optional SSH hardening.
-3. **Firewall** — own `inet werft` nftables table: 22/80/443 public, cluster traffic only from the private network and pods.
+3. **Firewall** — own `inet kwerft` nftables table: 22/80/443 public, cluster traffic only from the private network and pods.
 4. **Kubernetes** — k3s server from `/etc/rancher/k3s/config.yaml` (no flannel, no kube-proxy, no bundled Traefik/servicelb).
 5. **Helm**, **Network** (Cilium), **Ingress & TLS** (Gateway API CRDs, cert-manager, Traefik), **Observability**.
-6. **Werft** — Helm chart from the checkout or the OCI registry; `--config` becomes the `werft-bootstrap` Secret.
+6. **Kwerft** — Helm chart from the checkout or the OCI registry; `--config` becomes the `kwerft-bootstrap` Secret.
 7. **Handoff** — DNS check, single-use setup token (hash only in the cluster), summary.
 
 Without `--domain` the console gets a temporary `<public-ip>.sslip.io` hostname
 (public wildcard DNS) so a trial works with zero DNS setup; the installer warns
 about it, and re-running with `--domain` switches over. The chosen hostname is
-saved in `/var/lib/werft/domain`, so re-running without flags never changes it.
+saved in `/var/lib/kwerft/domain`, so re-running without flags never changes it.
 `--email` is optional.
 
-Exit codes: 0 ok · 2 usage · 10 preflight · 20 network/DNS · 30 Kubernetes · 40 platform · 50 Werft.
+Exit codes: 0 ok · 2 usage · 10 preflight · 20 network/DNS · 30 Kubernetes · 40 platform · 50 Kwerft.
 
 ## Resource model (`api/v1alpha1`)
 
@@ -115,8 +115,8 @@ Exit codes: 0 ok · 2 usage · 10 preflight · 20 network/DNS · 30 Kubernetes �
 ## Security model
 
 - Console unusable until the setup token from the server's disk is presented; no default passwords.
-- Werft roles → ClusterRoles bound per project namespace; the API impersonates the user.
-- Kubernetes API on the private network only; external `kubectl` through Werft's proxy with short-lived scoped kubeconfigs.
+- Kwerft roles → ClusterRoles bound per project namespace; the API impersonates the user.
+- Kubernetes API on the private network only; external `kubectl` through Kwerft's proxy with short-lived scoped kubeconfigs.
 - k3s secrets encryption; developers write but cannot read secrets unless granted.
 - Exec sessions role-gated, time-limited and recorded.
 - Default-deny between projects, WireGuard between nodes, host firewall with lock-out protection.

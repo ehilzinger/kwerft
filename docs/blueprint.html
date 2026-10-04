@@ -1,4 +1,4 @@
-<title>Werft Blueprint</title>
+<title>Kwerft Blueprint</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,700&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;1,400&display=swap">
@@ -315,8 +315,8 @@ svg.ch{width:100%;height:auto;display:block}
 .lay{border:1px solid var(--line);border-radius:8px;padding:9px 12px;background:var(--surface);display:flex;flex-wrap:wrap;gap:6px 10px;align-items:center}
 .lay .ln{font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);width:100%}
 .lay .tag{font-size:11.5px}
-.lay.werft{border-color:var(--accent);background:var(--accent-2)}
-.lay.werft .ln{color:var(--accent)}
+.lay.kwerft{border-color:var(--accent);background:var(--accent-2)}
+.lay.kwerft .ln{color:var(--accent)}
 .lay.host{background:var(--sunk)}
 .lay.hz{background:transparent;border-style:dashed}
 .lay.user{background:transparent}
@@ -375,14 +375,14 @@ pre.mermaid{background:var(--surface);border:1px solid var(--line);border-radius
 
 <div class="wrap">
   <header class="mast">
-    <div class="brand"><svg><use href="#i-logo"/></svg><b>Werft</b><span>working name · self-hosted Kubernetes console for Hetzner</span></div>
+    <div class="brand"><svg><use href="#i-logo"/></svg><b>Kwerft</b><span>self-hosted Kubernetes console for Hetzner</span></div>
     <div class="meta">blueprint · draft 2 · 4 Oct 2026</div>
   </header>
 
   <section class="intro">
     <div style="display:grid;gap:14px;align-content:start">
       <h1>Rent a Hetzner box, run one script, manage containers from the browser.</h1>
-      <p>Werft installs a hardened single-node Kubernetes (k3s) on a fresh Ubuntu server and puts a console on top of it: deploy container images, watch them, and administer network rules, domains, nodes, clusters and access — without hiding Kubernetes from the people who want it.</p>
+      <p>Kwerft installs a hardened single-node Kubernetes (k3s) on a fresh Ubuntu server and puts a console on top of it: deploy container images, watch them, and administer network rules, domains, nodes, clusters and access — without hiding Kubernetes from the people who want it.</p>
     </div>
     <ul class="facts">
       <li><span class="k">Install</span><span><code>curl … | bash -s -- --domain ops.acme.dev</code>, idempotent, non-interactive with flags</span></li>
@@ -414,10 +414,10 @@ pre.mermaid{background:var(--surface);border:1px solid var(--line);border-radius
 
       <!-- ===== INSTALL ===== -->
       <div data-flowpanel="install" hidden>
-<div class="term"><span class="d">root@fsn1-node-1:~#</span> <span class="b">curl -fsSL https://get.werft.sh | bash -s -- \
+<div class="term"><span class="d">root@fsn1-node-1:~#</span> <span class="b">curl -fsSL https://get.kwerft.dev | bash -s -- \
     --domain ops.acme.dev --email ops@acme.dev --private-iface enp7s0 --yes</span>
 
-<span class="a">▸ Werft installer 0.9.0</span>  <span class="d">channel=stable · log=/var/log/werft/install.log</span>
+<span class="a">▸ Kwerft installer 0.9.0</span>  <span class="d">channel=stable · log=/var/log/kwerft/install.log</span>
 
 <span class="g">✓</span> Preflight       Ubuntu 24.04.3 LTS · x86_64 · 16 threads · 62.6 GiB RAM · 476 GB NVMe
 <span class="g">✓</span> Ports           80/tcp, 443/tcp free · 6443 bound to 10.0.0.2 (private)
@@ -427,12 +427,12 @@ pre.mermaid{background:var(--surface);border:1px solid var(--line);border-radius
 <span class="g">✓</span> Network         Cilium 1.20 · kube-proxy replacement · Hubble · WireGuard node encryption
 <span class="g">✓</span> Ingress & TLS   Traefik (Gateway API) · cert-manager · Let's Encrypt HTTP-01
 <span class="g">✓</span> Observability   VictoriaMetrics · VictoriaLogs · kube-state-metrics · node-exporter
-<span class="g">✓</span> Werft           control plane 0.9.0 · 2/2 replicas ready
+<span class="g">✓</span> Kwerft           control plane 0.9.0 · 2/2 replicas ready
 <span class="w">…</span> Certificate     ops.acme.dev → 203.0.113.24 <span class="g">matches this server</span> · issued in 14 s
 
   Open        <span class="a">https://ops.acme.dev/setup</span>
-  Setup token <span class="b">wrft_setup_••••-••••-9DRF</span>  <span class="d">(single use, expires in 24 h)</span>
-  Stored at   /etc/werft/setup-token  <span class="d">· mode 0600</span>
+  Setup token <span class="b">kwft_setup_••••-••••-9DRF</span>  <span class="d">(single use, expires in 24 h)</span>
+  Stored at   /etc/kwerft/setup-token  <span class="d">· mode 0600</span>
 
 <span class="g">Done in 3m 41s.</span> <span class="d">Re-run the same command any time to repair or upgrade.</span>
 <span class="d">root@fsn1-node-1:~#</span> <span class="b">▍</span></div>
@@ -442,19 +442,19 @@ pre.mermaid{background:var(--surface);border:1px solid var(--line);border-radius
       <div data-flowpanel="setup" hidden>
         <div class="setup">
           <aside>
-            <div class="side-brand"><svg><use href="#i-logo"/></svg>Werft setup</div>
+            <div class="side-brand"><svg><use href="#i-logo"/></svg>Kwerft setup</div>
             <ol class="vsteps">
-              <li class="done"><span class="dot">✓</span><div><b>Setup token</b><small>Verified from /etc/werft</small></div></li>
+              <li class="done"><span class="dot">✓</span><div><b>Setup token</b><small>Verified from /etc/kwerft</small></div></li>
               <li class="done"><span class="dot">✓</span><div><b>Owner account</b><small>mara@acme.dev · passkey added</small></div></li>
               <li class="cur"><span class="dot">3</span><div><b>Domains &amp; TLS</b><small>Console and app hostnames</small></div></li>
               <li><span class="dot">4</span><div><b>Hetzner integration</b><small>Optional: Cloud API, backups</small></div></li>
               <li><span class="dot">5</span><div><b>Ready</b><small>Deploy your first app</small></div></li>
             </ol>
-            <p class="dim" style="font-size:12px;margin:0">Everything here can be pre-seeded with <code>--config werft.yaml</code>, which skips this wizard entirely.</p>
+            <p class="dim" style="font-size:12px;margin:0">Everything here can be pre-seeded with <code>--config kwerft.yaml</code>, which skips this wizard entirely.</p>
           </aside>
           <main>
             <div>
-              <h2>Where should Werft and your apps live?</h2>
+              <h2>Where should Kwerft and your apps live?</h2>
               <p class="lead">The console gets its own hostname. Apps get subdomains under a base domain, so <code>invoices</code> becomes <code>invoices.apps.acme.dev</code> without touching DNS again.</p>
             </div>
             <div class="fields">
@@ -463,7 +463,7 @@ pre.mermaid{background:var(--surface);border:1px solid var(--line);border-radius
               <div class="field full"><label>How should certificates be issued?</label>
                 <div class="radio" data-radio>
                   <button class="opt" aria-pressed="false"><span class="r"></span><b>HTTP-01, one certificate per hostname</b><span>No DNS credentials needed. Every new app hostname needs its own DNS record.</span></button>
-                  <button class="opt" aria-pressed="true"><span class="r"></span><b>DNS-01 via Hetzner DNS, wildcard certificate</b><span>Werft creates records and a <code>*.apps.acme.dev</code> certificate automatically. Needs a DNS API token.</span></button>
+                  <button class="opt" aria-pressed="true"><span class="r"></span><b>DNS-01 via Hetzner DNS, wildcard certificate</b><span>Kwerft creates records and a <code>*.apps.acme.dev</code> certificate automatically. Needs a DNS API token.</span></button>
                 </div>
               </div>
               <div class="field"><label for="s-dns">Hetzner DNS API token</label><input class="input mono" id="s-dns" value="••••••••••••••••••••hK2q"><span class="ok">✓ Zone acme.dev found · write access</span></div>
@@ -478,7 +478,7 @@ pre.mermaid{background:var(--surface);border:1px solid var(--line);border-radius
       <div data-flowpanel="console">
       <div class="app">
         <aside class="side">
-          <div class="side-brand"><svg><use href="#i-logo"/></svg>Werft</div>
+          <div class="side-brand"><svg><use href="#i-logo"/></svg>Kwerft</div>
           <button class="cluster" data-go="clusters"><b><span><span class="live"></span>fsn1-prod</span><span class="dim">▾</span></b><small>3 nodes · k3s v1.37.1</small></button>
           <nav class="nav" aria-label="Console">
             <button data-screen="overview" aria-current="page"><svg><use href="#i-grid"/></svg>Overview</button>
@@ -516,7 +516,7 @@ pre.mermaid{background:var(--surface);border:1px solid var(--line);border-radius
                 <div class="list">
                   <div class="li"><span class="ico bad"><svg><use href="#i-alert"/></svg></span><div><b>billing-worker</b> · CrashLoopBackOff<p>7 restarts in 30 min. 312 connections to <code>api:8080</code> were dropped by a network rule.</p><button class="btn ghost sm" data-go="network" style="padding-left:0">Inspect dropped traffic →</button></div><span class="when">4m</span></div>
                   <div class="li"><span class="ico warn"><svg><use href="#i-disk"/></svg></span><div><b>postgres-main-data</b> · 87% full<p>43.5 of 50 GiB. At the current rate, full in ~6 days.</p><button class="btn ghost sm" style="padding-left:0">Expand volume →</button></div><span class="when">2h</span></div>
-                  <div class="li"><span class="ico info"><svg><use href="#i-rocket"/></svg></span><div><b>Werft 0.9.1</b> available<p>Patch release · k3s v1.37.2 included</p></div><span class="when">1d</span></div>
+                  <div class="li"><span class="ico info"><svg><use href="#i-rocket"/></svg></span><div><b>Kwerft 0.9.1</b> available<p>Patch release · k3s v1.37.2 included</p></div><span class="when">1d</span></div>
                 </div>
               </div>
             </div>
@@ -637,7 +637,7 @@ pre.mermaid{background:var(--surface);border:1px solid var(--line);border-radius
 <span class="p1">[5/7]</span> COPY . . &amp;&amp; RUN go test ./...                    <span class="p2">ok</span> <span class="ts">38.2s</span>
 <span class="p1">[6/7]</span> RUN go build -trimpath -o /out/api ./cmd/api       <span class="wn">running</span> <span class="ts">21s</span>
 <span class="p1">[7/7]</span> FROM gcr.io/distroless/static:nonroot · COPY /out/api
-<span class="ts">→ push registry.werft.internal/storefront/api:4f2c1ab · then roll out as revision 43</span></div>
+<span class="ts">→ push registry.kwerft.internal/storefront/api:4f2c1ab · then roll out as revision 43</span></div>
             </div>
 
             <div data-tabpanel="app:settings" hidden style="display:grid;gap:16px">
@@ -739,7 +739,7 @@ S3_BUCKET=acme-invoices</textarea><span class="hint">Mark a variable as secret t
             <div data-steppanel="rev" hidden style="display:grid;gap:16px">
               <div class="g2">
                 <div class="card"><div class="ch-h"><h3>App resource</h3><button class="btn sm">Copy YAML</button></div><div class="bd">
-<div class="codebox"><span class="k">apiVersion:</span> werft.dev/v1alpha1
+<div class="codebox"><span class="k">apiVersion:</span> kwerft.dev/v1alpha1
 <span class="k">kind:</span> App
 <span class="k">metadata:</span> { <span class="k">name:</span> invoice-renderer, <span class="k">namespace:</span> storefront }
 <span class="k">spec:</span>
@@ -752,7 +752,7 @@ S3_BUCKET=acme-invoices</textarea><span class="hint">Mark a variable as secret t
   <span class="k">egress:</span> https
   <span class="k">volumes:</span> [{ <span class="k">path:</span> /app/cache, <span class="k">size:</span> 5Gi, <span class="k">class:</span> local-nvme }]
   <span class="k">healthCheck:</span> { <span class="k">http:</span> /health, <span class="k">port:</span> 3000 }</div></div></div>
-                <div class="card"><h3>Werft will create</h3>
+                <div class="card"><h3>Kwerft will create</h3>
                   <div class="list">
                     <div class="li"><span class="tag">Deployment</span><span class="dim">2 replicas, rolling update</span></div>
                     <div class="li"><span class="tag">Service</span><span class="dim">ClusterIP :3000</span></div>
@@ -783,7 +783,7 @@ S3_BUCKET=acme-invoices</textarea><span class="hint">Mark a variable as secret t
                 <div class="bar"><span>web-frontend</span><span class="tr"><i style="width:15%"></i></span><span class="num">604 Mi</span></div>
                 <div class="bar"><span>plausible</span><span class="tr"><i style="width:9.5%"></i></span><span class="num">380 Mi</span></div>
                 <div class="bar"><span>redis</span><span class="tr"><i style="width:5.3%"></i></span><span class="num">212 Mi</span></div>
-                <div class="bar"><span class="dim">werft platform</span><span class="tr"><i style="width:45%;background:var(--faint)"></i></span><span class="num">1.76 Gi</span></div>
+                <div class="bar"><span class="dim">kwerft platform</span><span class="tr"><i style="width:45%;background:var(--faint)"></i></span><span class="num">1.76 Gi</span></div>
               </div></div>
             </div>
             <div class="card" style="overflow:hidden"><div class="ch-h"><h3>Alert rules</h3><button class="btn sm"><svg><use href="#i-plus"/></svg>New rule</button></div>
@@ -799,7 +799,7 @@ S3_BUCKET=acme-invoices</textarea><span class="hint">Mark a variable as secret t
 
           <!-- CLUSTERS -->
           <section class="view" data-view="clusters" hidden>
-            <div class="ph"><div><h2>Clusters &amp; nodes</h2><p class="sub">The cluster Werft runs in manages the others through an outbound agent</p></div></div>
+            <div class="ph"><div><h2>Clusters &amp; nodes</h2><p class="sub">The cluster Kwerft runs in manages the others through an outbound agent</p></div></div>
             <div class="clusters">
               <button class="ccard" aria-pressed="true"><span class="row"><b>fsn1-prod</b><span class="pill ok">Healthy</span></span><span class="m">Management cluster · FSN1 · 3 nodes · k3s v1.37.1</span><span class="m">1 dedicated + 2 cloud · private network 10.0.0.0/16</span></button>
               <button class="ccard" aria-pressed="false"><span class="row"><b>hel1-staging</b><span class="pill ok">Agent connected</span></span><span class="m">Workload cluster · HEL1 · 1 node · k3s v1.37.1</span><span class="m">Tunnel latency 24 ms · last seen 3 s ago</span></button>
@@ -826,14 +826,14 @@ S3_BUCKET=acme-invoices</textarea><span class="hint">Mark a variable as secret t
                     </div>
                   </div>
                   <div class="fields"><div class="field"><label for="n-role">Role</label><select class="input" id="n-role"><option>Worker</option><option>Control plane</option></select></div><div class="field"><label for="n-count">Count</label><input class="input" id="n-count" value="1"></div></div>
-                  <div class="field"><label>Network</label><span class="dim" style="font-size:12.5px">Joins <code>werft-net</code> (10.0.0.0/16) · Cloud Firewall <code>werft-nodes</code> attached</span></div>
+                  <div class="field"><label>Network</label><span class="dim" style="font-size:12.5px">Joins <code>kwerft-net</code> (10.0.0.0/16) · Cloud Firewall <code>kwerft-nodes</code> attached</span></div>
                   <button class="btn pri" style="justify-content:center">Create CPX31 in FSN1</button>
                 </div>
                 <div class="bd" data-anpanel="byo" hidden>
                   <p style="margin:0;font-size:13px;color:var(--ink-2)">Run this on a fresh Ubuntu server — a dedicated machine from Robot or any VPS. It installs k3s in agent mode and joins over WireGuard.</p>
 <div class="codebox">curl -fsSL https://ops.acme.dev/join.sh \
   | sudo bash -s -- \
-  --token wrft_join_••••••3kP \
+  --token kwft_join_••••••3kP \
   --role worker</div>
                   <div class="toolbar"><button class="btn sm">Copy command</button><span class="dim" style="font-size:12px">Token valid 60 min · one node</span></div>
                   <div class="banner info"><svg><use href="#i-server"/></svg><span>Waiting for a node to connect…</span></div>
@@ -857,7 +857,7 @@ S3_BUCKET=acme-invoices</textarea><span class="hint">Mark a variable as secret t
                   <tr><td class="nm">web-to-api</td><td><span class="tag">storefront/web-frontend</span></td><td><span class="tag">storefront/api</span></td><td class="mono">TCP 8080</td><td class="num">41.2k</td><td class="num">0</td></tr>
                   <tr><td class="nm">api-to-db</td><td><span class="tag">storefront/api</span></td><td><span class="tag">storefront/postgres-main</span> <span class="tag">storefront/redis</span></td><td class="mono">TCP 5432, 6379</td><td class="num">18.9k</td><td class="num">0</td></tr>
                   <tr><td class="nm">internal-egress</td><td><span class="tag">internal/*</span></td><td><span class="tag">internet</span></td><td class="mono">TCP 443</td><td class="num">2.3k</td><td class="num" style="color:var(--warn)">14</td></tr>
-                  <tr><td class="nm">monitoring-scrape</td><td><span class="tag">werft-system/vmagent</span></td><td><span class="tag">all projects</span></td><td class="mono">metrics ports</td><td class="num">8.6k</td><td class="num">0</td></tr>
+                  <tr><td class="nm">monitoring-scrape</td><td><span class="tag">kwerft-system/vmagent</span></td><td><span class="tag">all projects</span></td><td class="mono">metrics ports</td><td class="num">8.6k</td><td class="num">0</td></tr>
                 </tbody></table>
               </div>
             </div>
@@ -873,13 +873,13 @@ S3_BUCKET=acme-invoices</textarea><span class="hint">Mark a variable as secret t
                   <tr><td class="mono">—</td><td>ICMP</td><td class="mono">any</td><td>Ping and path MTU</td><td>All nodes</td><td></td></tr>
                 </tbody></table>
               </div>
-              <p class="dim" style="margin:0;font-size:13px">Werft refuses to save a firewall change that would block SSH or HTTPS from the IP you are using right now, and rolls back automatically if the console becomes unreachable within 60 seconds.</p>
+              <p class="dim" style="margin:0;font-size:13px">Kwerft refuses to save a firewall change that would block SSH or HTTPS from the IP you are using right now, and rolls back automatically if the console becomes unreachable within 60 seconds.</p>
             </div>
 
             <div data-tabpanel="net:dom" hidden style="display:grid;gap:16px">
               <div class="card" style="overflow:hidden">
                 <table class="t"><thead><tr><th>Hostname</th><th>Routes to</th><th>Certificate</th><th>Expires</th><th>Options</th></tr></thead><tbody>
-                  <tr><td class="nm">ops.acme.dev</td><td>Werft console</td><td><span class="pill ok">Valid</span></td><td class="num" style="text-align:left">18 Dec 2026</td><td class="dim">HSTS</td></tr>
+                  <tr><td class="nm">ops.acme.dev</td><td>Kwerft console</td><td><span class="pill ok">Valid</span></td><td class="num" style="text-align:left">18 Dec 2026</td><td class="dim">HSTS</td></tr>
                   <tr><td class="nm">*.apps.acme.dev</td><td class="dim">wildcard</td><td><span class="pill ok">Valid</span> <span class="tag">DNS-01</span></td><td class="num" style="text-align:left">29 Nov 2026</td><td class="dim">—</td></tr>
                   <tr><td class="nm">web.acme.dev</td><td>storefront/web-frontend</td><td><span class="pill ok">Valid</span></td><td class="num" style="text-align:left">2 Jan 2027</td><td class="dim">www → apex redirect</td></tr>
                   <tr><td class="nm">api.acme.dev</td><td>storefront/api</td><td><span class="pill ok">Valid</span></td><td class="num" style="text-align:left">2 Jan 2027</td><td class="dim">rate limit 50 r/s</td></tr>
@@ -970,21 +970,21 @@ S3_BUCKET=acme-invoices</textarea><span class="hint">Mark a variable as secret t
             <div><b>Kubernetes is the database</b><span>Every app, rule and domain is a custom resource. The UI writes those resources; controllers turn them into native objects. GitOps works for free.</span></div>
             <div><b>Fits an 8 GB box</b><span>The platform uses about 2.5 GB of RAM (measured), leaving most of an 8 GB server for real workloads. 4 GB works with <code>--lite</code>.</span></div>
             <div><b>Secure by default</b><span>Projects are isolated, the Kubernetes API is private, secrets are encrypted, every shell session and change is audited.</span></div>
-            <div class="full" style="grid-column:1/-1"><b>Never a dead end</b><span>Power users get YAML export, a scoped kubeconfig and <code>kubectl</code>. Werft-managed objects are labelled, so hand-made resources live alongside without conflict.</span></div>
+            <div class="full" style="grid-column:1/-1"><b>Never a dead end</b><span>Power users get YAML export, a scoped kubeconfig and <code>kubectl</code>. Kwerft-managed objects are labelled, so hand-made resources live alongside without conflict.</span></div>
           </div>
           <h3>Build vs. adopt</h3>
-          <p>Check these before committing: <b>Rancher</b> manages many clusters but is heavy and not Hetzner-aware; <b>Portainer</b> has a friendly UI with thinner network administration; <b>Coolify</b> and <b>Dokploy</b> are Docker/Swarm-based PaaS rather than Kubernetes; <b>hetzner-k3s</b> provisions clusters from a CLI with no console. Werft's niche is the combination: Hetzner-native provisioning and firewalls, Kubernetes underneath, a one-script install and an opinionated UI on top.</p>
+          <p>Check these before committing: <b>Rancher</b> manages many clusters but is heavy and not Hetzner-aware; <b>Portainer</b> has a friendly UI with thinner network administration; <b>Coolify</b> and <b>Dokploy</b> are Docker/Swarm-based PaaS rather than Kubernetes; <b>hetzner-k3s</b> provisions clusters from a CLI with no console. Kwerft's niche is the combination: Hetzner-native provisioning and firewalls, Kubernetes underneath, a one-script install and an opinionated UI on top.</p>
         </section>
 
         <section id="arch">
           <p class="eyebrow">Architecture</p>
           <h2>What runs on the server after the script finishes</h2>
-          <p>Single-node by default. Everything below Werft is stock, upstream software installed at pinned versions; Werft itself is one Go binary deployed as two replicas.</p>
+          <p>Single-node by default. Everything below Kwerft is stock, upstream software installed at pinned versions; Kwerft itself is one Go binary deployed as two replicas.</p>
           <div class="arch">
             <div class="stack">
-              <div class="lay user"><span class="ln">Clients</span><span class="tag">browser</span><span class="tag">werftctl CLI</span><span class="tag">CI with API token</span><span class="tag">kubectl (scoped kubeconfig)</span></div>
+              <div class="lay user"><span class="ln">Clients</span><span class="tag">browser</span><span class="tag">kwerftctl CLI</span><span class="tag">CI with API token</span><span class="tag">kubectl (scoped kubeconfig)</span></div>
               <div class="lay"><span class="ln">Edge · 80/443</span><span class="tag">Traefik via Gateway API</span><span class="tag">cert-manager + Let's Encrypt</span></div>
-              <div class="lay werft"><span class="ln">Werft control plane · namespace werft-system</span><span class="tag">REST + WebSocket API</span><span class="tag">reconcilers for App, Project, Rule…</span><span class="tag">embedded React UI</span><span class="tag">SQLite: users, sessions, audit</span><span class="tag">Hetzner API client</span></div>
+              <div class="lay kwerft"><span class="ln">Kwerft control plane · namespace kwerft-system</span><span class="tag">REST + WebSocket API</span><span class="tag">reconcilers for App, Project, Rule…</span><span class="tag">embedded React UI</span><span class="tag">SQLite: users, sessions, audit</span><span class="tag">Hetzner API client</span></div>
               <div class="lay"><span class="ln">Platform services</span><span class="tag">VictoriaMetrics + vmagent</span><span class="tag">VictoriaLogs + Vector</span><span class="tag">vmalert → Alertmanager</span><span class="tag">Hubble relay</span><span class="tag">Velero</span><span class="tag">BuildKit builders</span><span class="tag">zot registry</span><span class="tag">system-upgrade-controller</span></div>
               <div class="lay"><span class="ln">Kubernetes</span><span class="tag">k3s server · embedded etcd</span><span class="tag">Cilium eBPF dataplane</span><span class="tag">local-path / hcloud CSI</span></div>
               <div class="lay host"><span class="ln">Host</span><span class="tag">Ubuntu 24.04 / 26.04 LTS</span><span class="tag">nftables baseline</span><span class="tag">chrony</span><span class="tag">unattended-upgrades</span></div>
@@ -1002,10 +1002,10 @@ S3_BUCKET=acme-invoices</textarea><span class="hint">Mark a variable as secret t
           <pre class="mermaid">flowchart LR
   B[Browser] -->|HTTPS| W
   subgraph M["fsn1-prod · management cluster"]
-    W[Werft API + controllers]
+    W[Kwerft API + controllers]
   end
   subgraph S["hel1-staging · workload cluster"]
-    A[werft-agent]
+    A[kwerft-agent]
   end
   A -->|outbound WebSocket, mTLS| W
   W -->|hcloud API| H[(Hetzner Cloud)]
@@ -1038,7 +1038,7 @@ S3_BUCKET=acme-invoices</textarea><span class="hint">Mark a variable as secret t
             <tr><td>Traefik, cert-manager</td><td class="num">125 MB</td></tr>
             <tr><td>VictoriaMetrics stack, VictoriaLogs, Vector, node-exporter</td><td class="num">625 MB</td></tr>
             <tr><td>CoreDNS, metrics-server, local-path</td><td class="num">45 MB</td></tr>
-            <tr><td>Werft</td><td class="num">13 MB</td></tr>
+            <tr><td>Kwerft</td><td class="num">13 MB</td></tr>
             <tr><td>zot registry (estimate, Phase 2)</td><td class="num">60 MB</td></tr>
             <tr><td><b>Total platform overhead</b></td><td class="num"><b>≈ 2.4 GB</b></td></tr>
             <tr><td>Each running build (on demand)</td><td class="num">1–2 GB</td></tr>
@@ -1048,18 +1048,18 @@ S3_BUCKET=acme-invoices</textarea><span class="hint">Mark a variable as secret t
         <section id="installer">
           <p class="eyebrow">The install script</p>
           <h2>One idempotent bash script, safe to re-run, safe to automate</h2>
-          <p>The script is the product's front door, so it gets the same care as the UI: <code>set -Eeuo pipefail</code>, shellcheck-clean, every step logged to <code>/var/log/werft/install.log</code>, and every download pinned by version and SHA-256.</p>
+          <p>The script is the product's front door, so it gets the same care as the UI: <code>set -Eeuo pipefail</code>, shellcheck-clean, every step logged to <code>/var/log/kwerft/install.log</code>, and every download pinned by version and SHA-256.</p>
 <div class="codebox"><span class="c"># interactive-free install</span>
-curl -fsSL https://get.werft.sh | sudo bash -s -- \
+curl -fsSL https://get.kwerft.dev | sudo bash -s -- \
   --domain ops.acme.dev --email ops@acme.dev --yes
 
 <span class="c"># fully headless: no setup wizard, owner account pre-created</span>
-curl -fsSL https://get.werft.sh | sudo bash -s -- --config /root/werft.yaml --yes
+curl -fsSL https://get.kwerft.dev | sudo bash -s -- --config /root/kwerft.yaml --yes
 
 <span class="c"># cloud-init (Hetzner "user data" when creating the server)</span>
 <span class="k">#cloud-config</span>
 <span class="k">write_files:</span>
-  - <span class="k">path:</span> /root/werft.yaml
+  - <span class="k">path:</span> /root/kwerft.yaml
     <span class="k">permissions:</span> <span class="s">'0600'</span>
     <span class="k">content:</span> |
       domain: ops.acme.dev
@@ -1067,31 +1067,31 @@ curl -fsSL https://get.werft.sh | sudo bash -s -- --config /root/werft.yaml --ye
       dns: { solver: hetzner, tokenFile: /root/dns.token }
       owner: { email: mara@acme.dev, passwordFile: /root/owner.pw }
 <span class="k">runcmd:</span>
-  - curl -fsSL https://get.werft.sh | bash -s -- --config /root/werft.yaml --yes</div>
+  - curl -fsSL https://get.kwerft.dev | bash -s -- --config /root/kwerft.yaml --yes</div>
           <h3>Flags</h3>
           <div class="tw"><table class="t"><thead><tr><th>Flag / env</th><th>Purpose</th></tr></thead><tbody>
-            <tr><td><code>--domain</code> · <code>WERFT_DOMAIN</code></td><td>Console hostname. Omit it to try Werft before DNS exists: the installer uses a temporary <code>&lt;ip&gt;.sslip.io</code> name and says so. Re-run with <code>--domain</code> to switch; the chosen name is remembered between runs.</td></tr>
+            <tr><td><code>--domain</code> · <code>KWERFT_DOMAIN</code></td><td>Console hostname. Omit it to try Kwerft before DNS exists: the installer uses a temporary <code>&lt;ip&gt;.sslip.io</code> name and says so. Re-run with <code>--domain</code> to switch; the chosen name is remembered between runs.</td></tr>
             <tr><td><code>--email</code></td><td>Let's Encrypt account contact. Optional.</td></tr>
             <tr><td><code>--config FILE</code></td><td>Pre-seed everything the wizard asks (owner, DNS, Hetzner tokens, backups). Skips the wizard.</td></tr>
             <tr><td><code>--platform</code></td><td><code>auto</code> (default) detects Hetzner Cloud through its metadata service, otherwise assumes a dedicated server. Sets storage, networking and firewall defaults.</td></tr>
             <tr><td><code>--private-iface</code></td><td>Interface for node-to-node and Kubernetes API traffic (Cloud Network or vSwitch).</td></tr>
-            <tr><td><code>--version</code> · <code>--channel</code></td><td>Pin a Werft release or follow <code>stable</code>/<code>edge</code>. Component versions come from the release manifest.</td></tr>
+            <tr><td><code>--version</code> · <code>--channel</code></td><td>Pin a Kwerft release or follow <code>stable</code>/<code>edge</code>. Component versions come from the release manifest.</td></tr>
             <tr><td><code>--join URL --token T</code></td><td>Join this server to an existing cluster as worker or control plane (the same script; <code>join.sh</code> is a thin wrapper).</td></tr>
             <tr><td><code>--dry-run</code> · <code>--yes</code></td><td>Print the plan without changing anything · never prompt.</td></tr>
-            <tr><td><code>--uninstall</code></td><td>Remove Werft and k3s, keep or delete data on request.</td></tr>
+            <tr><td><code>--uninstall</code></td><td>Remove Kwerft and k3s, keep or delete data on request.</td></tr>
           </tbody></table></div>
           <h3>Stages</h3>
-          <p>Each stage checks whether its work is already done and records completion in <code>/var/lib/werft/state</code>. A failed run resumes at the failed stage.</p>
+          <p>Each stage checks whether its work is already done and records completion in <code>/var/lib/kwerft/state</code>. A failed run resumes at the failed stage.</p>
           <ol>
             <li><b>Preflight</b> — detects Hetzner Cloud vs. dedicated, root, Ubuntu 22.04/24.04/26.04, x86_64 or arm64, ≥ 4 GB RAM, ≥ 30 GB disk, ports 80/443 free, outbound HTTPS, clock sync. Fails with a specific message and exit code.</li>
             <li><b>System prep</b> — apt packages, kernel modules and sysctls for Cilium, swap off, chrony, unattended-upgrades, optional SSH hardening (<code>--harden-ssh</code>).</li>
             <li><b>Firewall baseline</b> — nftables allowing 22/80/443 publicly and cluster ports only on the private interface. Cilium host policies take over once running.</li>
             <li><b>Kubernetes</b> — k3s server with flannel, kube-proxy and the bundled policy controller disabled, secrets encryption on, API bound to the private IP.</li>
             <li><b>Platform</b> — Helm installs Cilium, cert-manager, Traefik config, the observability stack and CRDs from one release manifest.</li>
-            <li><b>Werft</b> — Helm installs the console, waits for readiness, requests the console certificate.</li>
+            <li><b>Kwerft</b> — Helm installs the console, waits for readiness, requests the console certificate.</li>
             <li><b>Handoff</b> — verifies DNS and TLS end to end, writes a single-use setup token (24 h) to a 0600 file, prints the URL and a summary.</li>
           </ol>
-          <p>Exit codes are stable for automation: <code>0</code> success, <code>10</code> preflight, <code>20</code> network/DNS, <code>30</code> Kubernetes, <code>40</code> platform, <code>50</code> Werft.</p>
+          <p>Exit codes are stable for automation: <code>0</code> success, <code>10</code> preflight, <code>20</code> network/DNS, <code>30</code> Kubernetes, <code>40</code> platform, <code>50</code> Kwerft.</p>
         </section>
 
         <section id="model">
@@ -1101,7 +1101,7 @@ curl -fsSL https://get.werft.sh | sudo bash -s -- --config /root/werft.yaml --ye
             <tr><td>Project</td><td>Namespace, ResourceQuota, LimitRange, RoleBindings, default-deny policy</td><td>Pod Security “baseline” by default, “restricted” opt-in.</td></tr>
             <tr><td>App</td><td>Deployment or StatefulSet, Service, HTTPRoute, PVCs, HPA, CiliumNetworkPolicy</td><td>Source is an image or a Git repository. Stores revisions for one-click rollback. Compose import creates one App per service.</td></tr>
             <tr><td>Build</td><td>Job running rootless BuildKit, image in the zot registry</td><td>Created by push webhooks or “Build now”; success creates a new App revision. Reports status back to the commit.</td></tr>
-            <tr><td>Domain</td><td>Certificate, DNS record (when DNS-01), Gateway listener</td><td>Redirects, HSTS, rate limits, optional SSO gate (forward-auth to Werft).</td></tr>
+            <tr><td>Domain</td><td>Certificate, DNS record (when DNS-01), Gateway listener</td><td>Redirects, HSTS, rate limits, optional SSO gate (forward-auth to Kwerft).</td></tr>
             <tr><td>TrafficRule</td><td>CiliumNetworkPolicy</td><td>Expressed in app/project terms; the UI shows Hubble hit and drop counts per rule.</td></tr>
             <tr><td>FirewallRule</td><td>CiliumClusterwideNetworkPolicy (host), Hetzner Cloud Firewall</td><td>Lock-out protection: rejects rules that block the caller; auto-revert timer.</td></tr>
             <tr><td>NodePool · Cluster</td><td>Hetzner servers via API + cloud-init join; agent install for remote clusters</td><td>Robot (dedicated) servers join via script; pools are cloud-only.</td></tr>
@@ -1114,13 +1114,13 @@ curl -fsSL https://get.werft.sh | sudo bash -s -- --config /root/werft.yaml --ye
           <h2>Assume the server is on the open internet, because it is</h2>
           <ul>
             <li><b>Bootstrap:</b> the console is unusable until someone presents the setup token from the server's disk. No default passwords anywhere.</li>
-            <li><b>Authorization:</b> Werft roles map to Kubernetes ClusterRoles bound per project namespace. The API impersonates the signed-in user, so a bug in Werft's own checks cannot exceed that user's Kubernetes rights.</li>
-            <li><b>Kubernetes API:</b> bound to the private network only; external <code>kubectl</code> goes through Werft's authenticating proxy with short-lived, scoped kubeconfigs.</li>
+            <li><b>Authorization:</b> Kwerft roles map to Kubernetes ClusterRoles bound per project namespace. The API impersonates the signed-in user, so a bug in Kwerft's own checks cannot exceed that user's Kubernetes rights.</li>
+            <li><b>Kubernetes API:</b> bound to the private network only; external <code>kubectl</code> goes through Kwerft's authenticating proxy with short-lived, scoped kubeconfigs.</li>
             <li><b>Secrets:</b> k3s secrets encryption at rest; developers can write but not read secrets unless granted; values never appear in audit entries or logs.</li>
             <li><b>Shell access:</b> exec sessions are role-gated, time-limited and recorded (asciinema format) for review.</li>
             <li><b>Network:</b> default-deny between projects, WireGuard between nodes, host firewall managed as code, Hetzner Cloud Firewall mirrored for cloud nodes.</li>
             <li><b>API tokens:</b> scoped to projects and verbs, always expiring, shown once, stored hashed.</li>
-            <li><b>Supply chain:</b> signed Werft images (cosign), pinned component digests, SBOMs published per release; the installer verifies checksums before executing anything it downloads.</li>
+            <li><b>Supply chain:</b> signed Kwerft images (cosign), pinned component digests, SBOMs published per release; the installer verifies checksums before executing anything it downloads.</li>
             <li><b>Session hygiene:</b> HTTPS only with HSTS, SameSite cookies, CSRF tokens, rate-limited sign-in, passkeys preferred.</li>
           </ul>
         </section>
@@ -1131,7 +1131,7 @@ curl -fsSL https://get.werft.sh | sudo bash -s -- --config /root/werft.yaml --ye
           <ol>
             <li><b>Add workers to the first cluster.</b> Cloud servers are created through the Cloud API with cloud-init that runs the join script; dedicated (Robot) servers run the join command shown in the UI. Nodes talk over a Cloud Network or vSwitch where available and WireGuard otherwise.</li>
             <li><b>Make it highly available.</b> Promote to three control-plane nodes (embedded etcd). Put a Hetzner Load Balancer in front of the ingress, or a Floating IP for dedicated-only setups, and move platform state to replicated storage.</li>
-            <li><b>Add more clusters.</b> Werft provisions a new k3s cluster on Hetzner Cloud (or adopts any existing one) and installs <code>werft-agent</code>. Apps, rules and alerts are scoped by cluster in the UI.</li>
+            <li><b>Add more clusters.</b> Kwerft provisions a new k3s cluster on Hetzner Cloud (or adopts any existing one) and installs <code>kwerft-agent</code>. Apps, rules and alerts are scoped by cluster in the UI.</li>
           </ol>
           <p>Mixed dedicated + cloud clusters are supported but need care: Hetzner's vSwitch-to-Cloud-Network coupling is per location, so cross-location nodes fall back to WireGuard over public IPs.</p>
         </section>
@@ -1167,10 +1167,10 @@ curl -fsSL https://get.werft.sh | sudo bash -s -- --config /root/werft.yaml --ye
               <ul><li>TrafficRule editor with Hubble hit/drop counts and “create allow rule” from drops.</li><li>Server firewall with lock-out protection; Hetzner Cloud Firewall sync for cloud nodes, host rules for dedicated ones.</li><li>Members, roles, OIDC SSO, API tokens, audit log, scoped kubeconfig download.</li></ul>
               <div class="exit"><b>Exit:</b> a Developer in one project cannot read another project's pods, secrets or traffic — verified by an automated RBAC test suite.</div></div>
             <div class="phase"><div class="h"><b>Phase 5 · Nodes &amp; clusters</b><span>weeks 20–24</span></div>
-              <ul><li>Add/drain/remove nodes via Cloud API and join script; hcloud CSI and LB integration; vSwitch ↔ Cloud Network coupling for mixed clusters.</li><li>Optional build node pool: a Cloud server created for builds and deleted after.</li><li>3-node HA control plane; werft-agent tunnel; create and adopt clusters.</li></ul>
+              <ul><li>Add/drain/remove nodes via Cloud API and join script; hcloud CSI and LB integration; vSwitch ↔ Cloud Network coupling for mixed clusters.</li><li>Optional build node pool: a Cloud server created for builds and deleted after.</li><li>3-node HA control plane; kwerft-agent tunnel; create and adopt clusters.</li></ul>
               <div class="exit"><b>Exit:</b> a mixed dedicated + cloud cluster loses a node while apps stay reachable; a second cluster is managed from the same console.</div></div>
             <div class="phase"><div class="h"><b>Phase 6 · Backups, upgrades, beta</b><span>weeks 25–28</span></div>
-              <ul><li>BackupPlans to Object Storage with tested restore; etcd snapshot schedule.</li><li>One-click Werft and k3s upgrades with automatic rollback; Docker Compose import; templates.</li><li>Docs site, security review, load test of the console with 200 apps; license decided.</li></ul>
+              <ul><li>BackupPlans to Object Storage with tested restore; etcd snapshot schedule.</li><li>One-click Kwerft and k3s upgrades with automatic rollback; Docker Compose import; templates.</li><li>Docs site, security review, load test of the console with 200 apps; license decided.</li></ul>
               <div class="exit"><b>Exit:</b> restore a full cluster from Object Storage onto a brand-new server with one script flag. <b>Milestone: public beta.</b></div></div>
           </div>
           <p>Later: preview environments per pull request, cost view from the Hetzner API, a Terraform provider for <code>App</code> and <code>Project</code>, and multi-team tenancy.</p>
@@ -1179,13 +1179,13 @@ curl -fsSL https://get.werft.sh | sudo bash -s -- --config /root/werft.yaml --ye
         <section id="repo">
           <p class="eyebrow">Repository &amp; testing</p>
           <h2>One repository, three test layers, a real-Hetzner end-to-end suite</h2>
-<div class="codebox">werft/
+<div class="codebox">kwerft/
 ├─ install/              install.sh, join.sh, lib/*.sh, release manifest, bats tests
-├─ charts/werft/         Helm chart: deployment, RBAC, CRDs, platform values
+├─ charts/kwerft/         Helm chart: deployment, RBAC, CRDs, platform values
 ├─ api/v1alpha1/         CRD Go types (kubebuilder markers)
-├─ cmd/werft/            single binary: API server + controllers + embedded UI
-├─ cmd/werft-agent/      tunnel agent for remote clusters
-├─ cmd/werftctl/         CLI: login, deploy, logs, exec, kubeconfig
+├─ cmd/kwerft/            single binary: API server + controllers + embedded UI
+├─ cmd/kwerft-agent/      tunnel agent for remote clusters
+├─ cmd/kwerftctl/         CLI: login, deploy, logs, exec, kubeconfig
 ├─ internal/
 │  ├─ build/             Git providers, webhooks, BuildKit jobs, registry GC
 │  ├─ api/               REST + WebSocket handlers, OpenAPI spec
@@ -1200,7 +1200,7 @@ curl -fsSL https://get.werft.sh | sudo bash -s -- --config /root/werft.yaml --ye
             <li><b>Unit &amp; controller tests</b> with envtest — reconcilers render the right objects and handle conflicts.</li>
             <li><b>Installer tests</b> — shellcheck, bats for each stage, and a matrix of Ubuntu 22.04/24.04/26.04 on x86 and arm64 cloud servers.</li>
             <li><b>End-to-end</b> — Playwright drives the UI against a real server created per run: install, deploy, add a node, break a rule, restore a backup. Servers are destroyed in a <code>finally</code> step and by a nightly sweeper.</li>
-            <li><b>Releases</b> — signed images and Helm chart in an OCI registry; <code>get.werft.sh</code> serves a versioned script with checksums.</li>
+            <li><b>Releases</b> — signed images and Helm chart in an OCI registry; <code>get.kwerft.dev</code> serves a versioned script with checksums.</li>
           </ul>
         </section>
 
@@ -1237,11 +1237,11 @@ curl -fsSL https://get.werft.sh | sudo bash -s -- --config /root/werft.yaml --ye
   function showPage(p){
     $$('[data-page]').forEach(b => b.setAttribute('aria-selected', b.dataset.page === p));
     $$('[data-pagepanel]').forEach(s => s.hidden = s.dataset.pagepanel !== p);
-    try{ localStorage.setItem('werft-page', p) }catch(e){}
+    try{ localStorage.setItem('kwerft-page', p) }catch(e){}
   }
   $$('[data-page]').forEach(b => b.addEventListener('click', () => showPage(b.dataset.page)));
   let initial = 'mockups';
-  try{ initial = localStorage.getItem('werft-page') || initial }catch(e){}
+  try{ initial = localStorage.getItem('kwerft-page') || initial }catch(e){}
   if (location.hash === '#plan' || location.hash === '#mockups') initial = location.hash.slice(1);
   else if (location.hash && $('#page-plan ' + location.hash)) initial = 'plan';
   showPage(initial);
@@ -1254,7 +1254,7 @@ curl -fsSL https://get.werft.sh | sudo bash -s -- --config /root/werft.yaml --ye
     overview:['Overview','Summary before detail: capacity, Hetzner-specific traffic quota, and a “needs attention” feed that links a crash-loop to the network rule causing it.','/overview'],
     apps:['Apps','All workloads across projects with status pills that read at a glance. Click any row to open the app.','/apps'],
     app:['App detail','Everything about one app: live replicas, domains, revisions with rollback, streaming logs, Git builds with their logs, and an editable settings form that creates a new revision.','/apps/storefront/api'],
-    deploy:['Deploy wizard','Start from a registry image or a Git repository that Werft builds in-cluster. Five short steps produce one App resource. Networking defaults to deny-all with explicit sources, and the review step shows exactly which Kubernetes objects will be created.','/deploy'],
+    deploy:['Deploy wizard','Start from a registry image or a Git repository that Kwerft builds in-cluster. Five short steps produce one App resource. Networking defaults to deny-all with explicit sources, and the review step shows exactly which Kubernetes objects will be created.','/deploy'],
     monitoring:['Monitoring','Firing alerts with one-click fixes, top consumers, and alert rules mapped to notification channels.','/monitoring'],
     clusters:['Clusters & nodes','Clusters as cards, nodes as a table. Add capacity from the Hetzner Cloud API or by running a join command on any existing server.','/clusters/fsn1-prod'],
     network:['Network','Traffic rules phrased as app-to-app, with observed hit and drop counts from Hubble. The server firewall and domains/TLS live in the same place.','/network'],
