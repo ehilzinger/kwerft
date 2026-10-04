@@ -35,6 +35,8 @@ No domain yet? Leave out `--domain` and the console gets a temporary
 `<public-ip>.sslip.io` hostname; once DNS points at the server, change it under
 Settings in the console (or re-run with `--domain`). A re-run without
 `--domain` keeps whatever Settings chose. `--email` is optional.
+`--acme-server staging` takes certificates from Let's Encrypt's staging CA
+(not trusted by browsers, generous rate limits — for test servers).
 
 `./install/install.sh --help` lists every flag; `--dry-run` prints the plan
 without changing anything. Re-running the script resumes or repairs an

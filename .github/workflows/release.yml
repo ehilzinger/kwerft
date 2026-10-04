@@ -184,3 +184,20 @@ jobs:
           hack/release.sh install-repo install-repo "$VERSION" dist/release
           git -C install-repo push origin HEAD:main
           echo "Install script: https://raw.githubusercontent.com/$INSTALL_REPO/main/v$VERSION/install.sh" >>"$GITHUB_STEP_SUMMARY"
+
+  # The published release on fresh Hetzner Cloud servers: a fresh install and
+  # an upgrade from the stable release before it (e2e.yml, RELEASING.md).
+  # Runs after everything is published; a failure does not unpublish the
+  # release, and the run summary says so. Skipped with a notice without the
+  # HCLOUD_TOKEN secret.
+  e2e:
+    needs: [release, install-repo]
+    if: ${{ !cancelled() && github.event_name == 'push' && needs.release.result == 'success' }}
+    permissions:
+      contents: read   # lists releases to find the one to upgrade from
+    uses: ./.github/workflows/e2e.yml
+    with:
+      version: ${{ needs.release.outputs.version }}
+      release: true
+    secrets:
+      HCLOUD_TOKEN: ${{ secrets.HCLOUD_TOKEN }}
