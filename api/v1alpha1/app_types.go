@@ -83,19 +83,37 @@ type AppPort struct {
 	Protocol corev1.Protocol `json:"protocol,omitempty"`
 }
 
-// AppVolume mounts a persistent volume into every replica.
+// AppVolume mounts persistent storage at Path, in one of two forms:
+//   - Size (and Class): every replica gets its own disk; the App runs as a
+//     StatefulSet so each replica keeps it.
+//   - Volume: the shared Volume of that name in the same project, which
+//     other Apps and Tasks can mount too.
+//
+// +kubebuilder:validation:XValidation:rule="has(self.size) != has(self.volume)",message="set exactly one of size (a disk per replica) or volume (a shared Volume)"
+// +kubebuilder:validation:XValidation:rule="!has(self.class) || has(self.size)",message="class applies to size; a shared Volume has its own class"
 type AppVolume struct {
 	// +kubebuilder:validation:MinLength=1
 	Path string `json:"path"`
 
-	Size resource.Quantity `json:"size"`
+	// Size of each replica's own disk.
+	// +optional
+	Size resource.Quantity `json:"size,omitzero"`
 
 	// Class is local-nvme (fastest, pinned to one node) or hcloud-volume
-	// (movable between Hetzner Cloud nodes).
+	// (movable between Hetzner Cloud nodes); empty means local-nvme.
 	// +kubebuilder:validation:Enum=local-nvme;hcloud-volume
-	// +kubebuilder:default=local-nvme
 	// +optional
 	Class string `json:"class,omitempty"`
+
+	// Volume names a shared Volume in the same project.
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=63
+	// +optional
+	Volume string `json:"volume,omitempty"`
+
+	// ReadOnly mounts the storage read-only.
+	// +optional
+	ReadOnly bool `json:"readOnly,omitempty"`
 }
 
 // HealthCheck is used for readiness and liveness.

@@ -16,18 +16,44 @@ import (
 func ForKind(kind schema.GroupVersionKind) interface{} {
 	switch kind {
 	// Group=kwerft.dev, Version=v1alpha1
+	case v1alpha1.SchemeGroupVersion.WithKind("AppSource"):
+		return &apiv1alpha1.AppSourceApplyConfiguration{}
+	case v1alpha1.SchemeGroupVersion.WithKind("AppVolume"):
+		return &apiv1alpha1.AppVolumeApplyConfiguration{}
 	case v1alpha1.SchemeGroupVersion.WithKind("Domain"):
 		return &apiv1alpha1.DomainApplyConfiguration{}
 	case v1alpha1.SchemeGroupVersion.WithKind("DomainSpec"):
 		return &apiv1alpha1.DomainSpecApplyConfiguration{}
 	case v1alpha1.SchemeGroupVersion.WithKind("DomainStatus"):
 		return &apiv1alpha1.DomainStatusApplyConfiguration{}
+	case v1alpha1.SchemeGroupVersion.WithKind("GitSource"):
+		return &apiv1alpha1.GitSourceApplyConfiguration{}
+	case v1alpha1.SchemeGroupVersion.WithKind("ImageSource"):
+		return &apiv1alpha1.ImageSourceApplyConfiguration{}
 	case v1alpha1.SchemeGroupVersion.WithKind("Project"):
 		return &apiv1alpha1.ProjectApplyConfiguration{}
 	case v1alpha1.SchemeGroupVersion.WithKind("ProjectSpec"):
 		return &apiv1alpha1.ProjectSpecApplyConfiguration{}
 	case v1alpha1.SchemeGroupVersion.WithKind("ProjectStatus"):
 		return &apiv1alpha1.ProjectStatusApplyConfiguration{}
+	case v1alpha1.SchemeGroupVersion.WithKind("Schedule"):
+		return &apiv1alpha1.ScheduleApplyConfiguration{}
+	case v1alpha1.SchemeGroupVersion.WithKind("ScheduleHistory"):
+		return &apiv1alpha1.ScheduleHistoryApplyConfiguration{}
+	case v1alpha1.SchemeGroupVersion.WithKind("ScheduleSpec"):
+		return &apiv1alpha1.ScheduleSpecApplyConfiguration{}
+	case v1alpha1.SchemeGroupVersion.WithKind("ScheduleStatus"):
+		return &apiv1alpha1.ScheduleStatusApplyConfiguration{}
+	case v1alpha1.SchemeGroupVersion.WithKind("TaskOnSuccess"):
+		return &apiv1alpha1.TaskOnSuccessApplyConfiguration{}
+	case v1alpha1.SchemeGroupVersion.WithKind("TaskSpec"):
+		return &apiv1alpha1.TaskSpecApplyConfiguration{}
+	case v1alpha1.SchemeGroupVersion.WithKind("Volume"):
+		return &apiv1alpha1.VolumeApplyConfiguration{}
+	case v1alpha1.SchemeGroupVersion.WithKind("VolumeSpec"):
+		return &apiv1alpha1.VolumeSpecApplyConfiguration{}
+	case v1alpha1.SchemeGroupVersion.WithKind("VolumeStatus"):
+		return &apiv1alpha1.VolumeStatusApplyConfiguration{}
 
 	}
 	return nil

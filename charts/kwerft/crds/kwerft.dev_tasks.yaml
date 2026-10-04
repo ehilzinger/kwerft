@@ -4,26 +4,26 @@ kind: CustomResourceDefinition
 metadata:
   annotations:
     controller-gen.kubebuilder.io/version: v0.20.1
-  name: apps.kwerft.dev
+  name: tasks.kwerft.dev
 spec:
   group: kwerft.dev
   names:
-    kind: App
-    listKind: AppList
-    plural: apps
-    singular: app
+    kind: Task
+    listKind: TaskList
+    plural: tasks
+    singular: task
   scope: Namespaced
   versions:
   - additionalPrinterColumns:
-    - jsonPath: .status.image
-      name: Image
+    - jsonPath: .status.phase
+      name: Phase
       type: string
-    - jsonPath: .status.readyReplicas
-      name: Ready
+    - jsonPath: .status.exitCode
+      name: Exit
       type: integer
-    - jsonPath: .status.revision
-      name: Revision
-      type: integer
+    - jsonPath: .status.startTime
+      name: Started
+      type: date
     - jsonPath: .metadata.creationTimestamp
       name: Age
       type: date
@@ -31,8 +31,10 @@ spec:
     schema:
       openAPIV3Schema:
         description: |-
-          App is a deployable workload: an image or a Git repository plus how to run
-          and expose it.
+          Task is a one-off run of a container to completion: a migration, an
+          import, a backup. Schedules create one Task per run, so scheduled and
+          manual runs look the same. The spec cannot be changed; run again by
+          creating a new Task.
         properties:
           apiVersion:
             description: |-
@@ -52,23 +54,30 @@ spec:
           metadata:
             type: object
           spec:
-            description: AppSpec is everything the deploy wizard collects.
+            description: |-
+              TaskSpec is one run of a container to completion. It has the shape of an
+              App (source, command, env, volumes, resources, egress) minus ports,
+              replicas and health checks.
+
+              With FromApp the Task starts from that App: its image (also the built image
+              of a Git App), command, env, size/resources, egress and shared Volumes.
+              Fields set on the Task win: source, command, size/resources and egress
+              replace the App's; env and volumes are merged by name and path. The App is
+              read once, when the Task starts; later changes to it do not affect the run.
+
+              Env applies in this order, later wins: the App's env, Env, EnvOverrides.
+              EnvOverrides holds the per-run changes of "run now" (FORCE=1, DRY_RUN=1),
+              kept apart from Env so a run shows what was different about it.
             properties:
-              allowFrom:
-                description: |-
-                  AllowFrom lists apps ("api" or "project/api") that may connect to this
-                  app. Everything else is denied. Gateway traffic to public ports is
-                  always allowed.
-                items:
-                  type: string
-                type: array
               command:
                 items:
                   type: string
+                maxItems: 64
                 type: array
               egress:
-                default: https
-                description: Egress controls outbound traffic to the internet.
+                description: |-
+                  Egress controls outbound traffic to the internet. Empty means the
+                  App's egress with FromApp, else https.
                 enum:
                 - none
                 - https
@@ -231,50 +240,187 @@ spec:
                   required:
                   - name
                   type: object
+                maxItems: 256
                 type: array
-              healthCheck:
-                description: HealthCheck is used for readiness and liveness.
-                properties:
-                  http:
-                    description: HTTP path; empty means a TCP check on Port.
-                    type: string
-                  port:
-                    format: int32
-                    type: integer
-                required:
-                - port
-                type: object
-              ports:
+              envOverrides:
+                description: EnvOverrides is applied last; set by "run now".
                 items:
-                  description: |-
-                    AppPort exposes a container port inside the cluster and optionally on a
-                    public hostname through the Gateway.
+                  description: EnvVar represents an environment variable present in
+                    a Container.
                   properties:
-                    container:
-                      format: int32
-                      maximum: 65535
-                      minimum: 1
-                      type: integer
-                    protocol:
-                      default: TCP
-                      description: Protocol defines network protocols supported for
-                        things like container ports.
-                      enum:
-                      - TCP
-                      - UDP
+                    name:
+                      description: |-
+                        Name of the environment variable.
+                        May consist of any printable ASCII characters except '='.
                       type: string
-                    public:
-                      description: Public is a hostname served over HTTPS, e.g. api.example.com.
+                    value:
+                      description: |-
+                        Variable references $(VAR_NAME) are expanded
+                        using the previously defined environment variables in the container and
+                        any service environment variables. If a variable cannot be resolved,
+                        the reference in the input string will be unchanged. Double $$ are reduced
+                        to a single $, which allows for escaping the $(VAR_NAME) syntax: i.e.
+                        "$$(VAR_NAME)" will produce the string literal "$(VAR_NAME)".
+                        Escaped references will never be expanded, regardless of whether the variable
+                        exists or not.
+                        Defaults to "".
                       type: string
+                    valueFrom:
+                      description: Source for the environment variable's value. Cannot
+                        be used if value is not empty.
+                      properties:
+                        configMapKeyRef:
+                          description: Selects a key of a ConfigMap.
+                          properties:
+                            key:
+                              description: |-
+                                The key to select from the ConfigMap's Data field.
+                                Keys in the BinaryData field are not currently propagated to container env vars.
+                              type: string
+                            name:
+                              default: ""
+                              description: |-
+                                Name of the referent.
+                                This field is effectively required, but due to backwards compatibility is
+                                allowed to be empty. Instances of this type with an empty value here are
+                                almost certainly wrong.
+                                More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                              type: string
+                            optional:
+                              description: Specify whether the ConfigMap or its key
+                                must be defined
+                              type: boolean
+                          required:
+                          - key
+                          type: object
+                          x-kubernetes-map-type: atomic
+                        fieldRef:
+                          description: |-
+                            Selects a field of the pod: supports metadata.name, metadata.namespace, `metadata.labels['<KEY>']`, `metadata.annotations['<KEY>']`,
+                            spec.nodeName, spec.serviceAccountName, status.hostIP, status.podIP, status.podIPs.
+                          properties:
+                            apiVersion:
+                              description: Version of the schema the FieldPath is
+                                written in terms of, defaults to "v1".
+                              type: string
+                            fieldPath:
+                              description: Path of the field to select in the specified
+                                API version.
+                              type: string
+                          required:
+                          - fieldPath
+                          type: object
+                          x-kubernetes-map-type: atomic
+                        fileKeyRef:
+                          description: |-
+                            FileKeyRef selects a key of the env file.
+                            Requires the EnvFiles feature gate to be enabled.
+                          properties:
+                            key:
+                              description: |-
+                                The key within the env file. An invalid key will prevent the pod from starting.
+                                The keys defined within a source may consist of any printable ASCII characters except '='.
+                                During Alpha stage of the EnvFiles feature gate, the key size is limited to 128 characters.
+                              type: string
+                            optional:
+                              default: false
+                              description: |-
+                                Specify whether the file or its key must be defined. If the file or key
+                                does not exist, then the env var is not published.
+                                If optional is set to true and the specified key does not exist,
+                                the environment variable will not be set in the Pod's containers.
+
+                                If optional is set to false and the specified key does not exist,
+                                an error will be returned during Pod creation.
+                              type: boolean
+                            path:
+                              description: |-
+                                The path within the volume from which to select the file.
+                                Must be relative and may not contain the '..' path or start with '..'.
+                              type: string
+                            volumeName:
+                              description: The name of the volume mount containing
+                                the env file.
+                              type: string
+                          required:
+                          - key
+                          - path
+                          - volumeName
+                          type: object
+                          x-kubernetes-map-type: atomic
+                        resourceFieldRef:
+                          description: |-
+                            Selects a resource of the container: only resources limits and requests
+                            (limits.cpu, limits.memory, limits.ephemeral-storage, requests.cpu, requests.memory and requests.ephemeral-storage) are currently supported.
+                          properties:
+                            containerName:
+                              description: 'Container name: required for volumes,
+                                optional for env vars'
+                              type: string
+                            divisor:
+                              anyOf:
+                              - type: integer
+                              - type: string
+                              description: Specifies the output format of the exposed
+                                resources, defaults to "1"
+                              pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                              x-kubernetes-int-or-string: true
+                            resource:
+                              description: 'Required: resource to select'
+                              type: string
+                          required:
+                          - resource
+                          type: object
+                          x-kubernetes-map-type: atomic
+                        secretKeyRef:
+                          description: Selects a key of a secret in the pod's namespace
+                          properties:
+                            key:
+                              description: The key of the secret to select from.  Must
+                                be a valid secret key.
+                              type: string
+                            name:
+                              default: ""
+                              description: |-
+                                Name of the referent.
+                                This field is effectively required, but due to backwards compatibility is
+                                allowed to be empty. Instances of this type with an empty value here are
+                                almost certainly wrong.
+                                More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                              type: string
+                            optional:
+                              description: Specify whether the Secret or its key must
+                                be defined
+                              type: boolean
+                          required:
+                          - key
+                          type: object
+                          x-kubernetes-map-type: atomic
+                      type: object
                   required:
-                  - container
+                  - name
                   type: object
+                maxItems: 64
                 type: array
-              replicas:
-                default: 1
-                format: int32
-                minimum: 0
-                type: integer
+              fromApp:
+                description: FromApp names an App in the same project to inherit from.
+                maxLength: 63
+                type: string
+              onSuccess:
+                description: TaskOnSuccess lists what Kwerft does once the Task succeeds.
+                properties:
+                  restart:
+                    description: |-
+                      Restart rolls out these Apps in the same project, e.g. a server that has
+                      to reopen a file the job replaced. Kwerft does it, not the job, so the
+                      job needs no permissions of its own.
+                    items:
+                      maxLength: 63
+                      minLength: 1
+                      type: string
+                    maxItems: 16
+                    type: array
+                type: object
               resources:
                 description: ResourceRequirements describes the compute resource requirements.
                 properties:
@@ -334,10 +480,17 @@ spec:
                       More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
                     type: object
                 type: object
+              retries:
+                default: 0
+                description: Retries is how often a failed run is started again.
+                format: int32
+                maximum: 10
+                minimum: 0
+                type: integer
               size:
-                default: small
-                description: Size is a preset for requests and limits; custom uses
-                  Resources.
+                description: |-
+                  Size is a preset for requests and limits; custom uses Resources.
+                  Empty means the App's size with FromApp, else small.
                 enum:
                 - small
                 - medium
@@ -408,7 +561,24 @@ spec:
                 x-kubernetes-validations:
                 - message: set exactly one of image or git
                   rule: has(self.image) != has(self.git)
+              timeout:
+                description: Timeout stops the run (all retries together) after this
+                  long, e.g. 30m.
+                type: string
+                x-kubernetes-validations:
+                - message: timeout must be at least 1s
+                  rule: duration(self) >= duration('1s')
+              ttlSecondsAfterFinished:
+                default: 604800
+                description: |-
+                  TTLSecondsAfterFinished is how long a finished run (its pod and logs)
+                  is kept. Default 7 days.
+                format: int32
+                minimum: 0
+                type: integer
               volumes:
+                description: Volumes mounts shared Volumes. A Task has no disk of
+                  its own.
                 items:
                   description: |-
                     AppVolume mounts persistent storage at Path, in one of two forms:
@@ -452,14 +622,31 @@ spec:
                     rule: has(self.size) != has(self.volume)
                   - message: class applies to size; a shared Volume has its own class
                     rule: '!has(self.class) || has(self.size)'
+                maxItems: 16
                 type: array
-            required:
-            - source
+                x-kubernetes-validations:
+                - message: a Task can only mount shared Volumes (volume), not a disk
+                    of its own (size)
+                  rule: self.all(v, has(v.volume))
             type: object
+            x-kubernetes-validations:
+            - message: a Task cannot be changed; create a new one
+              rule: self == oldSelf
+            - message: set source or fromApp
+              rule: has(self.fromApp) || has(self.source)
+            - message: a Task runs an image; use fromApp to run the image built for
+                a Git App
+              rule: '!has(self.source) || !has(self.source.git)'
           status:
-            description: AppStatus is written by the App reconciler.
+            description: TaskStatus is written by the Task reconciler.
             properties:
+              completionTime:
+                format: date-time
+                type: string
               conditions:
+                description: |-
+                  Conditions: Ready (True once succeeded; the reason says why not) and
+                  AppsRestarted (onSuccess.restart was carried out).
                 items:
                   description: Condition contains details for one aspect of the current
                     state of this API Resource.
@@ -515,56 +702,43 @@ spec:
                   - type
                   type: object
                 type: array
-              history:
-                description: History holds the most recent revisions, newest first.
-                items:
-                  description: AppRevision records one rollout for history and rollback.
-                  properties:
-                    build:
-                      type: string
-                    generation:
-                      description: Generation is the App spec generation this revision
-                        rolled out.
-                      format: int64
-                      type: integer
-                    image:
-                      type: string
-                    number:
-                      format: int64
-                      type: integer
-                    time:
-                      format: date-time
-                      type: string
-                  required:
-                  - generation
-                  - image
-                  - number
-                  - time
-                  type: object
-                maxItems: 20
-                type: array
+              exitCode:
+                description: ExitCode of the container in the most recent pod that
+                  terminated.
+                format: int32
+                type: integer
               image:
-                description: Image is the fully resolved image currently rolled out.
+                description: Image is the image the run uses, resolved from the source
+                  or FromApp.
+                type: string
+              job:
+                description: Job is the Kubernetes Job running the Task.
                 type: string
               observedGeneration:
                 format: int64
                 type: integer
-              readyReplicas:
-                format: int32
-                type: integer
-              revision:
-                format: int64
-                type: integer
-              urls:
-                items:
-                  type: string
-                type: array
+              phase:
+                description: TaskPhase is the lifecycle of a Task.
+                enum:
+                - Pending
+                - Running
+                - Succeeded
+                - Failed
+                type: string
+              pod:
+                description: Pod is the most recent pod of the run, for its logs.
+                type: string
+              startTime:
+                format: date-time
+                type: string
             type: object
+        required:
+        - spec
         type: object
+        x-kubernetes-validations:
+        - message: name must be at most 63 characters
+          rule: self.metadata.name.size() <= 63
     served: true
     storage: true
     subresources:
-      scale:
-        specReplicasPath: .spec.replicas
-        statusReplicasPath: .status.readyReplicas
       status: {}
