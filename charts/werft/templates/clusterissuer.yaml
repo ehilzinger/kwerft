@@ -16,7 +16,7 @@ spec:
       - http01:
           gatewayHTTPRoute:
             parentRefs:
-              - name: {{ .Values.gateway.name }}
+              - name: werft  # the Gateway Werft manages
                 namespace: {{ .Release.Namespace }}
                 kind: Gateway
                 sectionName: http

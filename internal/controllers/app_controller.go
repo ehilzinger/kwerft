@@ -8,6 +8,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
 	"k8s.io/apimachinery/pkg/api/equality"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -109,6 +110,9 @@ func (r *AppReconciler) reconcile(ctx context.Context, app *werftv1.App) (*readi
 		return nil, err
 	}
 
+	if err := r.reconcileDomains(ctx, app, rd); err != nil {
+		return nil, err
+	}
 	if err := r.reconcileRoutes(ctx, app, rd); err != nil {
 		return nil, err
 	}
@@ -153,6 +157,44 @@ func (r *AppReconciler) reconcile(ctx context.Context, app *werftv1.App) (*readi
 	default:
 		return &readiness{metav1.ConditionFalse, "Progressing", fmt.Sprintf("%d/%d replicas ready", readyReplicas, want)}, nil
 	}
+}
+
+// reconcileDomains claims a Domain per public hostname and releases the ones
+// this App no longer uses. A Domain created by someone else is left alone;
+// one owned by another App is a conflict.
+func (r *AppReconciler) reconcileDomains(ctx context.Context, app *werftv1.App, rd *appRender) error {
+	desired := rd.domains()
+	for name, domain := range desired {
+		var existing werftv1.Domain
+		err := r.Get(ctx, client.ObjectKey{Namespace: app.Namespace, Name: name}, &existing)
+		switch {
+		case apierrors.IsNotFound(err):
+		case err != nil:
+			return err
+		case metav1.IsControlledBy(&existing, app):
+		case metav1.GetControllerOf(&existing) != nil:
+			return terminalf("HostnameInUse", "%s is already used by %s %q",
+				name, metav1.GetControllerOf(&existing).Kind, metav1.GetControllerOf(&existing).Name)
+		default:
+			continue // a hand-made Domain: use it, don't take it over
+		}
+		if err := apply(ctx, r.Client, domain); err != nil {
+			return fmt.Errorf("apply domain: %w", err)
+		}
+	}
+	var existing werftv1.DomainList
+	if err := r.List(ctx, &existing, client.InNamespace(app.Namespace), client.MatchingLabels{LabelApp: app.Name}); err != nil {
+		return err
+	}
+	for i := range existing.Items {
+		d := &existing.Items[i]
+		if _, keep := desired[d.Name]; !keep && metav1.IsControlledBy(d, app) {
+			if err := client.IgnoreNotFound(r.Delete(ctx, d)); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 // reconcileRoutes applies the desired HTTPRoutes and removes ones for ports
@@ -208,6 +250,7 @@ func (r *AppReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Owns(&corev1.Service{}).
 		Owns(&networkingv1.NetworkPolicy{}).
 		Owns(&gwv1.HTTPRoute{}).
+		Owns(&werftv1.Domain{}).
 		Named("app").
 		Complete(r)
 }

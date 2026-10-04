@@ -6,7 +6,7 @@ metadata:
   labels: {{- include "werft.labels" . | nindent 4 }}
 spec:
   parentRefs:
-    - name: {{ .Values.gateway.name }}
+    - name: werft  # the Gateway Werft manages
       sectionName: console-https
   hostnames: [{{ .Values.console.domain | quote }}]
   rules:
@@ -24,7 +24,7 @@ metadata:
   labels: {{- include "werft.labels" . | nindent 4 }}
 spec:
   parentRefs:
-    - name: {{ .Values.gateway.name }}
+    - name: werft
       sectionName: http
   hostnames: [{{ .Values.console.domain | quote }}]
   rules:

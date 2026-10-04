@@ -18,11 +18,10 @@ resources:
   requests: { cpu: 50m, memory: 64Mi }
   limits: { memory: 256Mi }
 
-# The Gateway that all public traffic (console and apps) enters through.
-# Traefik implements it; Werft adds listeners for app domains at runtime.
+# The shared Gateway "werft" that all public traffic enters through is created
+# and owned by Werft itself (listeners for the console and every Domain), so
+# Helm never overwrites listeners added at runtime.
 gateway:
-  create: true
-  name: werft
   className: traefik
 
 persistence:

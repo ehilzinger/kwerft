@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -23,6 +24,8 @@ import (
 
 // k8s is a client for the test API server; nil when envtest is unavailable.
 var k8s client.Client
+
+const testConsoleDomain = "console.example.com"
 
 // TestMain starts a real kube-apiserver + etcd (envtest) with the Werft and
 // Gateway API CRDs, and runs both reconcilers against it. There are no
@@ -46,12 +49,24 @@ func TestMain(m *testing.M) {
 		CRDDirectoryPaths: []string{
 			filepath.Join("..", "..", "charts", "werft", "crds"),
 			filepath.Join(gatewayCRDs, "config", "crd", "standard"),
+			filepath.Join("testdata", "crds"),
 		},
 		ErrorIfCRDPathMissing: true,
 	}
 	cfg, err := env.Start()
 	if err != nil {
 		fmt.Println("start envtest:", err)
+		os.Exit(1)
+	}
+
+	k8s, err = client.New(cfg, client.Options{Scheme: NewScheme()})
+	if err != nil {
+		fmt.Println("client:", err)
+		os.Exit(1)
+	}
+	// The shared Gateway lives here; the installer creates it in real clusters.
+	if err := k8s.Create(context.Background(), &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: GatewayNamespace}}); err != nil {
+		fmt.Println("create gateway namespace:", err)
 		os.Exit(1)
 	}
 
@@ -66,15 +81,15 @@ func TestMain(m *testing.M) {
 	}
 	must((&ProjectReconciler{Client: mgr.GetClient()}).SetupWithManager(mgr))
 	must((&AppReconciler{Client: mgr.GetClient()}).SetupWithManager(mgr))
+	must((&DomainReconciler{
+		Client:        mgr.GetClient(),
+		ConsoleDomain: testConsoleDomain,
+		GatewayClass:  "traefik",
+		ClusterIssuer: "letsencrypt",
+	}).SetupWithManager(mgr))
 
 	ctx, cancel := context.WithCancel(context.Background())
 	go func() { _ = mgr.Start(ctx) }()
-
-	k8s, err = client.New(cfg, client.Options{Scheme: NewScheme()})
-	if err != nil {
-		fmt.Println("client:", err)
-		os.Exit(1)
-	}
 
 	code := m.Run()
 	cancel()

@@ -1,0 +1,245 @@
+package controllers
+
+import (
+	"context"
+	"fmt"
+	"regexp"
+	"testing"
+	"time"
+
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+	gwv1 "sigs.k8s.io/gateway-api/apis/v1"
+
+	werftv1 "github.com/ehilzinger/werft/api/v1alpha1"
+)
+
+func TestListenerName(t *testing.T) {
+	valid := regexp.MustCompile(`^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`)
+	hosts := []string{"api.example.com", "a-b.c.example.com", "a.b-c.example.com",
+		"whoami.46.224.139.73.sslip.io", "a-very-long-subdomain-name-for-testing.apps.example.com"}
+	seen := map[string]string{}
+	for _, h := range hosts {
+		n := ListenerName(h)
+		if !valid.MatchString(n) || len(n) > 63 {
+			t.Errorf("ListenerName(%q) = %q is not a valid section name", h, n)
+		}
+		if n != ListenerName(h) {
+			t.Errorf("ListenerName(%q) is not stable", h)
+		}
+		if other, dup := seen[n]; dup {
+			t.Errorf("%q and %q map to the same listener %q", h, other, n)
+		}
+		seen[n] = h
+	}
+}
+
+func getGateway(t *testing.T) *gwv1.Gateway {
+	t.Helper()
+	var gw gwv1.Gateway
+	eventually(t, func() error {
+		return k8s.Get(context.Background(), client.ObjectKey{Namespace: GatewayNamespace, Name: GatewayName}, &gw)
+	})
+	return &gw
+}
+
+func listener(gw *gwv1.Gateway, name string) *gwv1.Listener {
+	for i := range gw.Spec.Listeners {
+		if string(gw.Spec.Listeners[i].Name) == name {
+			return &gw.Spec.Listeners[i]
+		}
+	}
+	return nil
+}
+
+// waitForListener waits until the Gateway has (or, with want=false, lacks)
+// the listener for host, and returns the Gateway.
+func waitForListener(t *testing.T, host string, want bool) *gwv1.Gateway {
+	t.Helper()
+	var gw *gwv1.Gateway
+	eventually(t, func() error {
+		gw = getGateway(t)
+		if (listener(gw, ListenerName(host)) != nil) != want {
+			return fmt.Errorf("listener for %s present=%v, want %v", host, !want, want)
+		}
+		return nil
+	})
+	return gw
+}
+
+func createDomain(t *testing.T, ns, name, host string) *werftv1.Domain {
+	t.Helper()
+	d := &werftv1.Domain{ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: name}, Spec: werftv1.DomainSpec{Hostname: host}}
+	if err := k8s.Create(context.Background(), d); err != nil {
+		t.Fatal(err)
+	}
+	return d
+}
+
+func waitForDomain(t *testing.T, d *werftv1.Domain, wantReason string) *werftv1.Domain {
+	t.Helper()
+	eventually(t, func() error {
+		if err := k8s.Get(context.Background(), client.ObjectKeyFromObject(d), d); err != nil {
+			return err
+		}
+		reason, err := readyReason(d.Status.Conditions, d.Generation)
+		if err != nil {
+			return err
+		}
+		if reason != wantReason {
+			return fmt.Errorf("reason %q, want %q", reason, wantReason)
+		}
+		return nil
+	})
+	return d
+}
+
+func TestGatewayHasHTTPAndConsoleListeners(t *testing.T) {
+	requireEnvtest(t)
+	gw := getGateway(t)
+	if string(gw.Spec.GatewayClassName) != "traefik" {
+		t.Errorf("gatewayClassName = %q", gw.Spec.GatewayClassName)
+	}
+	if gw.Annotations["cert-manager.io/cluster-issuer"] != "letsencrypt" {
+		t.Errorf("cluster-issuer annotation = %q", gw.Annotations["cert-manager.io/cluster-issuer"])
+	}
+	if l := listener(gw, httpListener); l == nil || l.Port != 80 {
+		t.Errorf("http listener = %+v", l)
+	}
+	l := listener(gw, consoleListener)
+	if l == nil || l.Hostname == nil || string(*l.Hostname) != testConsoleDomain || l.TLS == nil ||
+		string(l.TLS.CertificateRefs[0].Name) != consoleSecret {
+		t.Errorf("console listener = %+v", l)
+	}
+}
+
+func TestAppPublicPortGetsDomainHTTPSListenerAndRedirect(t *testing.T) {
+	requireEnvtest(t)
+	ctx := context.Background()
+	projectNamespace(t, "shopfront")
+	host := "shop.example.com"
+	app := createApp(t, "shopfront", "web", imageApp("nginx:1.29"))
+	app.Spec.Ports = []werftv1.AppPort{{Container: 8080, Public: host}}
+	if err := k8s.Update(ctx, app); err != nil {
+		t.Fatal(err)
+	}
+
+	// The App claims a Domain...
+	d := &werftv1.Domain{ObjectMeta: metav1.ObjectMeta{Namespace: "shopfront", Name: host}}
+	eventually(t, func() error { return k8s.Get(ctx, client.ObjectKeyFromObject(d), d) })
+	if !metav1.IsControlledBy(d, app) || d.Spec.Hostname != host {
+		t.Errorf("domain = %+v, want controlled by the App", d.ObjectMeta)
+	}
+
+	// ...which becomes an HTTPS listener only this project may attach to.
+	gw := waitForListener(t, host, true)
+	l := listener(gw, ListenerName(host))
+	if l.Protocol != gwv1.HTTPSProtocolType || l.Port != 443 || string(*l.Hostname) != host {
+		t.Errorf("listener = %+v", l)
+	}
+	ns := l.AllowedRoutes.Namespaces
+	if ns == nil || *ns.From != gwv1.NamespacesFromSelector || ns.Selector.MatchLabels["kubernetes.io/metadata.name"] != "shopfront" {
+		t.Errorf("allowedRoutes = %+v, want only namespace shopfront", ns)
+	}
+	if string(l.TLS.CertificateRefs[0].Name) != ListenerName(host)+"-tls" {
+		t.Errorf("certificateRefs = %+v", l.TLS.CertificateRefs)
+	}
+
+	// Plain HTTP redirects to HTTPS.
+	var redirect gwv1.HTTPRoute
+	eventually(t, func() error {
+		return k8s.Get(ctx, client.ObjectKey{Namespace: "shopfront", Name: "web-8080-redirect"}, &redirect)
+	})
+	if sn := redirect.Spec.ParentRefs[0].SectionName; sn == nil || string(*sn) != httpListener {
+		t.Errorf("redirect attaches to %v, want the http listener", sn)
+	}
+	f := redirect.Spec.Rules[0].Filters
+	if len(f) != 1 || f[0].RequestRedirect == nil || *f[0].RequestRedirect.Scheme != "https" {
+		t.Errorf("redirect filters = %+v", f)
+	}
+
+	d = waitForDomain(t, d, "CertificatePending")
+	if d.Status.Listener != ListenerName(host) {
+		t.Errorf("status.listener = %q", d.Status.Listener)
+	}
+
+	// Making the port private releases the Domain and its listener.
+	if err := k8s.Get(ctx, client.ObjectKeyFromObject(app), app); err != nil {
+		t.Fatal(err)
+	}
+	app.Spec.Ports = []werftv1.AppPort{{Container: 8080}}
+	if err := k8s.Update(ctx, app); err != nil {
+		t.Fatal(err)
+	}
+	waitForListener(t, host, false)
+}
+
+func TestDomainReadyWhenCertificateIssued(t *testing.T) {
+	requireEnvtest(t)
+	projectNamespace(t, "status-page")
+	host := "status.example.com"
+	d := createDomain(t, "status-page", "status", host)
+	waitForDomain(t, d, "CertificatePending")
+
+	// Play cert-manager: the gateway-shim names the Certificate after the secret.
+	notAfter := time.Date(2027, 1, 2, 7, 49, 47, 0, time.UTC)
+	cert := &unstructured.Unstructured{Object: map[string]any{
+		"metadata": map[string]any{"name": ListenerName(host) + "-tls", "namespace": GatewayNamespace},
+		"status": map[string]any{
+			"notAfter":   notAfter.Format(time.RFC3339),
+			"conditions": []any{map[string]any{"type": "Ready", "status": "True", "message": "Certificate is up to date"}},
+		},
+	}}
+	cert.SetGroupVersionKind(certificateGVK)
+	if err := k8s.Create(context.Background(), cert); err != nil {
+		t.Fatal(err)
+	}
+
+	d = waitForDomain(t, d, "CertificateIssued")
+	if d.Status.NotAfter == nil || !d.Status.NotAfter.Equal(&metav1.Time{Time: notAfter}) {
+		t.Errorf("notAfter = %v, want %v", d.Status.NotAfter, notAfter)
+	}
+}
+
+func TestOlderDomainWinsHostname(t *testing.T) {
+	requireEnvtest(t)
+	projectNamespace(t, "first")
+	projectNamespace(t, "second")
+	host := "contested.example.com"
+	first := createDomain(t, "first", "contested", host)
+	waitForDomain(t, first, "CertificatePending")
+	second := createDomain(t, "second", "contested", host)
+
+	waitForDomain(t, second, "HostnameConflict")
+	if second.Status.Listener != "" {
+		t.Errorf("losing Domain reports listener %q", second.Status.Listener)
+	}
+	gw := waitForListener(t, host, true)
+	if got := gw.Spec.Listeners; countHost(got, host) != 1 {
+		t.Errorf("%d listeners for %s, want 1", countHost(got, host), host)
+	}
+	if sel := listener(gw, ListenerName(host)).AllowedRoutes.Namespaces.Selector.MatchLabels; sel["kubernetes.io/metadata.name"] != "first" {
+		t.Errorf("listener belongs to %v, want project first", sel)
+	}
+}
+
+func TestConsoleHostnameIsReserved(t *testing.T) {
+	requireEnvtest(t)
+	projectNamespace(t, "sneaky")
+	d := createDomain(t, "sneaky", "console", testConsoleDomain)
+	waitForDomain(t, d, "ReservedHostname")
+	if n := countHost(getGateway(t).Spec.Listeners, testConsoleDomain); n != 1 {
+		t.Errorf("%d listeners for the console hostname, want only the console's own", n)
+	}
+}
+
+func countHost(ls []gwv1.Listener, host string) int {
+	n := 0
+	for _, l := range ls {
+		if l.Hostname != nil && string(*l.Hostname) == host {
+			n++
+		}
+	}
+	return n
+}

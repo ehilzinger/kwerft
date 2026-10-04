@@ -133,8 +133,9 @@ func TestAppRendersDeploymentServiceRouteAndPolicy(t *testing.T) {
 	if len(route.Spec.Hostnames) != 1 || route.Spec.Hostnames[0] != "api.example.com" {
 		t.Errorf("hostnames = %v", route.Spec.Hostnames)
 	}
-	if pr := route.Spec.ParentRefs[0]; string(pr.Name) != GatewayName || pr.Namespace == nil || string(*pr.Namespace) != GatewayNamespace {
-		t.Errorf("parentRef = %+v", pr)
+	if pr := route.Spec.ParentRefs[0]; string(pr.Name) != GatewayName || pr.Namespace == nil || string(*pr.Namespace) != GatewayNamespace ||
+		pr.SectionName == nil || string(*pr.SectionName) != ListenerName("api.example.com") {
+		t.Errorf("parentRef = %+v, want the hostname's HTTPS listener", pr)
 	}
 
 	// NetworkPolicy: platform namespaces + same-project app + cross-project app

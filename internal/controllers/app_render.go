@@ -16,6 +16,7 @@ import (
 	gwv1 "sigs.k8s.io/gateway-api/apis/v1"
 	gwv1ac "sigs.k8s.io/gateway-api/applyconfiguration/apis/v1"
 
+	werftv1ac "github.com/ehilzinger/werft/api/applyconfiguration/api/v1alpha1"
 	werftv1 "github.com/ehilzinger/werft/api/v1alpha1"
 )
 
@@ -174,8 +175,24 @@ func (a *appRender) service() *corev1ac.ServiceApplyConfiguration {
 		WithSpec(spec)
 }
 
-// routes returns one HTTPRoute per public port, keyed by route name.
-// TLS listeners for these hostnames are the Domain reconciler's job.
+// domains returns one Domain per public hostname, keyed by Domain name. The
+// Domain reconciler turns each into an HTTPS listener with a certificate.
+func (a *appRender) domains() map[string]*werftv1ac.DomainApplyConfiguration {
+	out := map[string]*werftv1ac.DomainApplyConfiguration{}
+	for _, p := range a.app.Spec.Ports {
+		if p.Public == "" {
+			continue
+		}
+		out[p.Public] = werftv1ac.Domain(p.Public, a.app.Namespace).
+			WithLabels(a.labels).
+			WithOwnerReferences(a.owner).
+			WithSpec(werftv1ac.DomainSpec().WithHostname(p.Public))
+	}
+	return out
+}
+
+// routes returns, per public port, an HTTPS route on the hostname's own
+// listener and a plain-HTTP route that redirects to HTTPS. Keyed by name.
 func (a *appRender) routes() map[string]*gwv1ac.HTTPRouteApplyConfiguration {
 	out := map[string]*gwv1ac.HTTPRouteApplyConfiguration{}
 	for _, p := range a.app.Spec.Ports {
@@ -183,20 +200,32 @@ func (a *appRender) routes() map[string]*gwv1ac.HTTPRouteApplyConfiguration {
 			continue
 		}
 		name := fmt.Sprintf("%s-%d", a.app.Name, p.Container)
-		out[name] = gwv1ac.HTTPRoute(name, a.app.Namespace).
-			WithLabels(a.labels).
-			WithOwnerReferences(a.owner).
-			WithSpec(gwv1ac.HTTPRouteSpec().
-				WithParentRefs(gwv1ac.ParentReference().
-					WithName(gwv1.ObjectName(GatewayName)).
-					WithNamespace(gwv1.Namespace(GatewayNamespace))).
-				WithHostnames(gwv1.Hostname(p.Public)).
-				WithRules(gwv1ac.HTTPRouteRule().
-					WithBackendRefs(gwv1ac.HTTPBackendRef().
-						WithName(gwv1.ObjectName(a.app.Name)).
-						WithPort(gwv1.PortNumber(p.Container)))))
+		out[name] = a.route(name, ListenerName(p.Public), p.Public, gwv1ac.HTTPRouteRule().
+			WithBackendRefs(gwv1ac.HTTPBackendRef().
+				WithName(gwv1.ObjectName(a.app.Name)).
+				WithPort(gwv1.PortNumber(p.Container))))
+		// ACME HTTP-01 challenges still get through: cert-manager's routes
+		// match their exact path, which takes precedence over this one.
+		out[name+"-redirect"] = a.route(name+"-redirect", httpListener, p.Public, gwv1ac.HTTPRouteRule().
+			WithFilters(gwv1ac.HTTPRouteFilter().
+				WithType(gwv1.HTTPRouteFilterRequestRedirect).
+				WithRequestRedirect(gwv1ac.HTTPRequestRedirectFilter().WithScheme("https").WithStatusCode(301))))
 	}
 	return out
+}
+
+// route is an HTTPRoute for host attached to one listener of the shared Gateway.
+func (a *appRender) route(name, listener, host string, rule *gwv1ac.HTTPRouteRuleApplyConfiguration) *gwv1ac.HTTPRouteApplyConfiguration {
+	return gwv1ac.HTTPRoute(name, a.app.Namespace).
+		WithLabels(a.labels).
+		WithOwnerReferences(a.owner).
+		WithSpec(gwv1ac.HTTPRouteSpec().
+			WithParentRefs(gwv1ac.ParentReference().
+				WithName(gwv1.ObjectName(GatewayName)).
+				WithNamespace(gwv1.Namespace(GatewayNamespace)).
+				WithSectionName(gwv1.SectionName(listener))).
+			WithHostnames(gwv1.Hostname(host)).
+			WithRules(rule))
 }
 
 // networkPolicy opens the project's default-deny for this app: listed apps and

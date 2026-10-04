@@ -27,6 +27,8 @@ spec:
             - --data-dir=/var/lib/werft
             - --console-domain={{ required "console.domain is required" .Values.console.domain }}
             - --platform={{ .Values.platform }}
+            - --gateway-class={{ .Values.gateway.className }}
+            - --cluster-issuer={{ if .Values.acme.enabled }}letsencrypt{{ end }}
           env:
             - name: POD_NAMESPACE
               valueFrom: { fieldRef: { fieldPath: metadata.namespace } }

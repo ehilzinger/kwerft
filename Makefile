@@ -35,8 +35,9 @@ image: ## Build the container image
 ## --- code generation ---------------------------------------------------
 
 .PHONY: generate
-generate: ## Regenerate deepcopy functions and CRDs from api/v1alpha1
+generate: ## Regenerate deepcopy, apply configurations and CRDs from api/v1alpha1
 	$(CONTROLLER_GEN) object paths=./api/...
+	$(CONTROLLER_GEN) applyconfiguration paths=./api/...
 	$(CONTROLLER_GEN) crd paths=./api/... output:crd:dir=charts/werft/crds
 
 .PHONY: verify-generate

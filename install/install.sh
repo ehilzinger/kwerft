@@ -641,8 +641,13 @@ stage_werft() {
   else
     image_args=(--set image.tag="$WERFT_VERSION")
   fi
+  # Helm installs a chart's CRDs only on first install, never on upgrade, so
+  # apply them on every run (server-side; Helm no longer touches them).
+  helmk show crds "$ref" ${version_args[@]+"${version_args[@]}"} 2>>"$LOG_FILE" \
+    | kc apply --server-side --force-conflicts -f - >>"$LOG_FILE" 2>&1 \
+    || die $EXIT_WERFT "Werft CRDs failed to apply (chart: $ref)"
   helmk upgrade --install werft "$ref" ${version_args[@]+"${version_args[@]}"} \
-    --namespace werft-system --wait --timeout 10m \
+    --namespace werft-system --wait --timeout 10m --skip-crds \
     --set console.domain="$DOMAIN" \
     --set acme.email="$ACME_EMAIL" \
     --set platform="$PLATFORM" \
