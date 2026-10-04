@@ -194,8 +194,8 @@ Exit codes: 0 ok · 2 usage · 10 preflight · 20 network/DNS · 30 Kubernetes �
 | 1 Installer & deploy MVP | 3–8 | Full installer, setup wizard, auth, Project/App/Domain/Task/Schedule reconcilers, apps and jobs UI, logs, shell, rollback | Fresh server → app on HTTPS in < 10 min; a scheduled job runs and restarts an app on success |
 | 2 Builds from Git | 9–12 | GitConnection, webhooks, Build reconciler, BuildKit, Railpack, zot, auto-deploy, commit checks | Push to main live in < 3 min with build log and commit check |
 | 3 Monitoring & logs | 13–15 | VictoriaMetrics/Logs, charts, log search, alerts, notification channels | Crash loop alerts in Slack in < 2 min — **usable by the team** |
-| 4 Network & access | 16–19 | TrafficRules + Hubble, server firewall + Cloud Firewall sync, members, SSO, tokens, audit; e2e install runs on fresh Cloud servers (per release tag and nightly, upgrade from the previous release, Let's Encrypt staging, sweeper) | Automated RBAC suite proves project isolation; every release tag passes a fresh install and an upgrade |
-| 5 Nodes & clusters | 20–24 | Cloud API nodes, join script, hcloud CSI/LB, vSwitch coupling, build node pool, HA, agent | Mixed cluster survives losing a node; second cluster managed |
+| 4 Network & access | 16–19 | TrafficRules + Hubble, server firewall (host rules), members, SSO, tokens, audit; e2e install runs on fresh Cloud servers (per release tag and nightly, upgrade from the previous release, Let's Encrypt staging, sweeper) | Automated RBAC suite proves project isolation; every release tag passes a fresh install and an upgrade |
+| 5 Nodes & clusters | 20–24 | Cloud API nodes and token setting, Cloud Firewall sync (moved from Phase 4), join script, hcloud CSI/LB, vSwitch coupling, build node pool, HA, agent | Mixed cluster survives losing a node; second cluster managed |
 | 6 Backups, upgrades, beta | 25–28 | Velero to Object Storage, upgrades with rollback, Compose import, templates, docs, license | Full restore onto a new server — **public beta** |
 | 7 Kwerft for Mac | 29–36 | Kernel build in CI, installer `--platform mac`, `local` profile, SwiftUI app around the console, push/pull Projects between instances (spike done 2026-10-04) | A Project runs on a Mac without a terminal and goes live on a Hetzner server with one push |
 
@@ -228,7 +228,7 @@ Work split and contracts: `docs/phase4.md`.
 - [x] Types: `Project.spec.access`/`members`, `TrafficRule`, `FirewallRule`
 - [ ] W1 Project access: per-project RoleBindings (Team | Members), project scope in every list and search, members UI, isolation test suite, admin 2FA reset, "require 2FA"
 - [ ] W2 Traffic rules: TrafficRule → CiliumNetworkPolicy, App/Project policies on Cilium, Hubble counts and drops, "create allow rule"
-- [ ] W3 Server firewall: FirewallRules through a node agent with lock-out protection and auto-rollback, Hetzner Cloud Firewall sync, Cloud API token setting
+- [x] W3 Server firewall: FirewallRules through a node agent (`kwerft node-agent` DaemonSet filling two chains of the installer's nftables table) with lock-out protection and auto-rollback, required rules, Network › Server firewall (try on the test server: `docs/phase4.md` › As built). Hetzner Cloud Firewall sync and the Cloud API token setting moved to Phase 5 (2026-10-04)
 - [ ] W4 Identity: OIDC SSO, API tokens, scoped kubeconfig (API proxy), X-Real-IP only from Traefik, data-key rotation
 - [ ] W5 e2e: fresh install and upgrade per release tag and nightly on Hetzner Cloud, sweeper
 - [ ] Exit criteria: isolation suite green; a release tag passes e2e

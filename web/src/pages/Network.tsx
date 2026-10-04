@@ -6,6 +6,7 @@ import { jobs, shortDate, type Domain } from "../jobs";
 import { words } from "../workloads";
 import { errorText } from "./Apps";
 import { settingsApi, type CertificateState } from "../settings";
+import { ServerFirewall } from "./NetworkFirewall";
 import "../styles/workloads.css";
 import "../styles/jobs.css";
 
@@ -38,12 +39,7 @@ export function Network() {
             <p>Rules between apps and projects as Cilium policies, with the connections each one allowed and dropped from Hubble. Until then, an app's “who may connect” setting decides, and projects are isolated from each other.</p>
           </div>
         )}
-        {tab === "firewall" && (
-          <div className="empty">
-            <h2>The server firewall arrives in Phase 4</h2>
-            <p>Edit the host firewall from here, mirrored to the Hetzner Cloud Firewall, with lock-out protection. Until then the installer's baseline applies: SSH, HTTP and HTTPS open; cluster traffic only on the private network.</p>
-          </div>
-        )}
+        {tab === "firewall" && <ServerFirewall />}
         {tab === "domains" && <Domains q={domains} />}
       </div>
     </section>

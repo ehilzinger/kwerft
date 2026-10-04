@@ -120,3 +120,17 @@ observability:
   namespace: kwerft-observability
   # Admit only the stack itself, the console and the nodes to it (Cilium).
   networkPolicy: true
+
+# Server firewall (Network › Server firewall). FirewallRules become host rules
+# through the node agent, a DaemonSet on every node (templates/node-agent.yaml)
+# that fills the nftables chains install.sh leaves for it. Without the agent the
+# rules are saved but not applied; the installer's baseline always applies.
+firewall:
+  # The cluster's private network (Cloud Network or vSwitch), shown in the
+  # required rule cluster-private. Set by install.sh; empty without one.
+  privateNetwork: ""
+  agent:
+    enabled: true
+    resources:
+      requests: { cpu: 5m, memory: 16Mi }
+      limits: { memory: 64Mi }

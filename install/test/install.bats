@@ -720,3 +720,60 @@ JSON
   grep -q "upgrade --install vm vm/victoria-metrics-k8s-stack .*--set alertmanager.spec.disableNamespaceMatcher=true" "$HELM_LOG"
   [[ "$output" == VictoriaMetrics* ]]
 }
+
+# The node agent (internal/firewall) fills managed_ssh and managed_open; the
+# base chain decides everything else, in this order.
+@test "firewall_ruleset: the base chain keeps the baseline and jumps to Kwerft's chains" {
+  KWERFT_SOURCED=1 source "$SCRIPT"
+  PRIVATE_CIDR="10.0.1.3/16"
+  run firewall_ruleset
+  [ "$status" -eq 0 ]
+  grep -q '^  chain managed_ssh {$' <<<"$output"
+  grep -q '^  chain managed_open {$' <<<"$output"
+  grep -q '^flush chain inet kwerft input$' <<<"$output"
+  ! grep -q 'delete table' <<<"$output" || false
+  ! grep -q 'flush chain inet kwerft managed' <<<"$output" || false
+  # Everything the cluster needs is accepted before public SSH may be narrowed …
+  rules=$(sed -n '/^flush chain/,$p' <<<"$output" | sed -n 's/^    //p')
+  line() { grep -n -F -x -- "$1" <<<"$rules" | cut -d: -f1; }
+  ssh_jump=$(line "tcp dport 22 jump managed_ssh")
+  [ -n "$ssh_jump" ]
+  for before in "ct state established,related accept" "iif lo accept" "ip saddr 10.42.0.0/16 accept" \
+                "ip saddr 10.0.0.0/16 accept" "udp dport 51871 accept" 'iifname { "cilium_*", "lxc*" } accept'; do
+    n=$(line "$before"); [ -n "$n" ]; [ "$n" -lt "$ssh_jump" ]
+  done
+  # … HTTP(S) and SSH are accepted after it, and the console's ports come last.
+  [ "$(line "tcp dport { 22, 80, 443 } accept")" -gt "$ssh_jump" ]
+  [ "$(line "jump managed_open")" -eq "$(wc -l <<<"$rules" | tr -d ' ')" ]
+}
+
+@test "firewall_ruleset: without a private network" {
+  KWERFT_SOURCED=1 source "$SCRIPT"
+  PRIVATE_CIDR=""
+  run firewall_ruleset
+  grep -q '# no private network detected' <<<"$output"
+  grep -q 'tcp dport 22 jump managed_ssh' <<<"$output"
+}
+
+@test "reset_firewall: removes the table and pauses the node agent" {
+  KWERFT_SOURCED=1 source "$SCRIPT"
+  NFT_LOG="$BATS_TEST_TMPDIR/nft.log"; : >"$NFT_LOG"
+  nft() { printf '%s\n' "$*" >>"$NFT_LOG"; }
+  FIREWALL_STATE_DIR="$BATS_TEST_TMPDIR/firewall"
+  run reset_firewall
+  [ "$status" -eq 0 ]
+  grep -qx 'delete table inet kwerft' "$NFT_LOG"
+  [ -e "$FIREWALL_STATE_DIR/paused" ]
+}
+
+# install.sh's table and ports are what internal/firewall manages and shows.
+@test "firewall constants agree with internal/firewall and the chart" {
+  KWERFT_SOURCED=1 source "$SCRIPT"
+  root="$BATS_TEST_DIRNAME/../.."
+  grep -qF "PodCIDR       = \"$POD_CIDR\"" "$root/internal/firewall/firewall.go"
+  grep -qF "WireGuardPort = $WG_PORT" "$root/internal/firewall/firewall.go"
+  grep -qF 'ChainSSH   = "managed_ssh"' "$root/internal/firewall/nft.go"
+  grep -qF 'ChainOpen  = "managed_open"' "$root/internal/firewall/nft.go"
+  grep -qF 'PausedFile = "paused"' "$root/internal/firewall/agent.go"
+  grep -qF "path: $FIREWALL_STATE_DIR," "$root/charts/kwerft/templates/node-agent.yaml"
+}
