@@ -276,7 +276,15 @@ func Expr(spec *kwerftv1.AlertRuleSpec) string {
 	s := spec.Scope
 	switch e.Condition {
 	case kwerftv1.AlertCrashLooping:
-		return podExpr(s, "max_over_time(%s[5m])", "kube_pod_container_status_waiting_reason", `reason="CrashLoopBackOff"`) + " >= 1"
+		// Kubernetes reports CrashLoopBackOff reliably only once the restart
+		// back-off is long; during the first short back-offs (10s, 20s,
+		// 40s) the container mostly shows as terminated or running. Two
+		// restarts within 3 minutes catch a crash loop in its first minute
+		// (measured on the test server: the waiting reason alone appeared
+		// after about 4 minutes).
+		backoff := podExpr(s, "max_over_time(%s[5m])", "kube_pod_container_status_waiting_reason", `reason="CrashLoopBackOff"`) + " >= 1"
+		restarts := podExpr(s, "increase(%s[3m])", "kube_pod_container_status_restarts_total") + " >= 2"
+		return "(" + backoff + ") or (" + restarts + ")"
 	case kwerftv1.AlertRestarts:
 		return podExpr(s, "increase(%s["+promDuration(e.Window)+"])", "kube_pod_container_status_restarts_total") + " > " + itoa(e.Threshold)
 	case kwerftv1.AlertMemoryHigh:

@@ -95,6 +95,10 @@ func TestCrashLoopingExpression(t *testing.T) {
 		// Pods without the app label still alert (namespace and pod only).
 		`or on (namespace, pod, container)`,
 		`>= 1`,
+		// Early crash loops: two restarts within 3 minutes, before
+		// Kubernetes settles on reporting CrashLoopBackOff.
+		`increase(kube_pod_container_status_restarts_total[3m])`,
+		`>= 2`,
 	} {
 		if !strings.Contains(expr, want) {
 			t.Errorf("expression lacks %q:\n%s", want, expr)
