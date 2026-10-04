@@ -970,7 +970,7 @@ print_summary() {
   apps=$(cluster_setting '{.spec.appsDomain}')
   tls=$(cluster_setting '{.spec.tls}')
   local apps_dns="DNS: *.$apps → $PUBLIC_IP"
-  [[ "$managed" == "true" ]] && apps_dns="DNS records kept by Kwerft"
+  [[ "$(cluster_setting '{.spec.dns.manageRecords}')" == "true" ]] && apps_dns="DNS records kept by Kwerft"
   if [[ -n "$apps" ]]; then
     if [[ "$tls" == "dns01" ]]; then
       printf '  Apps        *.%s (wildcard certificate via Hetzner DNS) · %s\n' "$apps" "$apps_dns"

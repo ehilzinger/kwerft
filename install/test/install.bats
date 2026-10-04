@@ -437,3 +437,31 @@ settings_env() {
   apply_console_settings
   grep -q '"dns":{"provider":"hetzner","manageRecords":false}' "$KC_LOG"
 }
+
+# kc stub answering ConsoleSettings fields from SETTING_<field> variables.
+summary_env() {
+  KWERFT_SOURCED=1 source "$SCRIPT"
+  DOMAIN="ops.example.com"; PUBLIC_IP="203.0.113.24"; LOG_FILE=/var/log/kwerft-install.log
+  SETUP_TOKEN_FILE="$BATS_TEST_TMPDIR/none"; CONFIG_FILE=""
+  kc() {
+    case "$*" in
+      *"{.spec.appsDomain}"*) printf '%s' "${SETTING_APPS:-}" ;;
+      *"{.spec.tls}"*) printf '%s' "${SETTING_TLS:-http01}" ;;
+      *"{.spec.dns.manageRecords}"*) printf '%s' "${SETTING_RECORDS:-}" ;;
+      *"{.status.consoleDomain}"*) printf '%s' "$DOMAIN" ;;
+    esac
+    return 0
+  }
+}
+
+@test "print_summary: apps DNS by hand or kept by Kwerft" {
+  summary_env
+  SETTING_APPS="apps.example.com"
+  run print_summary
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"DNS: *.apps.example.com → 203.0.113.24"* ]]
+  SETTING_TLS="dns01"; SETTING_RECORDS="true"
+  run print_summary
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"(wildcard certificate via Hetzner DNS) · DNS records kept by Kwerft"* ]]
+}
