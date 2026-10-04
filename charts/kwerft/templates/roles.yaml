@@ -144,3 +144,37 @@ rules:
   - apiGroups: [""]
     resources: [pods/ephemeralcontainers]
     verbs: [get, update, patch]
+---
+# Settings → apps domain with DNS-01: owners and admins store the DNS API
+# token. "patch" on this one Secret only: no get, so not even they can read it
+# back, and no create, because the Domain reconciler creates it empty. The
+# console runs in kwerft-system (install.sh), next to the Gateway's objects.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: kwerft:dns-token
+  namespace: kwerft-system
+  labels: {{- include "kwerft.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: [secrets]
+    resourceNames: [kwerft-dns-token]
+    verbs: [patch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: kwerft:dns-token
+  namespace: kwerft-system
+  labels: {{- include "kwerft.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: kwerft:dns-token
+subjects:
+  - apiGroup: rbac.authorization.k8s.io
+    kind: Group
+    name: kwerft:role:owner
+  - apiGroup: rbac.authorization.k8s.io
+    kind: Group
+    name: kwerft:role:admin

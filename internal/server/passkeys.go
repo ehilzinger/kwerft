@@ -23,13 +23,13 @@ const maxPasskeys = 20
 
 // newWebAuthn configures the relying party: the console hostname, accepted
 // from https://<host> unless PasskeyOrigins says otherwise (--dev).
-func newWebAuthn(cfg Config) (*webauthn.WebAuthn, error) {
+func newWebAuthn(cfg Config, domain string) (*webauthn.WebAuthn, error) {
 	origins := cfg.PasskeyOrigins
 	if len(origins) == 0 {
-		origins = []string{"https://" + cfg.ConsoleDomain}
+		origins = []string{"https://" + domain}
 	}
 	return webauthn.New(&webauthn.Config{
-		RPID:                  cfg.ConsoleDomain,
+		RPID:                  domain,
 		RPDisplayName:         "Kwerft",
 		RPOrigins:             origins,
 		AttestationPreference: protocol.PreferNoAttestation,
@@ -69,7 +69,7 @@ func (a *api) passkeyUser(ctx context.Context, u *store.User) (*passkeyUser, err
 }
 
 func (a *api) passkeysReady(w http.ResponseWriter) bool {
-	if a.mfa.webauthn == nil {
+	if a.passkeyRP() == nil {
 		writeError(w, http.StatusServiceUnavailable, "Passkeys are not available: the console was started without --console-domain.")
 		return false
 	}
@@ -115,7 +115,7 @@ func (a *api) loginPasskeyBegin(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusConflict, "This account has no passkeys. Use another way to confirm it's you.")
 		return
 	}
-	opts, data, err := a.mfa.webauthn.BeginLogin(pu, webauthn.WithUserVerification(protocol.VerificationPreferred))
+	opts, data, err := a.passkeyRP().BeginLogin(pu, webauthn.WithUserVerification(protocol.VerificationPreferred))
 	if err != nil {
 		a.internalError(w, r, err)
 		return
@@ -157,7 +157,7 @@ func (a *api) loginPasskeyFinish(w http.ResponseWriter, r *http.Request) {
 		a.internalError(w, r, err)
 		return
 	}
-	cred, err := a.mfa.webauthn.ValidateLogin(pu, *p.assertion, parsed)
+	cred, err := a.passkeyRP().ValidateLogin(pu, *p.assertion, parsed)
 	if err != nil || cred.Authenticator.CloneWarning {
 		a.secondFactorFailed(w, r, hash, u, methodPasskey, rejected)
 		return
@@ -181,7 +181,7 @@ func (a *api) passkeyLoginBegin(w http.ResponseWriter, r *http.Request) {
 	}
 	// User verification is required: the passkey stands in for the password
 	// and the second factor at once.
-	opts, data, err := a.mfa.webauthn.BeginDiscoverableLogin(webauthn.WithUserVerification(protocol.VerificationRequired))
+	opts, data, err := a.passkeyRP().BeginDiscoverableLogin(webauthn.WithUserVerification(protocol.VerificationRequired))
 	if err != nil {
 		a.internalError(w, r, err)
 		return
@@ -233,7 +233,7 @@ func (a *api) passkeyLoginFinish(w http.ResponseWriter, r *http.Request) {
 		owner = u
 		return a.passkeyUser(ctx, u)
 	}
-	_, cred, err := a.mfa.webauthn.ValidatePasskeyLogin(lookup, cer.data, parsed)
+	_, cred, err := a.passkeyRP().ValidatePasskeyLogin(lookup, cer.data, parsed)
 	if err != nil || cred.Authenticator.CloneWarning {
 		target := "passkey"
 		if owner != nil {
@@ -298,7 +298,7 @@ func (a *api) passkeyRegisterBegin(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusConflict, "This account has 20 passkeys, the most it can have. Remove one you no longer use first.")
 		return
 	}
-	opts, data, err := a.mfa.webauthn.BeginRegistration(pu,
+	opts, data, err := a.passkeyRP().BeginRegistration(pu,
 		webauthn.WithExclusions(webauthn.Credentials(pu.creds).CredentialDescriptors()),
 		webauthn.WithResidentKeyRequirement(protocol.ResidentKeyRequirementPreferred))
 	if err != nil {
@@ -338,7 +338,7 @@ func (a *api) passkeyRegisterFinish(w http.ResponseWriter, r *http.Request) {
 		a.internalError(w, r, err)
 		return
 	}
-	cred, err := a.mfa.webauthn.CreateCredential(pu, cer.data, parsed)
+	cred, err := a.passkeyRP().CreateCredential(pu, cer.data, parsed)
 	if err != nil {
 		a.cfg.Logger.Info("passkey registration rejected", "user", u.Email, "err", err)
 		writeError(w, http.StatusBadRequest, "The passkey could not be verified. Try again, or use another authenticator.")

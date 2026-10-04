@@ -77,6 +77,7 @@ func (a *api) register(mux *http.ServeMux) {
 	a.registerWorkloads(mux)
 	a.registerJobs(mux)
 	a.registerPods(mux)
+	a.registerSettings(mux)
 }
 
 // ---- setup -----------------------------------------------------------------
@@ -92,7 +93,8 @@ func (a *api) setupStatus(w http.ResponseWriter, r *http.Request) {
 		a.internalError(w, r, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]bool{"complete": done})
+	// The hostname is no secret to someone already on it; the wizard shows it.
+	writeJSON(w, http.StatusOK, map[string]any{"complete": done, "consoleDomain": a.consoleDomain()})
 }
 
 func (a *api) setupVerify(w http.ResponseWriter, r *http.Request) {

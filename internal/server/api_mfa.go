@@ -32,12 +32,16 @@ const (
 // their second factor and passkey ceremonies in progress. v1 runs a single
 // console replica, so this is enough; a restart only means signing in again.
 type mfa struct {
-	sealer   *auth.Sealer       // nil without a data key: TOTP is unavailable
-	webauthn *webauthn.WebAuthn // nil without a console domain: passkeys are unavailable
-	issuer   string             // shown in authenticator apps
+	sealer   *auth.Sealer // nil without a data key: TOTP is unavailable
+	issuer   string       // shown in authenticator apps
 	cookies  struct{ pending, passkey string }
 	attempts *limiter // second-factor attempts per account
 	confirm  *limiter // password or code confirmations per account
+
+	// The relying party follows the console's hostname; see passkeyRP.
+	rpMu     sync.Mutex
+	webauthn *webauthn.WebAuthn // nil without a console domain: passkeys are unavailable
+	rpID     string
 
 	mu         sync.Mutex
 	pending    map[string]*pendingLogin // pending cookie hash →
@@ -79,13 +83,43 @@ func newMFA(cfg Config, now func() time.Time) *mfa {
 		m.sealer = s
 	}
 	if cfg.ConsoleDomain != "" {
-		wa, err := newWebAuthn(cfg)
+		wa, err := newWebAuthn(cfg, cfg.ConsoleDomain)
 		if err != nil {
 			cfg.Logger.Error("passkeys are off", "err", err)
 		}
-		m.webauthn = wa
+		m.webauthn, m.rpID = wa, cfg.ConsoleDomain
 	}
 	return m
+}
+
+// consoleDomain is the hostname the console is served on now: Settings can
+// move it (ConsoleSettings.status), the flag is the fallback.
+func (a *api) consoleDomain() string {
+	if a.cfg.ActiveConsoleDomain != nil {
+		if d := a.cfg.ActiveConsoleDomain(); d != "" {
+			return d
+		}
+	}
+	return a.cfg.ConsoleDomain
+}
+
+// passkeyRP is the WebAuthn relying party for the console's current
+// hostname; nil when passkeys are unavailable. Passkeys are bound to the
+// hostname they were made on, so after the console moves only new ones work.
+func (a *api) passkeyRP() *webauthn.WebAuthn {
+	m, domain := a.mfa, a.consoleDomain()
+	m.rpMu.Lock()
+	defer m.rpMu.Unlock()
+	if domain == "" || domain == m.rpID {
+		return m.webauthn
+	}
+	wa, err := newWebAuthn(a.cfg, domain)
+	if err != nil {
+		a.cfg.Logger.Error("passkeys are off", "domain", domain, "err", err)
+		return m.webauthn
+	}
+	m.webauthn, m.rpID = wa, domain
+	return wa
 }
 
 // prune drops expired entries once the maps grow, so memory stays bounded.

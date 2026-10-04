@@ -58,9 +58,17 @@ type Config struct {
 	// DefaultDebugImage.
 	DebugImage string
 
+	// ActiveConsoleDomain returns the hostname the console is served on now
+	// (ConsoleSettings.status, which Settings can change); nil or "" means
+	// ConsoleDomain. Passkeys follow it.
+	ActiveConsoleDomain func() string
+
 	// podsHook lets tests swap Kubernetes and the limits of the pod
 	// endpoints (logs, shells) for fakes; see api_pods.go.
 	podsHook func(*podsAPI)
+	// settingsHook lets tests replace DNS lookups and the Hetzner API; see
+	// api_settings.go.
+	settingsHook func(*settingsAPI)
 }
 
 // New returns an http.Server ready to ListenAndServe.
