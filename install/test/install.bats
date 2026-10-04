@@ -472,6 +472,9 @@ summary_env() {
 mirror_env() {
   KWERFT_SOURCED=1 source "$SCRIPT"
   REGISTRIES_FILE="$BATS_TEST_TMPDIR/rancher/k3s/registries.yaml"
+  # The build AppArmor profile has tests of its own; keep it off the real
+  # /etc/apparmor.d on CI runners that have AppArmor.
+  BUILD_APPARMOR_FILE="$BATS_TEST_TMPDIR/no-apparmor/kwerft-buildkit"
   LOG_FILE="$BATS_TEST_TMPDIR/install.log"; : >"$LOG_FILE"
   SYSTEMCTL_LOG="$BATS_TEST_TMPDIR/systemctl.log"; : >"$SYSTEMCTL_LOG"
   ACTIVE=""
