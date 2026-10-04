@@ -170,6 +170,12 @@ func (r *VolumeReconciler) setFinalizer(ctx context.Context, vol *kwerftv1.Volum
 	return client.IgnoreNotFound(r.Apply(ctx, cfg, client.FieldOwner(finalizerFieldOwner), client.ForceOwnership))
 }
 
+// VolumeUsers is volumeUsers for the API, which asks with the user's client
+// so a delete can say right away who keeps the Volume.
+func VolumeUsers(ctx context.Context, c client.Client, namespace, name string) ([]string, error) {
+	return volumeUsers(ctx, c, namespace, name)
+}
+
 // volumeUsers lists who mounts Volume name in namespace: Apps, Schedules and
 // Tasks that have not finished, as "Kind/name", sorted. Objects already being
 // deleted do not count (their pods are going; pvc-protection covers those).

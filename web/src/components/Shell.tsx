@@ -9,6 +9,7 @@ const sections: { title?: string; items: NavItem[] }[] = [
   { items: [
     { to: "/", label: "Overview", icon: "grid" },
     { to: "/apps", label: "Apps", icon: "box" },
+    { to: "/jobs", label: "Jobs", icon: "clock" },
     { to: "/monitoring", label: "Monitoring", icon: "pulse" },
   ] },
   { title: "Infrastructure", items: [

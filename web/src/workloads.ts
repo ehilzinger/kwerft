@@ -56,7 +56,8 @@ export type AppSpec = {
   ports?: AppPort[];
   allowFrom?: string[];
   egress?: "none" | "https" | "all";
-  volumes?: { path: string; size: string; class?: string }[];
+  // A disk per replica (size), or a shared Volume of the project (volume, see jobs.ts).
+  volumes?: { path: string; size?: string; class?: string; volume?: string; readOnly?: boolean }[];
   healthCheck?: HealthCheck;
 };
 

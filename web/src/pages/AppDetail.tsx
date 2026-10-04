@@ -10,6 +10,7 @@ import { abilities, ago, sizes, workloads, type App, type Phase, type Revision }
 import { AppLogs } from "./AppLogs";
 import { AppSettings } from "./AppSettings";
 import { errorText } from "./Apps";
+import { RunNowDialog } from "./RunNowDialog";
 import "../styles/workloads.css";
 
 const route = getRouteApi("/authed/apps/$project/$name");
@@ -38,7 +39,7 @@ export function AppDetail() {
   const q = useQuery({ queryKey: key, queryFn: () => workloads.app(project, name), refetchInterval: 5000 });
 
   const [tab, setTab] = useState<Tab>("overview");
-  const [dialog, setDialog] = useState<"scale" | "delete" | { rollback: Revision }>();
+  const [dialog, setDialog] = useState<"scale" | "delete" | "run" | { rollback: Revision }>();
   const [notice, setNotice] = useState<{ kind: "info" | "bad"; text: string }>();
 
   const refresh = (app?: App) => {
@@ -72,7 +73,7 @@ export function AppDetail() {
   const app = q.data;
   const st = phaseOf(app);
   const git = app.spec.source.git;
-  const workload = (app.spec.volumes?.length ?? 0) > 0 ? "StatefulSet" : "Deployment";
+  const workload = app.spec.volumes?.some((v) => v.size) ? "StatefulSet" : "Deployment"; // shared Volumes keep a Deployment
   const denied = can.deploy ? undefined : "Your role can view this app but not change it.";
 
   return (
@@ -87,6 +88,9 @@ export function AppDetail() {
           </p>
         </div>
         <div className="acts">
+          <button className="btn" disabled={!can.deploy} title={denied} onClick={() => setDialog("run")}>
+            <Icon name="play" />Run as job
+          </button>
           <button className="btn" disabled={!can.deploy || restart.isPending} title={denied} onClick={() => restart.mutate()}>
             <Icon name="restart" />{restart.isPending ? "Restarting…" : "Restart"}
           </button>
@@ -132,6 +136,7 @@ export function AppDetail() {
         )}
       </div>
 
+      {dialog === "run" && <RunNowDialog source={{ kind: "app", project, app: name }} onClose={() => setDialog(undefined)} />}
       {dialog === "scale" && <ScaleDialog app={app} onClose={() => setDialog(undefined)} onDone={refresh} />}
       {dialog === "delete" && (
         <DeleteDialog app={app} onClose={() => setDialog(undefined)}
@@ -170,7 +175,7 @@ function Overview({ app, canDeploy, onRollback }: { app: App; canDeploy: boolean
             <dt>Health check</dt><dd>{hc ? (hc.http ? <code>HTTP GET {hc.http} :{hc.port}</code> : <code>TCP :{hc.port}</code>) : <span className="dim">None. A replica counts as ready once it starts.</span>}</dd>
             <dt>Environment</dt><dd>{app.spec.env?.length ? `${app.spec.env.length} variable${app.spec.env.length > 1 ? "s" : ""}` : <span className="dim">None</span>}</dd>
             <dt>Outbound</dt><dd>{{ none: "No internet access", https: "HTTPS to the internet", all: "Unrestricted" }[app.spec.egress ?? "https"]}</dd>
-            {(app.spec.volumes?.length ?? 0) > 0 && <><dt>Volumes</dt><dd>{app.spec.volumes!.map((v) => `${v.path} (${v.size})`).join(", ")}</dd></>}
+            {(app.spec.volumes?.length ?? 0) > 0 && <><dt>Volumes</dt><dd>{app.spec.volumes!.map((v) => (v.volume ? `${v.path} ← volume ${v.volume}${v.readOnly ? " (read-only)" : ""}` : `${v.path} (${v.size})`)).join(", ")}</dd></>}
           </dl>
         </div>
       </div>
@@ -225,7 +230,7 @@ function ScaleDialog({ app, onClose, onDone }: { app: App; onClose: () => void; 
     onSuccess: (a) => { onDone(a); onClose(); },
     onError: (e) => setError(errorText(e)),
   });
-  const stateful = (app.spec.volumes?.length ?? 0) > 0;
+  const stateful = !!app.spec.volumes?.some((v) => v.size);
   return (
     <Dialog title={`Scale ${app.metadata.name}`} onClose={onClose}
       onSubmit={() => {

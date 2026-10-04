@@ -5,6 +5,7 @@ import { ApiError, api } from "../api";
 import { CreateProjectDialog } from "../components/CreateProjectDialog";
 import { Field } from "../components/Field";
 import { Icon } from "../components/Icon";
+import { VolumeMounts, checkMounts, volumesOf, type Mount } from "../components/VolumeMounts";
 import { HOST_RE, NAME_RE, abilities, sizes, toYAML, workloads, type AppSpec, type Size } from "../workloads";
 import "../styles/workloads.css";
 
@@ -34,6 +35,7 @@ type Form = {
   domain: string;
   allowFrom: string;
   egress: "none" | "https" | "all";
+  mounts: Mount[];
 };
 
 type Problem = { step: Step; field: string; message: string };
@@ -61,6 +63,7 @@ function specOf(f: Form): AppSpec {
     ports: f.port.trim() ? [{ container: port, ...(f.exposure === "public" && f.domain.trim() ? { public: f.domain.trim().toLowerCase() } : {}) }] : [],
     allowFrom: f.allowFrom.split(/[\s,]+/).filter(Boolean),
     egress: f.egress,
+    ...(f.mounts.length ? { volumes: volumesOf(f.mounts) } : {}),
   };
   if (f.hc !== "none") spec.healthCheck = { port: Number(f.hcPort || f.port), ...(f.hc === "http" ? { http: f.hcPath.trim() || "/" } : {}) };
   return spec;
@@ -78,6 +81,8 @@ function check(f: Form): Problem | undefined {
   if (badName >= 0) return { step: "runtime", field: "env", message: `"${env.vars[badName]!.name}" is not a valid variable name.` };
   const validPort = (s: string) => Number.isInteger(Number(s)) && Number(s) >= 1 && Number(s) <= 65535;
   if (f.hc !== "none" && f.hcPort.trim() && !validPort(f.hcPort)) return { step: "runtime", field: "hcPort", message: "A port is a number from 1 to 65535." };
+  const mount = checkMounts(f.mounts);
+  if (mount) return { step: "runtime", field: `mounts[${mount[0]}]`, message: mount[1] };
   if (f.port.trim() && !validPort(f.port)) return { step: "network", field: "port", message: "A port is a number from 1 to 65535." };
   if (f.hc !== "none" && !f.hcPort.trim() && !f.port.trim()) return { step: "network", field: "port", message: "The health check connects to this port. Enter it, or set a health check port." };
   if (f.exposure === "public") {
@@ -95,6 +100,8 @@ function locate(field: string | undefined): { step: Step; field: string } | unde
   if (field === "spec.replicas") return { step: "runtime", field: "replicas" };
   if (field.startsWith("spec.env")) return { step: "runtime", field: "env" };
   if (field.startsWith("spec.healthCheck")) return { step: "runtime", field: "hcPort" };
+  const vol = /^spec\.volumes\[(\d+)\]/.exec(field);
+  if (vol) return { step: "runtime", field: `mounts[${vol[1]}]` };
   if (field.endsWith(".public")) return { step: "network", field: "domain" };
   if (field.startsWith("spec.ports")) return { step: "network", field: "port" };
   return undefined;
@@ -115,7 +122,7 @@ export function Deploy() {
   const [copied, setCopied] = useState(false);
   const [f, setF] = useState<Form>({
     name: "", project: search.project ?? "", image: "", pullSecret: "", size: "small", replicas: "1",
-    hc: "none", hcPath: "/healthz", hcPort: "", env: "", port: "", exposure: "cluster", domain: "", allowFrom: "", egress: "https",
+    hc: "none", hcPath: "/healthz", hcPort: "", env: "", port: "", exposure: "cluster", domain: "", allowFrom: "", egress: "https", mounts: [],
   });
   const set = <K extends keyof Form>(k: K, v: Form[K]) => {
     setF((prev) => ({ ...prev, [k]: v }));
@@ -170,6 +177,7 @@ export function Deploy() {
   }
 
   const err = (field: string) => (problem?.field === field ? problem.message : undefined);
+  const mountErr = /^mounts\[(\d+)\]$/.exec(problem?.field ?? "");
   const spec = specOf(form);
   const yaml = `apiVersion: kwerft.dev/v1alpha1\nkind: App\nmetadata:\n  name: ${f.name || "my-app"}\n  namespace: ${project || "my-project"}\nspec:\n${toYAML(spec, 1)}`;
 
@@ -261,6 +269,12 @@ export function Deploy() {
                 {err("env") ? <span id="d-env-note" className="field-error" role="alert">{err("env")}</span>
                   : <span id="d-env-note" className="hint">Stored in the App resource, readable by everyone with access. Secrets as encrypted references come later.</span>}
               </div>
+              <div className="field full">
+                <label>Shared volumes</label>
+                <VolumeMounts project={project} mounts={f.mounts} onChange={(v) => set("mounts", v)} idPrefix="d-vol"
+                  errorAt={mountErr ? [Number(mountErr[1]), problem!.message] : undefined} />
+                <span className="hint">Volumes of the project that other apps and jobs can mount too. The app stays a Deployment; its pods run on the volume's node.</span>
+              </div>
             </div></div>
           </>
         )}
@@ -320,7 +334,7 @@ export function Deploy() {
           </div>
         )}
 
-        {problem && !["name", "project", "image", "replicas", "env", "hcPort", "port", "domain"].includes(problem.field ?? "") && (
+        {problem && !["name", "project", "image", "replicas", "env", "hcPort", "port", "domain"].includes(problem.field ?? "") && !problem.field?.startsWith("mounts[") && (
           <div className="banner bad" role="alert"><Icon name="alert" /><span>{problem.message}</span></div>
         )}
 

@@ -15,6 +15,9 @@ const paths = {
   restart: <><path d="M13.5 8a5.5 5.5 0 11-1.6-3.9" /><path d="M13.5 2.5v3h-3" /></>,
   scale: <><path d="M2.5 13.5h11" /><rect x="3.5" y="8" width="2.5" height="5.5" rx=".5" /><rect x="10" y="3.5" width="2.5" height="10" rx=".5" /></>,
   trash: <><path d="M2.5 4.5h11M6 4.5V3h4v1.5M4 4.5l.7 9h6.6l.7-9" /></>,
+  clock: <><circle cx="8" cy="8" r="6" /><path d="M8 4.5V8l2.5 1.5" /></>,
+  disk: <><ellipse cx="8" cy="4" rx="5.5" ry="2" /><path d="M2.5 4v8c0 1.1 2.5 2 5.5 2s5.5-.9 5.5-2V4M2.5 8c0 1.1 2.5 2 5.5 2s5.5-.9 5.5-2" /></>,
+  play: <path d="M5 3.2v9.6L12.6 8z" />,
 } as const;
 
 export type IconName = keyof typeof paths;

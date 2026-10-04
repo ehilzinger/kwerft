@@ -3,6 +3,7 @@ import { Link, useNavigate } from "@tanstack/react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ApiError, api } from "../api";
 import { AppStatus } from "../components/AppStatus";
+import { AppsTabs } from "../components/AppsTabs";
 import { CreateProjectDialog } from "../components/CreateProjectDialog";
 import { Dialog } from "../components/Dialog";
 import { Icon } from "../components/Icon";
@@ -55,6 +56,7 @@ export function Apps() {
           {deployButton}
         </div>
       </div>
+      <AppsTabs current="apps" />
 
       {(apps.isError || projects.isError) && (
         <div className="banner bad" role="alert"><Icon name="alert" /><span>{errorText(apps.error ?? projects.error)}</span></div>

@@ -426,3 +426,41 @@ func TestFinishedTaskExpires(t *testing.T) {
 		return client.IgnoreNotFound(err)
 	})
 }
+
+func TestTaskCancelStopsTheRun(t *testing.T) {
+	requireEnvtest(t)
+	projectNamespace(t, "cancel")
+	ctx := context.Background()
+	task := createTask(t, "cancel", "long", imageTask("busybox:1.37"))
+	waitForJob(t, "cancel", "long")
+	jobGone := func() error {
+		job := &batchv1.Job{}
+		err := k8s.Get(ctx, client.ObjectKey{Namespace: "cancel", Name: "long"}, job)
+		if err == nil && job.DeletionTimestamp.IsZero() {
+			return fmt.Errorf("job still there")
+		}
+		return client.IgnoreNotFound(err) // or being deleted: no garbage collector in envtest
+	}
+
+	patch := client.MergeFrom(task.DeepCopy())
+	task.Annotations = map[string]string{kwerftv1.AnnotationCancelRequested: "dev@example.com"}
+	if err := k8s.Patch(ctx, task, patch); err != nil {
+		t.Fatal(err)
+	}
+	task = waitForTask(t, task, taskPhase(kwerftv1.TaskFailed))
+	c := meta.FindStatusCondition(task.Status.Conditions, ConditionReady)
+	if c == nil || c.Reason != "Cancelled" || !strings.Contains(c.Message, "dev@example.com") {
+		t.Errorf("ready = %+v, want Cancelled by the user", c)
+	}
+	if task.Status.CompletionTime == nil {
+		t.Error("no completion time")
+	}
+	eventually(t, jobGone)
+
+	// The cancelled Task is final: no new Job.
+	poke(t, task)
+	time.Sleep(500 * time.Millisecond)
+	if err := jobGone(); err != nil {
+		t.Errorf("after a cancel: %v", err)
+	}
+}
