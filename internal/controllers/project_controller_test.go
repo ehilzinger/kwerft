@@ -7,6 +7,7 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
+	rbacv1 "k8s.io/api/rbac/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -145,5 +146,36 @@ func TestProjectRefusesForeignNamespace(t *testing.T) {
 	}
 	if _, touched := ns.Labels[LabelProject]; touched {
 		t.Error("Kwerft labelled a namespace it does not own")
+	}
+}
+
+func TestProjectBindsPodAccessForConsoleRoles(t *testing.T) {
+	requireEnvtest(t)
+	ctx := context.Background()
+	p := createProject(t, "pod-access", kwerftv1.ProjectSpec{})
+
+	want := map[string][]string{
+		PodsReadRole: {"kwerft:role:owner", "kwerft:role:admin", "kwerft:role:developer", "kwerft:role:viewer"},
+		PodsExecRole: {"kwerft:role:owner", "kwerft:role:admin", "kwerft:role:developer"},
+	}
+	for role, groups := range want {
+		var rb rbacv1.RoleBinding
+		eventually(t, func() error { return k8s.Get(ctx, client.ObjectKey{Namespace: "pod-access", Name: role}, &rb) })
+		if rb.RoleRef.Kind != "ClusterRole" || rb.RoleRef.Name != role {
+			t.Errorf("%s: roleRef = %+v", role, rb.RoleRef)
+		}
+		var got []string
+		for _, s := range rb.Subjects {
+			if s.Kind != rbacv1.GroupKind {
+				t.Errorf("%s: subject %+v is not a group", role, s)
+			}
+			got = append(got, s.Name)
+		}
+		if fmt.Sprint(got) != fmt.Sprint(groups) {
+			t.Errorf("%s: subjects = %v, want %v", role, got, groups)
+		}
+		if !metav1.IsControlledBy(&rb, p) {
+			t.Errorf("%s: not controlled by the Project", role)
+		}
 	}
 }

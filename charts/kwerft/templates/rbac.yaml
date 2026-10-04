@@ -50,6 +50,13 @@ rules:
   - apiGroups: [rbac.authorization.k8s.io]
     resources: [roles, rolebindings]
     verbs: [get, list, watch, create, update, patch, delete, bind, escalate]
+  # The Project reconciler binds these in each project namespace (see
+  # roles.yaml). "bind" because the console does not itself hold everything
+  # they grant (metrics.k8s.io).
+  - apiGroups: [rbac.authorization.k8s.io]
+    resources: [clusterroles]
+    verbs: [bind]
+    resourceNames: ["kwerft:pods-read", "kwerft:pods-exec"]
   - apiGroups: [coordination.k8s.io]
     resources: [leases]
     verbs: [get, list, watch, create, update, patch]

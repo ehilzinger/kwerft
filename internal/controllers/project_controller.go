@@ -6,26 +6,46 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
+	rbacv1 "k8s.io/api/rbac/v1"
 	"k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	corev1ac "k8s.io/client-go/applyconfigurations/core/v1"
 	metav1ac "k8s.io/client-go/applyconfigurations/meta/v1"
 	networkingv1ac "k8s.io/client-go/applyconfigurations/networking/v1"
+	rbacv1ac "k8s.io/client-go/applyconfigurations/rbac/v1"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	kwerftv1 "github.com/ehilzinger/kwerft/api/v1alpha1"
+	"github.com/ehilzinger/kwerft/internal/kube"
 )
 
 const (
 	quotaName       = "kwerft-quota"
 	defaultDenyName = "kwerft-default-deny"
+
+	// ClusterRoles from the chart (roles.yaml) that each project binds for
+	// the console's role groups: reading pods, logs and pod metrics, and
+	// opening a shell. Binding them per namespace keeps every console role
+	// out of the platform's own pods.
+	PodsReadRole = "kwerft:pods-read"
+	PodsExecRole = "kwerft:pods-exec"
 )
 
+// podAccess lists which console roles get each pod ClusterRole in a project.
+var podAccess = []struct {
+	role  string
+	roles []string
+}{
+	{PodsReadRole, []string{"owner", "admin", "developer", "viewer"}},
+	{PodsExecRole, []string{"owner", "admin", "developer"}},
+}
+
 // ProjectReconciler turns a Project into a namespace with quotas, a Pod
-// Security level and, when isolated, a default-deny ingress policy that each
-// App then opens selectively.
+// Security level, RoleBindings that give the console's roles access to the
+// project's pods (logs, shell), and, when isolated, a default-deny ingress
+// policy that each App then opens selectively.
 //
 // TODO(phase-4): RoleBindings for project members.
 type ProjectReconciler struct {
@@ -103,6 +123,19 @@ func (r *ProjectReconciler) reconcile(ctx context.Context, p *kwerftv1.Project) 
 		return err
 	}
 
+	for _, b := range podAccess {
+		rb := rbacv1ac.RoleBinding(b.role, p.Name).
+			WithLabels(map[string]string{LabelManagedBy: ManagedByKwerft}).
+			WithOwnerReferences(owner).
+			WithRoleRef(rbacv1ac.RoleRef().WithAPIGroup(rbacv1.GroupName).WithKind("ClusterRole").WithName(b.role))
+		for _, role := range b.roles {
+			rb.WithSubjects(rbacv1ac.Subject().WithAPIGroup(rbacv1.GroupName).WithKind(rbacv1.GroupKind).WithName(kube.RoleGroup(role)))
+		}
+		if err := apply(ctx, r.Client, rb); err != nil {
+			return fmt.Errorf("apply role binding %s: %w", b.role, err)
+		}
+	}
+
 	if p.Spec.Isolated == nil || *p.Spec.Isolated {
 		deny := networkingv1ac.NetworkPolicy(defaultDenyName, p.Name).
 			WithLabels(map[string]string{LabelManagedBy: ManagedByKwerft}).
@@ -125,6 +158,7 @@ func (r *ProjectReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Owns(&corev1.Namespace{}).
 		Owns(&corev1.ResourceQuota{}).
 		Owns(&networkingv1.NetworkPolicy{}).
+		Owns(&rbacv1.RoleBinding{}).
 		Named("project").
 		Complete(r)
 }
