@@ -1,0 +1,55 @@
+/* Monitoring: alerts, alert rules, channels, and the Overview's "needs attention" feed. Classes mirror docs/blueprint.html. */
+.li .ico.bad { background: var(--bad-bg); color: var(--bad); }
+.li .ico.warn { background: var(--warn-bg); color: var(--warn); }
+.li .grow { flex: 1; min-width: 0; }
+.li .meta { margin-top: 2px; font-size: 12px; color: var(--faint); }
+.li .acts { margin-top: 8px; }
+.li .when { margin-left: auto; flex: none; font-size: 12px; color: var(--faint); font-family: var(--mono); white-space: nowrap; }
+.li .end { display: grid; justify-items: end; gap: 4px; }
+
+.alert-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
+.alert-head .seg { flex: none; }
+.empty .acts { justify-content: center; margin-top: 4px; }
+
+.rule-name { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; white-space: nowrap; }
+.t td.cond { min-width: 220px; max-width: 340px; }
+.t td.notify { min-width: 140px; }
+.t .firing { font-family: var(--mono); font-size: 12.5px; }
+.t .firing.on { color: var(--bad); font-weight: 600; }
+.t td.row-acts { white-space: nowrap; text-align: right; }
+.t .nm .sub { font-weight: 400; }
+
+.preview { display: grid; gap: 2px; padding: 10px 12px; border-radius: 8px; background: var(--surface-2); border: 1px solid var(--line-2); font-size: 13px; }
+.preview .k { font-size: 11.5px; color: var(--muted); text-transform: uppercase; letter-spacing: .06em; }
+.preview b { font-weight: 600; }
+.with-unit { display: flex; align-items: center; gap: 8px; }
+.with-unit .input { min-width: 0; }
+.with-unit .unit { color: var(--muted); font-size: 13px; white-space: nowrap; }
+.scope-pick { display: flex; flex-wrap: wrap; gap: 6px 14px; max-height: 168px; overflow-y: auto; padding: 2px; }
+.expr { white-space: pre-wrap; overflow-wrap: anywhere; }
+
+.chans { display: grid; }
+.chan { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 6px 16px; padding: 14px 16px; border-bottom: 1px solid var(--line-2); align-items: start; }
+.chan:last-child { border-bottom: 0; }
+.chan .head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.chan .head b { font-size: 13.5px; }
+.chan .meta { margin: 2px 0 0; font-size: 12.5px; color: var(--muted); overflow-wrap: anywhere; }
+.chan .acts { justify-content: flex-end; }
+.chan .meta.ok-text { color: var(--ok); }
+.chan .meta.form-error { color: var(--bad); }
+
+/* Sidebar: firing alerts next to Monitoring. The link contains its .sr text, so a phone's scrolling nav does not widen the page. */
+.nav a { position: relative; }
+.nav a .count { margin-left: auto; min-width: 18px; padding: 0 6px; border-radius: 999px; background: var(--bad); color: #fff; font-size: 11px; font-weight: 600; line-height: 18px; text-align: center; font-family: var(--mono); }
+
+/* Overview: needs attention. */
+.attention .li .acts { margin-top: 4px; }
+.attention .li .btn.ghost { padding-left: 0; }
+.all-clear { display: flex; align-items: center; gap: 10px; padding: 14px 16px; font-size: 13px; color: var(--muted); }
+.all-clear svg { width: 16px; height: 16px; color: var(--ok); flex: none; }
+
+@media (max-width: 760px) {
+  .chan { grid-template-columns: minmax(0, 1fr); }
+  .chan .acts { justify-content: flex-start; }
+  .nav a .count { margin-left: 4px; }
+}

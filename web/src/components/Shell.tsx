@@ -1,7 +1,9 @@
 import { Link, Outlet, useNavigate, useRouterState } from "@tanstack/react-router";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../api";
+import { alertKeys, alertsApi } from "../alerts";
 import { Icon, type IconName } from "./Icon";
+import "../styles/monitoring.css";
 
 type NavItem = { to: string; label: string; icon: IconName; adminOnly?: boolean };
 
@@ -34,6 +36,9 @@ export function Shell() {
   const user = useQuery({ queryKey: ["session"], queryFn: api.session });
   const queryClient = useQueryClient();
   const navigate = useNavigate();
+  // The Monitoring badge: firing alerts. Without alerting (yet), no badge.
+  const firing = useQuery({ queryKey: alertKeys.alerts("firing"), queryFn: () => alertsApi.alerts("firing"), refetchInterval: 15000, retry: false, enabled: !!user.data });
+  const firingCount = firing.data?.length ?? 0;
 
   async function signOut() {
     try {
@@ -56,6 +61,11 @@ export function Shell() {
                 <Link key={item.to} to={item.to} activeOptions={{ exact: item.to === "/" }}>
                   <Icon name={item.icon} />
                   {item.label}
+                  {item.to === "/monitoring" && firingCount > 0 && (
+                    <span className="count" title={`${firingCount} firing ${firingCount === 1 ? "alert" : "alerts"}`}>
+                      {firingCount}<span className="sr"> firing {firingCount === 1 ? "alert" : "alerts"}</span>
+                    </span>
+                  )}
                 </Link>
               ))}
             </div>
