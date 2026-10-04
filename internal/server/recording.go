@@ -178,7 +178,9 @@ func (rec *recording) event(at time.Time, code, data string) error {
 	var buf bytes.Buffer
 	enc := json.NewEncoder(&buf)
 	enc.SetEscapeHTML(false)
-	_ = enc.Encode(data) // invalid UTF-8 becomes U+FFFD
+	// Replace invalid UTF-8 ourselves: Go versions differ in how the JSON
+	// encoder writes it (an escaped \ufffd or the character itself).
+	_ = enc.Encode(validUTF8(data))
 	line := fmt.Sprintf("[%.6f, %q, %s]\n", max(at.Sub(rec.start).Seconds(), 0), code, bytes.TrimSuffix(buf.Bytes(), []byte("\n")))
 	if rec.size+int64(len(line)) > rec.r.maxBytes {
 		rec.full = true
@@ -303,6 +305,26 @@ func (rc *recorder) list(limit int) ([]recordingMeta, error) {
 
 // splitUTF8 splits b before an incomplete UTF-8 sequence at its end, which
 // the next read completes.
+// validUTF8 replaces every invalid byte with U+FFFD, one per byte, so a
+// recording shows how much garbage the terminal received.
+func validUTF8(s string) string {
+	if utf8.ValidString(s) {
+		return s
+	}
+	var b strings.Builder
+	b.Grow(len(s) + 8)
+	for i := 0; i < len(s); {
+		r, size := utf8.DecodeRuneInString(s[i:])
+		if r == utf8.RuneError && size == 1 {
+			b.WriteRune(utf8.RuneError)
+		} else {
+			b.WriteString(s[i : i+size])
+		}
+		i += size
+	}
+	return b.String()
+}
+
 func splitUTF8(b []byte) (complete, rest []byte) {
 	for i := len(b) - 1; i >= 0 && i >= len(b)-utf8.UTFMax; i-- {
 		if b[i] < utf8.RuneSelf {
