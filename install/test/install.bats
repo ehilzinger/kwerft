@@ -152,3 +152,30 @@ secret_expires() { printf '%s' "$1" | base64; }
   CONFIG_FILE=/root/kwerft.yaml
   [ "$(setup_token_state)" = "config" ]
 }
+
+@test "stage_handoff: a domain without a DNS record warns instead of failing" {
+  setup_state_env
+  mkdir() { :; }; chmod() { :; }   # CONF_DIR is readonly /etc/kwerft
+  DOMAIN="console.kwerft.test"; PUBLIC_IP="203.0.113.24"
+  getent() { return 2; }   # glibc: key not found
+  setup_token_state() { echo config; }
+  # Called directly, not via `run` or $(...): errexit must stay on (bash 3.2
+  # drops it inside command substitution), since errexit is what killed the stage.
+  stage_handoff >"$BATS_TEST_TMPDIR/out" 2>&1
+  output=$(<"$BATS_TEST_TMPDIR/out")
+  [[ "$output" == *"console.kwerft.test resolves to 'nothing', expected 203.0.113.24."* ]]
+  [[ "$output" == *"DNS unresolved · owner from config"* ]]
+}
+
+@test "detect_addresses: a missing --private-iface is a preflight error, not a crash" {
+  KWERFT_SOURCED=1 source "$SCRIPT"
+  PRIVATE_IFACE="eth9"
+  ip() { [[ "$*" == *"dev eth9"* ]] && return 1; return 0; }   # iproute2: device does not exist
+  # errexit has to be live inside the subshell, so no `run`, `||` or `!` here.
+  set +e
+  (set -e; detect_addresses) >"$BATS_TEST_TMPDIR/out" 2>&1
+  status=$?
+  set -e
+  [ "$status" -eq 10 ]
+  [[ "$(<"$BATS_TEST_TMPDIR/out")" == *"Interface eth9 has no IPv4 address"* ]]
+}
