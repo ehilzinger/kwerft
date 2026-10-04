@@ -78,8 +78,11 @@ func TestCELRejectsInvalidSpecs(t *testing.T) {
 		if err := k8s.Create(ctx, tk); err != nil {
 			t.Fatal(err)
 		}
+		// A merge patch: the Task reconciler writes status meanwhile, which
+		// would make an update conflict before validation even runs.
+		orig := tk.DeepCopy()
 		tk.Spec.Command = []string{"sh"}
-		expectInvalid(t, k8s.Update(ctx, tk), "a Task cannot be changed")
+		expectInvalid(t, k8s.Patch(ctx, tk, client.MergeFrom(orig)), "a Task cannot be changed")
 	})
 
 	t.Run("volume class is immutable and size only grows", func(t *testing.T) {
