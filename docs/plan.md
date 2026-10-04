@@ -19,6 +19,7 @@ the same plan in long form.
 | Name & hosting | **Kwerft, under the personal GitHub account `ehilzinger`** | Module `github.com/ehilzinger/kwerft`, image `ghcr.io/ehilzinger/kwerft`, chart `oci://ghcr.io/ehilzinger/charts/kwerft`. Can move to an organisation later. The installer is served from GitHub raw until Kwerft has its own domain (then `get.kwerft.dev`). |
 | Distribution (2026-10-04) | **Code private, container packages public** | Image and chart on GHCR are public so servers install without credentials; the install script is published to a small public companion repo (e.g. `ehilzinger/kwerft-install`), because raw files of a private repo are not reachable. |
 | Members (2026-10-04) | **Invites pulled forward into Phase 1** | Owner/admin invite by email with a role via a single-use link (no email sending yet); member list, role changes, removal, last-owner protection. Per-project roles stay in Phase 4. |
+| DNS-01 provider (2026-10-04) | **Hetzner DNS through the Cloud API, official `hetzner/cert-manager-webhook-hetzner` (0.9.0)** | The old DNS Console API (dns.hetzner.com) was shut down in May 2026; zones now live in the Cloud API and use a Cloud project token. The webhook's chart may read every Secret; the installer narrows it to the one token Secret. |
 | Test servers (2026-10-04) | **Hetzner Cloud now, a dedicated server later** | The e2e harness runs on Cloud servers with a test-project API token stored as a GitHub secret; the dedicated-server run follows when one is available. |
 
 ## Principles
@@ -115,7 +116,8 @@ Exit codes: 0 ok · 2 usage · 10 preflight · 20 network/DNS · 30 Kubernetes �
 | `Schedule` | Tasks on a cron schedule, scheduled by the reconciler (a CronJob could not create Tasks without RBAC in pods) | reconciler ✔ |
 | `Build` | Job running rootless BuildKit; pushes to zot; success creates an App revision | types ✔ |
 | `GitConnection` | GitHub App / GitLab / Gitea / deploy key credentials and webhooks | Phase 2 |
-| `Domain` | Gateway listener + certificate via cert-manager; Apps create one per public port; the older claim wins a hostname; max 62 per Gateway | reconciler ✔ (DNS records with DNS-01 later) |
+| `Domain` | Gateway listener + certificate via cert-manager, or the shared apps wildcard listener for names one level below the apps domain; Apps create one per public port; the older claim wins; hostname fixed after creation; max 59 per-host listeners | reconciler ✔ (Kwerft creating DNS records later) |
+| `ConsoleSettings` (singleton `kwerft`) | Console hostname (with a staged move), apps domain, certificate method (HTTP-01 per host or DNS-01 wildcard via Hetzner); the DNS token lives in the write-only Secret `kwerft-dns-token` | reconciler, API, UI ✔ |
 | `TrafficRule` | CiliumNetworkPolicy, with Hubble hit/drop counts | Phase 4 |
 | `FirewallRule` | Cilium host policy + Hetzner Cloud Firewall | Phase 4 |
 | `NodePool`, `Cluster` | Hetzner Cloud servers + cloud-init join; agent for remote clusters | Phase 5 |
@@ -203,7 +205,12 @@ Exit codes: 0 ok · 2 usage · 10 preflight · 20 network/DNS · 30 Kubernetes �
 - [x] Jobs API and UI (Tasks, Schedules, Volumes; run now from an App or Schedule; cancel keeps the record)
 - [x] Logs (live, SSE), shell (recorded), replicas table in App detail; Task logs in Task detail
 - [x] Domains: read-only list in the API and the Network → Domains & TLS tab
-- [ ] Recordings list on the Access page (API exists); shells for Tasks
+- [x] Shells for running Tasks (incl. the debug toolbox for images without a shell); Access › Recordings with a built-in player (xterm.js — asciinema-player needs `wasm-unsafe-eval`, which the CSP does not allow)
+- [x] Members: invites by single-use link (7 days, hashed, rate-limited), role changes effective immediately (also for Kubernetes and open shells/streams), removal ends sessions, last owner protected; admins manage everyone but owners. Access page: Members, Roles (matrix in `internal/access`, tested against the chart), Audit log (filters, paging)
+- [x] Settings: console hostname move (new listener and certificate first, old name redirects for 24 h, refused while a member would be locked out by host-bound passkeys) and an apps domain with a DNS-01 wildcard via Hetzner — one shared listener, no per-app DNS record; per-host listeners now cap at 59
+- [x] Release pipeline: tag `v*` → multi-arch image (ko) and chart on GHCR, stamped install/join scripts to the public `kwerft-install` repo, GitHub Release; signing opt-in (`SIGN_RELEASES`); see RELEASING.md
+- [ ] Cut the first release and do the one-time GitHub setup (packages public, install repo, token)
+- [ ] Exit criterion on a fresh Cloud server from the published release: app on HTTPS in < 10 min; a schedule restarts an app on success — then automate it as the e2e test
 - [ ] Not yet: admin reset of a member's second factors, data-key rotation, a per-org "require 2FA" setting (Phase 4); shared storage for pending logins before running more than one replica
 
 ### Phase 0 checklist
