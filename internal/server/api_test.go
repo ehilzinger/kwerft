@@ -38,7 +38,8 @@ type env struct {
 	clock  *fakeClock
 }
 
-func newEnv(t *testing.T) *env {
+// newEnv starts a console on a fresh database; opts adjust its Config.
+func newEnv(t *testing.T, opts ...func(*Config)) *env {
 	t.Helper()
 	st, err := store.Open(context.Background(), filepath.Join(t.TempDir(), "kwerft.db"))
 	if err != nil {
@@ -47,10 +48,14 @@ func newEnv(t *testing.T) *env {
 	t.Cleanup(func() { _ = st.Close() })
 	clock := &fakeClock{t: time.Now()}
 	tokens := setup.NewStaticTokenSource(testToken, 24*time.Hour)
-	srv := httptest.NewServer(Handler(Config{
+	cfg := Config{
 		UI: fstest.MapFS{"index.html": {Data: []byte("ui")}}, Logger: slog.New(slog.DiscardHandler),
 		Store: st, SetupTokens: tokens, InsecureCookies: true, Now: clock.Now,
-	}))
+	}
+	for _, o := range opts {
+		o(&cfg)
+	}
+	srv := httptest.NewServer(Handler(cfg))
 	t.Cleanup(srv.Close)
 	jar, _ := cookiejar.New(nil)
 	return &env{srv: srv, client: &http.Client{Jar: jar}, store: st, tokens: tokens, clock: clock}

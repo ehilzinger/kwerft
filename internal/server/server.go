@@ -35,6 +35,13 @@ type Config struct {
 	InsecureCookies bool
 	// Now is the clock; nil means time.Now (tests override it).
 	Now func() time.Time
+	// DataKey (32 bytes) encrypts secrets at rest, such as TOTP seeds. Without
+	// it, authenticator apps cannot be set up or checked.
+	DataKey []byte
+	// PasskeyOrigins are the browser origins passkeys are accepted from; empty
+	// means https://<ConsoleDomain>. The relying party ID is ConsoleDomain, and
+	// passkeys are off when that is empty.
+	PasskeyOrigins []string
 }
 
 // New returns an http.Server ready to ListenAndServe.
