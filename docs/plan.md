@@ -230,7 +230,7 @@ Work split and contracts: `docs/phase3.md`.
 - [x] W2 Logs: log search over VictoriaLogs confined to projects, history in the App Logs tab, Task/Build logs after their pod is gone
 - [x] W3 Alerting: AlertRule → VMRule, channels (Slack, email, webhook, ntfy) → Alertmanager, default rules, alerts and silences API (one VMAlertmanagerConfig per channel; install.sh turns off the operator's namespace matcher; ntfy through its own templating, no adapter; test sends go straight to the destination)
 - [ ] W4 Alerting UI: alerts, rules, channels; "needs attention" on Overview
-- [ ] Exit criterion on the test server: a crash-looping app alerts in Slack within 2 minutes, with a link to its logs
+- [x] Exit criterion on the test server (2026-10-04, ntfy.sh instead of Slack — same vmalert → Alertmanager path, different receiver): a crash-looping app deployed at 17:43:20 alerted on the phone at 17:44:17 (57 s), linking to its Logs tab. Needed: crash loops also fire on two restarts within 3 minutes, since Kubernetes reports CrashLoopBackOff only once the back-off is long (first try: ~5 min). Slack itself is still to be tried.
 
 ### Phase 2 checklist
 
