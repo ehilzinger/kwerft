@@ -15,6 +15,7 @@ import (
 
 	"golang.org/x/crypto/ssh"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -548,8 +549,13 @@ func (g *gitAPI) update(w http.ResponseWriter, r *http.Request) {
 	if parsed.spec.GitHubApp != nil && old.GitHubApp != nil && parsed.spec.GitHubApp.AppID == old.GitHubApp.AppID {
 		parsed.spec.GitHubApp.Slug = old.GitHubApp.Slug
 	}
-	gc.Spec = parsed.spec
-	if err := c.Update(ctx, &gc); err != nil {
+	if err := updateSpec(ctx, c, &gc, func(gc *kwerftv1.GitConnection) bool {
+		if !equality.Semantic.DeepEqual(gc.Spec, old) {
+			return false
+		}
+		gc.Spec = parsed.spec
+		return true
+	}); err != nil {
 		g.kubeError(w, r, p, "git.connection_update", name, connectionNotFound(name), err)
 		return
 	}

@@ -80,6 +80,7 @@ func (a *api) register(mux *http.ServeMux) {
 	a.registerSettings(mux)
 	a.registerBuilds(mux) // Git builds: list, logs, cancel (api_builds.go)
 	a.registerGit(mux)    // Git connections, checks, "Build now", webhooks
+	a.registerAlerts(mux) // alerts, silences, alert rules, notification channels
 }
 
 // ---- setup -----------------------------------------------------------------

@@ -88,6 +88,11 @@ type Config struct {
 	buildsHook func(*buildsAPI)
 	// gitHook lets tests adjust the Git API (limits); see api_git.go.
 	gitHook func(*gitAPI)
+	// alertsHook lets tests point the alerts API at fake Alertmanager and
+	// VictoriaMetrics servers and fake notification targets; see
+	// api_alerts.go. Production uses the in-cluster services
+	// (internal/observability).
+	alertsHook func(*alertsAPI)
 }
 
 // New returns an http.Server ready to ListenAndServe.

@@ -78,6 +78,12 @@ func TestMain(m *testing.M) {
 		fmt.Println("build infrastructure:", err)
 		os.Exit(1)
 	}
+	// Alerting: the observability namespace and the stack's VMAlertmanager
+	// (install.sh in real clusters).
+	if err := setupObservability(context.Background()); err != nil {
+		fmt.Println("observability:", err)
+		os.Exit(1)
+	}
 
 	mgr, err := ctrl.NewManager(cfg, ctrl.Options{
 		Scheme:                 NewScheme(),
@@ -113,6 +119,9 @@ func TestMain(m *testing.M) {
 		Ignore: func(b *kwerftv1.Build) bool { return b.Namespace == "gitstatus" },
 	}).SetupWithManager(mgr))
 
+	must((&AlertRuleReconciler{Client: mgr.GetClient(), ConsoleDomain: testConsoleDomain}).SetupWithManager(mgr))
+	must((&NotificationChannelReconciler{Client: mgr.GetClient(), APIReader: mgr.GetAPIReader(), Now: channelClock.Now}).SetupWithManager(mgr))
+
 	ctx, cancel := context.WithCancel(context.Background())
 	go func() { _ = mgr.Start(ctx) }()
 
@@ -125,6 +134,10 @@ func TestMain(m *testing.M) {
 // domainClock is the Domain reconciler's, separate from testClock so moving
 // it (the console's redirect grace period) does not make Schedules due.
 var domainClock = &offsetClock{}
+
+// channelClock is the NotificationChannel reconciler's (how long a new
+// channel may wait for its credentials).
+var channelClock = &offsetClock{}
 
 // testClock is the Task and Schedule reconcilers' clock: real time plus an
 // offset that tests move forward to make runs due.

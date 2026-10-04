@@ -13,6 +13,9 @@ import (
 // NotificationChannelStatus is written by the alerting reconciler.
 type NotificationChannelStatusApplyConfiguration struct {
 	ObservedGeneration *int64 `json:"observedGeneration,omitempty"`
+	// SecretSet says the channel's Secret holds what its type needs (the
+	// webhook URL, the SMTP password, the ntfy token); never the values.
+	SecretSet *bool `json:"secretSet,omitempty"`
 	// LastTest is when the console last sent a test notification, and how it went.
 	LastTest      *v1.Time                             `json:"lastTest,omitempty"`
 	LastTestError *string                              `json:"lastTestError,omitempty"`
@@ -30,6 +33,14 @@ func NotificationChannelStatus() *NotificationChannelStatusApplyConfiguration {
 // If called multiple times, the ObservedGeneration field is set to the value of the last call.
 func (b *NotificationChannelStatusApplyConfiguration) WithObservedGeneration(value int64) *NotificationChannelStatusApplyConfiguration {
 	b.ObservedGeneration = &value
+	return b
+}
+
+// WithSecretSet sets the SecretSet field in the declarative configuration to the given value
+// and returns the receiver, so that objects can be built by chaining "With" function invocations.
+// If called multiple times, the SecretSet field is set to the value of the last call.
+func (b *NotificationChannelStatusApplyConfiguration) WithSecretSet(value bool) *NotificationChannelStatusApplyConfiguration {
+	b.SecretSet = &value
 	return b
 }
 

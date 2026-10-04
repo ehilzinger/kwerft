@@ -207,6 +207,10 @@ type NotificationChannelSpec struct {
 type NotificationChannelStatus struct {
 	// +optional
 	ObservedGeneration int64 `json:"observedGeneration,omitempty"`
+	// SecretSet says the channel's Secret holds what its type needs (the
+	// webhook URL, the SMTP password, the ntfy token); never the values.
+	// +optional
+	SecretSet bool `json:"secretSet,omitempty"`
 	// LastTest is when the console last sent a test notification, and how it went.
 	// +optional
 	LastTest *metav1.Time `json:"lastTest,omitempty"`

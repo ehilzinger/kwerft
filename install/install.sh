@@ -851,11 +851,19 @@ stage_observability() {
   local retention=30d log_retention=14d
   (( LITE )) && { retention=7d; log_retention=3d; }
   helmk repo add vm https://victoriametrics.github.io/helm-charts/ --force-update >>"$LOG_FILE" 2>&1
+  # disableNamespaceMatcher: Kwerft routes alerts to notification channels
+  # with one VMAlertmanagerConfig per channel in kwerft-observability; by
+  # default the operator confines such a route to alerts whose namespace
+  # label is kwerft-observability, which would drop every project and node
+  # alert. Timing (crash loop in Slack < 2 min) needs no change here: vmalert
+  # evaluates every 20s (Kwerft's crash-loop group every 10s) and Kwerft's
+  # routes set their own group_wait (10s).
   helmk upgrade --install vm vm/victoria-metrics-k8s-stack --version "$VM_STACK_CHART_VERSION" \
     --namespace kwerft-observability --create-namespace --wait --timeout 15m \
     --set grafana.enabled=false \
     --set vmsingle.spec.retentionPeriod="$retention" \
     --set alertmanager.enabled=true \
+    --set alertmanager.spec.disableNamespaceMatcher=true \
     >>"$LOG_FILE" 2>&1 || die $EXIT_PLATFORM "VictoriaMetrics installation failed"
   helmk upgrade --install vlogs vm/victoria-logs-single --version "$VLOGS_CHART_VERSION" \
     --namespace kwerft-observability --wait --timeout 10m \

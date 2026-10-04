@@ -38,7 +38,15 @@ URLs, label names, secret names) and the Monitoring page skeleton
   `kwerft-builds`, `kube-system`, …) and node metrics are for owners and
   admins only; build logs are readable through the Build (as in Phase 2).
 - Custom alert expressions (`AlertRule.spec.expr`) are owners' and admins';
-  developers create rules from the built-in conditions only.
+  developers create rules from the built-in conditions only. As built: RBAC
+  lets developers write `alertrules` (roles.yaml); the console refuses them
+  any create, change or delete that involves a Custom rule. Notification
+  channels are owners' and admins'; everyone reads rules and channels (never
+  secrets). Silences: owners and admins any alert; developers alerts of
+  projects (the silence must match `namespace=<project>` exactly); viewers
+  none. Alerts are confined like metrics: alerts whose `namespace` is a
+  project the user reads are that project's, all others are platform
+  alerts for owners and admins.
 - Notification secrets: Secret `notify-<channel>` in `kwerft-observability`,
   write-only for owners and admins (patch, never get), with a Role the
   reconciler keeps (as for Git connections in Phase 2).
@@ -95,6 +103,50 @@ HTTPRoute/Service name Kwerft renders.
   (< 10 %), CertificateExpiring (< 14d), ScheduleFailing, BuildFailing.
   None has channels until an owner adds one.
 
+As built (W3):
+
+- Expressions per condition: `internal/alerting` (`Catalog` holds the
+  defaults; `Expr`, `Describe`). Pod conditions join `app` from
+  `kube_pod_labels{label_kwerft_dev_app}`; pods without that label still
+  alert (namespace/pod only) unless the rule is scoped to apps. Node alerts
+  get `node` from the exporter pod's `kube_pod_info`, else from `instance`.
+  Defaults (threshold / window / for): CrashLooping – / – / 0s (fires at
+  once, group evaluated every 10s; `max_over_time(…[5m])` already smooths the
+  CrashLoopBackOff flapping), Restarts 5 / 15m / 0s, MemoryHigh 90 % / – /
+  10m, CPUHigh 90 % / – / 15m, VolumeFillingUp 85 % / 7d / 10m,
+  NodeMemoryPressure 10 % / – / 10m, NodeDiskPressure 10 % / – / 5m,
+  CertificateExpiring – / 14d / 10m, ScheduleFailing – / none (optional) /
+  0s, BuildFailing 0s, HTTPErrorRate 5 % / 5m / 5m, HTTPLatency 1000 ms / 5m /
+  10m, Custom 0s. `GET /api/v1/alerts/conditions` serves them.
+- Rules that do not validate (a Custom expression is parsed with MetricsQL's
+  parser, as vmalert does) are left out of the VMRule and reported
+  (`InvalidExpression`): the operator rejects a VMRule as a whole when one
+  group fails. Deleting a default rule restores it with its defaults.
+- Routing: one `VMAlertmanagerConfig` `kwerft-<channel>` per channel, route
+  `kwerft_rule=~"<rules naming it>"`, `group_by [kwerft_rule, namespace,
+  app]`, `group_wait 10s`, `group_interval 1m`, `repeat_interval 4h`. The
+  operator (v0.75.0) adds `namespace="kwerft-observability"` to each such
+  route unless the VMAlertmanager has `disableNamespaceMatcher: true`
+  (`internal/controller/operator/factory/vmalertmanager/config.go`,
+  `buildRoute`); install.sh sets it, and channels report `NamespaceMatcher`
+  while it is missing. The receiver name carries the Secret's
+  resourceVersion so new credentials rebuild Alertmanager's config at once
+  (the operator does not watch Secrets).
+- ntfy: Alertmanager has no ntfy receiver and the operator's
+  VMAlertmanagerConfig none either; a webhook receiver posts Alertmanager's
+  JSON to `<server>/<topic>?tpl=yes&t=…&m=…`, which ntfy (2.9+) renders with
+  Kwerft's title and message templates; the token goes as
+  `Authorization: Bearer`. No adapter in the console.
+- Test sends go straight to the destination (Slack, SMTP with STARTTLS or
+  TLS on 465, webhook, ntfy) with the payload Alertmanager would send, so the
+  answer (e.g. Slack's `invalid_token`) reaches the user and
+  `status.lastTestError`.
+- Timing (installed stack, victoria-metrics-k8s-stack 0.95.0): vmagent
+  scrapes kube-state-metrics every 20s, vmalert evaluates with
+  `-rule.evalDelay` 30s (VictoriaMetrics' latency offset); Kwerft's crash-loop
+  group runs every 10s and fires at once, its route waits 10s: about 30–70s
+  from the first CrashLoopBackOff to Slack.
+
 ## Console API
 
 W1 (metrics):
@@ -137,6 +189,47 @@ ChannelInput = Channel minus status fields, plus url? | password? | token? (writ
 
 Resolved alerts come from the `ALERTS` series in VictoriaMetrics (last 24 h),
 since Alertmanager forgets them.
+
+As built (W3), additions and precise shapes; nothing above was removed:
+
+```
+GET    /api/v1/alerts                    no state: firing and silenced; resolved only with ?state=resolved
+GET    /api/v1/alerts/silences           → [Silence]   active and pending, confined like alerts
+GET    /api/v1/alerts/conditions         → [{condition, label, kind: app|volume|node|certificate|schedule|custom,
+                                             scoped, threshold?: {default, unit: count|percent|ms, min, max},
+                                             hasWindow, window? (default), for, severity, ownersOnly}]
+
+Alert   += silencedBy: string[]   (Alertmanager silence IDs; [] when not silenced)
+Rule    += description            (plain language with defaults filled in)
+Channel += webhook?: {}, rules: string[] (rules notifying it)
+Silence  = {id, matchers: [{name, value, isRegex, isEqual}], startsAt, endsAt, createdBy, comment,
+            state: active|pending|expired, project?}
+SilenceInput = {fingerprint} | {matchers}, duration: "1h" | "24h" | …, comment?
+               (fingerprint: every label of that alert, exactly; empty comment → "Silenced from the Kwerft console";
+                1m ≤ duration ≤ 30d; matchers need one non-empty exact matcher)
+```
+
+- `window` and `for` are Go durations both ways (`"15m0s"` out; `"1h"`,
+  `"168h"` and also `"7d"` in); empty or absent means the condition's
+  default. `threshold` is a number; absent means the default. Unknown fields
+  in inputs are ignored (status fields sent back are harmless).
+- Field errors (`{error, field}`, 400): `name`, `condition`, `threshold`,
+  `window`, `for`, `expr`, `severity`, `scope`, `scope.projects`,
+  `scope.apps`, `channels`; channels: `name`, `type`, `url`,
+  `slack.channel`, `email.to`, `email.from`, `email.smtpHost`,
+  `email.username`, `password`, `ntfy.server`, `ntfy.topic`, `token`;
+  silences: `fingerprint`, `matchers`, `duration`, `comment`.
+- Channel secrets: empty `url`/`password`/`token` on update keeps what is
+  stored; a channel's `type` cannot change (400 `type`); a Slack URL must be
+  https, a webhook URL http(s); an email `username` needs a `password`.
+- `DELETE …/channels/{name}` answers 409 `{error, rules}` while rules name
+  the channel. `DELETE …/rules/{name}` on a default rule restores it with its
+  defaults. `POST …/test` answers 200 with `{ok: false, message}` when the
+  destination refused (message is e.g. `Slack answered 403: invalid_token`).
+- 503 `{error}` when Alertmanager or VictoriaMetrics cannot be reached.
+- Rule writes: owners, admins, developers (not Custom); channel writes and
+  test sends: owners and admins; silences: owners, admins, developers
+  (projects only).
 
 W4 shows: Alerts (Firing / Silenced / Resolved, silence 1 h / 24 h, links to
 logs and the app), Alert rules (table + editor per condition with sensible
