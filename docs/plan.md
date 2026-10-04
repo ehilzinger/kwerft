@@ -13,6 +13,7 @@ the same plan in long form.
 | Users | **One team** | Single organization with projects and roles; no tenant isolation in v1. Records carry an organization ID so tenancy can be added later without a migration. |
 | Sources | **Registry images and Git repositories in v1** | Adds Phase 2: the `Build` resource, rootless BuildKit, Railpack, an in-cluster zot registry. |
 | License | **To be decided before the public beta** | All dependencies chosen so far are Apache-2.0 or MIT, so every option stays open. No LICENSE file until then. |
+| Jobs | **One-off and scheduled jobs in v1** (`Task`, `Schedule`) | Added to Phase 1. Real workloads are more than long-running services: the first pilot (hatchure, 2026-10-04) has eight cron jobs and a dozen jobs started by hand next to its six services. |
 | Name & hosting | **Kwerft, under the personal GitHub account `ehilzinger`** | Module `github.com/ehilzinger/kwerft`, image `ghcr.io/ehilzinger/kwerft`, chart `oci://ghcr.io/ehilzinger/charts/kwerft`. Can move to an organisation later. The installer is served from GitHub raw until Kwerft has its own domain (then `get.kwerft.dev`). |
 
 ## Principles
@@ -104,6 +105,8 @@ Exit codes: 0 ok · 2 usage · 10 preflight · 20 network/DNS · 30 Kubernetes �
 |---|---|---|
 | `Project` (cluster-scoped) | Namespace, quota, Pod Security level, default-deny policy; RoleBindings in Phase 4 | reconciler ✔ |
 | `App` | Deployment, or StatefulSet when it has volumes; Service, HTTPRoute per public port, NetworkPolicy; source = image **or** Git | reconciler ✔ (HPA later) |
+| `Task` | Job: a one-off run of an image with App's source, command, env, volumes and resources; "run now" with env overrides | Phase 1 |
+| `Schedule` | CronJob creating Tasks on a cron schedule | Phase 1 |
 | `Build` | Job running rootless BuildKit; pushes to zot; success creates an App revision | types ✔ |
 | `GitConnection` | GitHub App / GitLab / Gitea / deploy key credentials and webhooks | Phase 2 |
 | `Domain` | Gateway listener, Certificate, DNS record | Phase 1 |
@@ -111,6 +114,37 @@ Exit codes: 0 ok · 2 usage · 10 preflight · 20 network/DNS · 30 Kubernetes �
 | `FirewallRule` | Cilium host policy + Hetzner Cloud Firewall | Phase 4 |
 | `NodePool`, `Cluster` | Hetzner Cloud servers + cloud-init join; agent for remote clusters | Phase 5 |
 | `BackupPlan`, `AlertRule` | Velero Schedule; VMRule + Alertmanager route | Phases 3, 6 |
+
+### Jobs (`Task`, `Schedule`)
+
+- **Same shape as an App.** A Task takes the App spec's source (image or
+  Git), command, env, volumes, resources and egress, minus ports, replicas
+  and health checks, so the console form and the reconciler code are shared.
+  It runs under the project's quota, Pod Security level and default-deny
+  policy like any App.
+- **Task** fields beyond that: `timeout` (`activeDeadlineSeconds`),
+  `retries` (`backoffLimit`, default 0), `onSuccess.restart` (Apps in the
+  same project to roll out once it succeeds, e.g. a server that has to
+  reopen a file the job replaced). The reconciler does the restart, so a job
+  never needs RBAC of its own. Finished Tasks are kept for their logs
+  (`ttlSecondsAfterFinished`, default 7 days).
+- **Schedule** fields: `schedule` (cron), `timeZone` (default the server's),
+  `suspend`, `concurrency` (`Forbid` by default, `Replace`, `Allow`), and
+  `history` (last N successful and failed Tasks). Each run is a Task, so a
+  scheduled run and a manual one look the same in the console. Status
+  carries `lastSuccessTime` and `lastFailureTime`, exported as metrics so an
+  alert can fire on a stale schedule (Phase 3).
+- **Run now:** the console and API create a Task from an App or a Schedule,
+  with env overrides (`FORCE=1`, `DRY_RUN=1`), impersonating the user like
+  every other write.
+- **Console:** a Jobs tab per project listing Schedules (next run, last
+  result, suspend toggle) and Tasks (status, duration, exit code, live log).
+- **Batch priority:** Tasks run in a `kwerft-batch` PriorityClass below Apps,
+  so under memory pressure the scheduler and kubelet pick a job before a
+  service.
+- **Depends on** volumes that Apps and Tasks can share (today each App owns
+  its PVCs through a StatefulSet template); without them a job cannot hand
+  data to a running service.
 
 ## Security model
 
@@ -127,7 +161,7 @@ Exit codes: 0 ok · 2 usage · 10 preflight · 20 network/DNS · 30 Kubernetes �
 | Phase | Weeks | Scope | Exit criterion |
 |---|---|---|---|
 | 0 Foundations | 1–2 | Repo, CI, chart, CRDs, installer stages 1–4 on Cloud **and** dedicated, memory budget | Nightly CI installs on a fresh Cloud server; weekly on a dedicated test server |
-| 1 Installer & deploy MVP | 3–8 | Full installer, setup wizard, auth, Project/App/Domain reconcilers, apps UI, logs, shell, rollback | Fresh server → app on HTTPS in < 10 min |
+| 1 Installer & deploy MVP | 3–8 | Full installer, setup wizard, auth, Project/App/Domain/Task/Schedule reconcilers, apps and jobs UI, logs, shell, rollback | Fresh server → app on HTTPS in < 10 min; a scheduled job runs and restarts an app on success |
 | 2 Builds from Git | 9–12 | GitConnection, webhooks, Build reconciler, BuildKit, Railpack, zot, auto-deploy, commit checks | Push to main live in < 3 min with build log and commit check |
 | 3 Monitoring & logs | 13–15 | VictoriaMetrics/Logs, charts, log search, alerts, notification channels | Crash loop alerts in Slack in < 2 min — **usable by the team** |
 | 4 Network & access | 16–19 | TrafficRules + Hubble, server firewall + Cloud Firewall sync, members, SSO, tokens, audit | Automated RBAC suite proves project isolation |
@@ -155,7 +189,7 @@ Exit codes: 0 ok · 2 usage · 10 preflight · 20 network/DNS · 30 Kubernetes �
 
 - **Single node is a single point of failure** — say so in the UI; etcd snapshots to Object Storage from day one.
 - **Overhead on small servers** — measured at ≈ 2.4 GB; hold it in CI; `--lite` profile for 4 GB servers.
-- **Builds compete with apps for memory** — Jobs with limits, one at a time on small nodes, optional build node pool.
+- **Builds and Tasks compete with apps for memory** — Jobs with limits, one build at a time on small nodes, Tasks in the lower `kwerft-batch` priority class, optional build node pool.
 - **Cloud vs. dedicated asymmetry** — Robot cannot create servers on demand; vSwitch ↔ Cloud Network coupling is per network zone; otherwise WireGuard over public IPs (requires the console to open node ports per joiner — Phase 5).
 - **Firewall lock-out** — caller-IP check, auto-revert timer, `install.sh --reset-firewall`.
 - **Upstream churn** — pinned release manifest; upgrade tests from N-1 and N-2.

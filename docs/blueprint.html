@@ -115,6 +115,7 @@ code,.mono{font-family:var(--mono);font-size:.92em}
 .search svg{width:14px;height:14px}
 .kbd{margin-left:auto;font-family:var(--mono);font-size:11px;border:1px solid var(--line);border-radius:4px;padding:0 5px;color:var(--muted)}
 .view{padding:20px 22px 28px;display:grid;gap:16px;align-content:start}
+[hidden]{display:none!important}
 .ph{display:flex;align-items:flex-end;justify-content:space-between;gap:12px;flex-wrap:wrap}
 .ph h2{margin:0;font-size:20px;font-weight:600;letter-spacing:-.01em;display:flex;align-items:center;gap:10px}
 .ph .sub{margin:2px 0 0;color:var(--muted);font-size:13px}
@@ -369,6 +370,7 @@ pre.mermaid{background:var(--surface);border:1px solid var(--line);border-radius
     <symbol id="i-check" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 8.5l3.2 3L13 4.5"/></symbol>
     <symbol id="i-disk" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><ellipse cx="8" cy="4" rx="5.5" ry="2"/><path d="M2.5 4v8c0 1.1 2.5 2 5.5 2s5.5-.9 5.5-2V4"/></symbol>
     <symbol id="i-rocket" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M9.5 2.5c2.5-.8 4-.3 4 0s.8 1.5 0 4l-4.5 4.5-4-4z"/><path d="M5 7L2.5 7.5 4 5.5h3M9 11l-.5 2.5 2-1.5V9"/></symbol>
+    <symbol id="i-clock" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="8" r="6"/><path d="M8 4.5V8l2.5 1.5"/></symbol>
     <symbol id="i-key" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><circle cx="5" cy="10.5" r="3"/><path d="M7.2 8.3L13.5 2M11 4.5l1.8 1.8"/></symbol>
   </defs>
 </svg>
@@ -483,6 +485,7 @@ pre.mermaid{background:var(--surface);border:1px solid var(--line);border-radius
           <nav class="nav" aria-label="Console">
             <button data-screen="overview" aria-current="page"><svg><use href="#i-grid"/></svg>Overview</button>
             <button data-screen="apps"><svg><use href="#i-box"/></svg>Apps<span class="count bad">1</span></button>
+            <button data-screen="jobs"><svg><use href="#i-clock"/></svg>Jobs<span class="count bad">1</span></button>
             <button data-screen="monitoring"><svg><use href="#i-pulse"/></svg>Monitoring<span class="count bad">2</span></button>
             <span class="grp">Infrastructure</span>
             <button data-screen="clusters"><svg><use href="#i-server"/></svg>Clusters &amp; nodes</button>
@@ -767,6 +770,45 @@ S3_BUCKET=acme-invoices</textarea><span class="hint">Mark a variable as secret t
             </div>
           </section>
 
+          <!-- JOBS -->
+          <section class="view" data-view="jobs" hidden>
+            <div class="ph"><div><h2>Jobs</h2><p class="sub">Scheduled and one-off runs · same image, env and volumes as an app · times in Europe/Berlin</p></div><div class="acts"><button class="btn"><svg><use href="#i-plus"/></svg>New schedule</button><button class="btn pri">Run task</button></div></div>
+            <div class="banner warn"><svg><use href="#i-alert"/></svg><span><b>search-reindex failed last night.</b> Exit code 1 after 4m 12s; the previous index is still served. The next run is tonight at 02:30.</span><button class="btn sm">Run now</button></div>
+            <div class="card" style="overflow:hidden"><div class="ch-h"><h3>Schedules</h3><div class="seg" data-seg><button aria-pressed="true">All projects</button><button>storefront</button><button>internal</button></div></div>
+              <table class="t"><thead><tr><th>Schedule</th><th>Image</th><th>Runs</th><th>Next run</th><th>Last run</th><th>On success</th><th>Active</th></tr></thead><tbody>
+                <tr><td style="white-space:nowrap"><span class="nm">db-backup</span><span class="sub">storefront</span></td><td class="mono">ghcr.io/acme/ops:1.4.0</td><td><span class="mono">15 1 * * *</span><span class="sub">daily at 01:15</span></td><td>tonight 01:15</td><td><span class="pill ok">Succeeded</span><span class="sub">6m 40s · 9 h ago</span></td><td class="dim">—</td><td><span class="toggle on"><i></i></span></td></tr>
+                <tr><td style="white-space:nowrap"><span class="nm">search-reindex</span><span class="sub">storefront</span></td><td class="mono">git · acme/api@9e01d7c</td><td><span class="mono">30 2 * * *</span><span class="sub">daily at 02:30</span></td><td>tonight 02:30</td><td><span class="pill bad">Failed</span><span class="sub">exit 1 · 7 h ago</span></td><td>restart <b>api</b></td><td><span class="toggle on"><i></i></span></td></tr>
+                <tr><td style="white-space:nowrap"><span class="nm">sitemap</span><span class="sub">storefront</span></td><td class="mono">ghcr.io/acme/web:2.14.1</td><td><span class="mono">0 */6 * * *</span><span class="sub">every 6 hours</span></td><td>in 2 h 10 min</td><td><span class="pill ok">Succeeded</span><span class="sub">38 s · 3 h 50 min ago</span></td><td>restart <b>web-frontend</b></td><td><span class="toggle on"><i></i></span></td></tr>
+                <tr><td style="white-space:nowrap"><span class="nm">invoice-archive</span><span class="sub">internal</span></td><td class="mono">ghcr.io/acme/invoice-renderer:0.3.0</td><td><span class="mono">0 4 1 * *</span><span class="sub">monthly, the 1st at 04:00</span></td><td>1 Nov 04:00</td><td><span class="pill ok">Succeeded</span><span class="sub">22m 05s · 3 d ago</span></td><td class="dim">—</td><td><span class="toggle on"><i></i></span></td></tr>
+                <tr><td style="white-space:nowrap"><span class="nm">geo-import</span><span class="sub">internal</span></td><td class="mono">ghcr.io/acme/geo-import:2.0.1</td><td><span class="mono">0 3 2 * *</span><span class="sub">monthly, the 2nd at 03:00</span></td><td class="dim">suspended</td><td><span class="pill mute">Succeeded</span><span class="sub">3 h 41m · 2 d ago</span></td><td class="dim">—</td><td><span class="toggle"><i></i></span></td></tr>
+              </tbody></table>
+            </div>
+            <div class="g2">
+              <div style="display:grid;gap:16px;align-content:start">
+                <div class="card" style="overflow:hidden"><h3>Recent runs</h3>
+                  <table class="t"><thead><tr><th>Task</th><th>Started by</th><th>Started</th><th class="num">Duration</th><th>Status</th></tr></thead><tbody>
+                    <tr><td><span class="nm">reindex-manual-7k2</span><span class="sub">search-reindex · <span class="mono">FULL=1</span></span></td><td>Jonas Petrov · run now</td><td class="dim">2 min ago</td><td class="num">2m 03s</td><td><span class="pill info">Running</span></td></tr>
+                    <tr><td><span class="nm">search-reindex-29341</span><span class="sub">search-reindex</span></td><td class="dim">schedule</td><td class="dim">02:30</td><td class="num">4m 12s</td><td><span class="pill bad">Failed</span></td></tr>
+                    <tr><td><span class="nm">db-backup-29341</span><span class="sub">db-backup</span></td><td class="dim">schedule</td><td class="dim">01:15</td><td class="num">6m 40s</td><td><span class="pill ok">Succeeded</span></td></tr>
+                    <tr><td><span class="nm">sitemap-29340</span><span class="sub">sitemap · restarted web-frontend</span></td><td class="dim">schedule</td><td class="dim">00:00</td><td class="num">38 s</td><td><span class="pill ok">Succeeded</span></td></tr>
+                  </tbody></table>
+                </div>
+<div class="logs" style="min-height:0"><span class="ts">reindex-manual-7k2 · search-reindex · run now by Jonas Petrov · FULL=1 · limits 2 vCPU / 4 GiB · priority kwerft-batch</span>
+<span class="ts">10:41:02</span> reading products from postgres-main <span class="p2">ok</span> <span class="ts">48,210 rows</span>
+<span class="ts">10:41:39</span> building index into /data/index.next       <span class="wn">running</span> <span class="ts">61%</span>
+<span class="ts">on success → mv index.next index · restart api (revision 42 stays)</span></div>
+              </div>
+              <div class="card"><h3>Run task</h3><div class="bd fields">
+                <div class="field full"><label for="j-from">From</label><select class="input" id="j-from"><option>Schedule search-reindex</option><option>App api</option><option>New image…</option></select><span class="hint">Same image, command, env and volumes as the schedule</span></div>
+                <div class="field full"><label for="j-env">Override env (KEY=value, one per line)</label><textarea class="input mono" id="j-env" rows="2">FULL=1</textarea></div>
+                <div class="field"><label for="j-to">Timeout</label><input class="input mono" id="j-to" value="1h"></div>
+                <div class="field"><label for="j-re">Retries</label><input class="input mono" id="j-re" value="0"></div>
+                <div class="field full"><label>On success</label><span class="toggle on"><i></i>Restart api once the task succeeds</span></div>
+                <div class="field full"><button class="btn pri">Run now</button><span class="hint">Runs as you; recorded in the audit log</span></div>
+              </div></div>
+            </div>
+          </section>
+
           <!-- MONITORING -->
           <section class="view" data-view="monitoring" hidden>
             <div class="ph"><div><h2>Monitoring</h2><p class="sub">Alerts, resource usage and notification rules · metrics kept 30 days, logs 14 days</p></div><div class="acts"><button class="btn">Explore metrics</button><button class="btn">Explore logs</button></div></div>
@@ -984,7 +1026,7 @@ S3_BUCKET=acme-invoices</textarea><span class="hint">Mark a variable as secret t
             <div class="stack">
               <div class="lay user"><span class="ln">Clients</span><span class="tag">browser</span><span class="tag">kwerftctl CLI</span><span class="tag">CI with API token</span><span class="tag">kubectl (scoped kubeconfig)</span></div>
               <div class="lay"><span class="ln">Edge · 80/443</span><span class="tag">Traefik via Gateway API</span><span class="tag">cert-manager + Let's Encrypt</span></div>
-              <div class="lay kwerft"><span class="ln">Kwerft control plane · namespace kwerft-system</span><span class="tag">REST + WebSocket API</span><span class="tag">reconcilers for App, Project, Rule…</span><span class="tag">embedded React UI</span><span class="tag">SQLite: users, sessions, audit</span><span class="tag">Hetzner API client</span></div>
+              <div class="lay kwerft"><span class="ln">Kwerft control plane · namespace kwerft-system</span><span class="tag">REST + WebSocket API</span><span class="tag">reconcilers for App, Project, Task, Rule…</span><span class="tag">embedded React UI</span><span class="tag">SQLite: users, sessions, audit</span><span class="tag">Hetzner API client</span></div>
               <div class="lay"><span class="ln">Platform services</span><span class="tag">VictoriaMetrics + vmagent</span><span class="tag">VictoriaLogs + Vector</span><span class="tag">vmalert → Alertmanager</span><span class="tag">Hubble relay</span><span class="tag">Velero</span><span class="tag">BuildKit builders</span><span class="tag">zot registry</span><span class="tag">system-upgrade-controller</span></div>
               <div class="lay"><span class="ln">Kubernetes</span><span class="tag">k3s server · embedded etcd</span><span class="tag">Cilium eBPF dataplane</span><span class="tag">local-path / hcloud CSI</span></div>
               <div class="lay host"><span class="ln">Host</span><span class="tag">Ubuntu 24.04 / 26.04 LTS</span><span class="tag">nftables baseline</span><span class="tag">chrony</span><span class="tag">unattended-upgrades</span></div>
@@ -1100,6 +1142,8 @@ curl -fsSL https://get.kwerft.dev | sudo bash -s -- --config /root/kwerft.yaml -
           <div class="tw"><table class="t"><thead><tr><th>Resource</th><th>Becomes</th><th>Notes</th></tr></thead><tbody>
             <tr><td>Project</td><td>Namespace, ResourceQuota, LimitRange, RoleBindings, default-deny policy</td><td>Pod Security “baseline” by default, “restricted” opt-in.</td></tr>
             <tr><td>App</td><td>Deployment or StatefulSet, Service, HTTPRoute, PVCs, HPA, CiliumNetworkPolicy</td><td>Source is an image or a Git repository. Stores revisions for one-click rollback. Compose import creates one App per service.</td></tr>
+            <tr><td>Task</td><td>Job</td><td>A one-off run with an App's source, command, env, volumes and resources. “Run now” with env overrides; timeout, retries, and apps to restart once it succeeds, done by the reconciler so the job needs no RBAC.</td></tr>
+            <tr><td>Schedule</td><td>CronJob creating Tasks</td><td>Cron expression, time zone, suspend, no overlapping runs by default, history. Last success and failure times become metrics, so a stale schedule can alert.</td></tr>
             <tr><td>Build</td><td>Job running rootless BuildKit, image in the zot registry</td><td>Created by push webhooks or “Build now”; success creates a new App revision. Reports status back to the commit.</td></tr>
             <tr><td>Domain</td><td>Certificate, DNS record (when DNS-01), Gateway listener</td><td>Redirects, HSTS, rate limits, optional SSO gate (forward-auth to Kwerft).</td></tr>
             <tr><td>TrafficRule</td><td>CiliumNetworkPolicy</td><td>Expressed in app/project terms; the UI shows Hubble hit and drop counts per rule.</td></tr>
@@ -1155,8 +1199,8 @@ curl -fsSL https://get.kwerft.dev | sudo bash -s -- --config /root/kwerft.yaml -
               <ul><li>Monorepo, CI, release pipeline, Helm chart skeleton, CRD scaffolding (kubebuilder).</li><li>Installer stages 1–4 on a Hetzner Cloud server <em>and</em> a dedicated server; measure the memory budget.</li><li>Design tokens and component library in the web app.</li></ul>
               <div class="exit"><b>Exit:</b> a nightly CI job creates a Hetzner Cloud server, runs the script, gets a healthy k3s + Cilium, and destroys the server; a weekly job does the same on a dedicated test server reset through the Robot API.</div></div>
             <div class="phase"><div class="h"><b>Phase 1 · Installer &amp; deploy MVP</b><span>weeks 3–8</span></div>
-              <ul><li>Full installer incl. platform detection, TLS and setup token; first-run wizard; owner account with passkey/TOTP.</li><li>Project and App reconcilers; deploy from image; env and secrets; domains with automatic TLS.</li><li>Apps list, app detail, live logs, shell, restart/scale/rollback; YAML export.</li></ul>
-              <div class="exit"><b>Exit:</b> fresh server → app on a public HTTPS domain in under 10 minutes, without a terminal after the install command.</div></div>
+              <ul><li>Full installer incl. platform detection, TLS and setup token; first-run wizard; owner account with passkey/TOTP.</li><li>Project and App reconcilers; deploy from image; env and secrets; domains with automatic TLS.</li><li>Task and Schedule reconcilers: one-off and cron jobs from the same spec as an App, “run now”, restart apps on success, jobs in a lower priority class than apps.</li><li>Apps list, app detail, Jobs screen, live logs, shell, restart/scale/rollback; YAML export.</li></ul>
+              <div class="exit"><b>Exit:</b> fresh server → app on a public HTTPS domain in under 10 minutes, without a terminal after the install command; a scheduled job runs and restarts an app on success.</div></div>
             <div class="phase"><div class="h"><b>Phase 2 · Builds from Git</b><span>weeks 9–12</span></div>
               <ul><li>Git connections: GitHub App, GitLab, Gitea/Forgejo, or any Git URL with a deploy key; push webhooks.</li><li>Build resource and controller: rootless BuildKit Jobs, Dockerfile or Railpack, layer cache on a volume, live build logs.</li><li>In-cluster zot registry with per-app retention; auto-deploy on push; build status reported back to the commit.</li></ul>
               <div class="exit"><b>Exit:</b> a push to main is live as a new revision in under 3 minutes for a typical Go or Node app, with the build log in the UI and a check on the commit.</div></div>
@@ -1213,13 +1257,14 @@ curl -fsSL https://get.kwerft.dev | sudo bash -s -- --config /root/kwerft.yaml -
             <li><b>Dedicated vs. Cloud asymmetry.</b> The Robot API cannot create servers on demand like the Cloud API; dedicated nodes always join by script, and vSwitch coupling to Cloud Networks only works within one network zone.</li>
             <li><b>Firewall lock-out.</b> Mitigated by caller-IP checks and an automatic revert timer, plus an <code>install.sh --reset-firewall</code> rescue path via the Hetzner console.</li>
             <li><b>Upstream churn.</b> k3s, Cilium and Gateway API move quickly; pin versions in a release manifest and test upgrades from N-1 and N-2.</li>
-          <li><b>Builds compete with apps for memory.</b> Builds run as Jobs with limits and queue one at a time on small nodes; heavy users add a build node pool.</li>
+          <li><b>Builds and jobs compete with apps for memory.</b> Builds run as Jobs with limits and queue one at a time on small nodes; Tasks run in a lower priority class, so a job goes before a service; heavy users add a build node pool.</li>
           </ul>
           <h3>Decisions, 4 Oct 2026</h3>
           <div class="qs">
             <div class="q"><b>Hetzner Cloud and dedicated, both first-class</b><span>The installer detects the platform. Storage, private networking and firewall defaults differ per platform; CI covers both.</span></div>
             <div class="q"><b>One team</b><span>A single organization with projects and roles; no tenant isolation in v1. Records carry an organization ID so tenancy can come later without a migration.</span></div>
             <div class="q"><b>Images from registries and from Git in v1</b><span>Adds Phase 2, the Build resource, BuildKit and an in-cluster registry.</span></div>
+            <div class="q"><b>One-off and scheduled jobs in v1</b><span>Task and Schedule join Phase 1. Real workloads are more than services: the first pilot runs eight cron jobs and a dozen manual ones beside six services.</span></div>
             <div class="q"><b>License: to be decided before the public beta</b><span>Every dependency chosen so far is Apache-2.0 or MIT, so all options stay open.</span></div>
           </div>
         </section>
@@ -1255,12 +1300,13 @@ curl -fsSL https://get.kwerft.dev | sudo bash -s -- --config /root/kwerft.yaml -
     apps:['Apps','All workloads across projects with status pills that read at a glance. Click any row to open the app.','/apps'],
     app:['App detail','Everything about one app: live replicas, domains, revisions with rollback, streaming logs, Git builds with their logs, and an editable settings form that creates a new revision.','/apps/storefront/api'],
     deploy:['Deploy wizard','Start from a registry image or a Git repository that Kwerft builds in-cluster. Five short steps produce one App resource. Networking defaults to deny-all with explicit sources, and the review step shows exactly which Kubernetes objects will be created.','/deploy'],
+    jobs:['Jobs','Scheduled and one-off runs that share an app\'s image, env and volumes. A failed run surfaces like a crash-loop; “Run now” takes env overrides, runs as the user and can restart an app once it succeeds.','/jobs'],
     monitoring:['Monitoring','Firing alerts with one-click fixes, top consumers, and alert rules mapped to notification channels.','/monitoring'],
     clusters:['Clusters & nodes','Clusters as cards, nodes as a table. Add capacity from the Hetzner Cloud API or by running a join command on any existing server.','/clusters/fsn1-prod'],
     network:['Network','Traffic rules phrased as app-to-app, with observed hit and drop counts from Hubble. The server firewall and domains/TLS live in the same place.','/network'],
     access:['Access','Members, roles mapped to Kubernetes RBAC, and an append-only audit log of every change and shell session.','/access']
   };
-  const titles = {overview:'Overview',apps:'Apps',app:'Apps / api',deploy:'Deploy app',monitoring:'Monitoring',clusters:'Clusters & nodes',network:'Network',access:'Access'};
+  const titles = {overview:'Overview',apps:'Apps',app:'Apps / api',deploy:'Deploy app',jobs:'Jobs',monitoring:'Monitoring',clusters:'Clusters & nodes',network:'Network',access:'Access'};
   function setNote(key){
     const n = notes[key]; if(!n) return;
     $('#note-t').textContent = n[0];
