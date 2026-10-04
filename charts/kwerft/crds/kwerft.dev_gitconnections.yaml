@@ -188,10 +188,43 @@ spec:
               observedGeneration:
                 format: int64
                 type: integer
+              webhookAutomatic:
+                description: |-
+                  WebhookAutomatic: Kwerft sets up the webhooks itself (the GitHub
+                  App's own, or one per repository) and none failed. False: add the
+                  webhook by hand, with WebhookURL and the webhook secret.
+                type: boolean
+              webhookFingerprint:
+                description: |-
+                  WebhookFingerprint identifies the URL and secret the automatic
+                  webhooks were last set to (a truncated hash, not the secret), so a
+                  rotated secret or a moved console reaches them.
+                type: string
               webhookURL:
                 description: WebhookURL receives the host's push and pull-request
                   events.
                 type: string
+              webhooks:
+                description: |-
+                  Webhooks lists the repositories Apps build from with this connection
+                  and whether each has its webhook.
+                items:
+                  description: GitWebhookStatus is the webhook of one repository.
+                  properties:
+                    automatic:
+                      description: 'Automatic: Kwerft created the webhook and keeps
+                        it current.'
+                      type: boolean
+                    message:
+                      description: Message says what to do when it is not automatic.
+                      type: string
+                    repository:
+                      type: string
+                  required:
+                  - automatic
+                  - repository
+                  type: object
+                type: array
             type: object
         type: object
     served: true

@@ -38,7 +38,8 @@ rules:
   - apiGroups: [kwerft.dev]
     resources: [apps, domains, tasks, schedules, volumes]
     verbs: [get, list, watch, create, update, patch, delete]
-  # Everything else Kwerft defines (projects, builds, ...): read only.
+  # Everything else Kwerft defines (projects, builds, gitconnections, ...):
+  # read only. Git connections are owners' and admins' (kwerft.dev "*").
   - apiGroups: [kwerft.dev]
     resources: ["*"]
     verbs: [get, list, watch]
@@ -145,6 +146,14 @@ rules:
     resources: [pods/ephemeralcontainers]
     verbs: [get, update, patch]
 ---
+# Git connection credentials (Secrets git-<connection> in kwerft-builds)
+# follow the DNS token's pattern below, but their names are only known at
+# run time, so this chart does not hold their Role: the GitConnection
+# reconciler keeps the Role and RoleBinding "kwerft:git-credentials" in
+# kwerft-builds, granting owners and admins "patch" on exactly the Secrets of
+# existing connections (resourceNames, never empty), and nothing else — no
+# get, list or create. See internal/controllers/gitconnection_controller.go.
+#
 # Settings → apps domain with DNS-01: owners and admins store the DNS API
 # token. "patch" on this one Secret only: no get, so not even they can read it
 # back, and no create, because the Domain reconciler creates it empty. The

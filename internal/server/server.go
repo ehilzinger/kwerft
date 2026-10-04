@@ -13,6 +13,7 @@ import (
 
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
+	"github.com/ehilzinger/kwerft/internal/git"
 	"github.com/ehilzinger/kwerft/internal/kube"
 	"github.com/ehilzinger/kwerft/internal/setup"
 	"github.com/ehilzinger/kwerft/internal/store"
@@ -61,6 +62,16 @@ type Config struct {
 	// DefaultDebugImage.
 	DebugImage string
 
+	// System is the console's own identity, for what no signed-in user
+	// initiates: Builds created by Git webhooks and their lastDelivery.
+	// SystemReader reads uncached with it — the Git credentials, which the
+	// console needs to talk to Git hosts but never returns. Both nil
+	// disables webhooks, checks and "Build now" (see api_git.go).
+	System       client.Client
+	SystemReader client.Reader
+	// Git talks to Git hosts; nil means a default git.Factory.
+	Git *git.Factory
+
 	// ActiveConsoleDomain returns the hostname the console is served on now
 	// (ConsoleSettings.status, which Settings can change); nil or "" means
 	// ConsoleDomain. Passkeys follow it.
@@ -72,6 +83,8 @@ type Config struct {
 	// settingsHook lets tests replace DNS lookups and the Hetzner API; see
 	// api_settings.go.
 	settingsHook func(*settingsAPI)
+	// gitHook lets tests adjust the Git API (limits); see api_git.go.
+	gitHook func(*gitAPI)
 }
 
 // New returns an http.Server ready to ListenAndServe.

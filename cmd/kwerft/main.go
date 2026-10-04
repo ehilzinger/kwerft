@@ -25,6 +25,7 @@ import (
 	kwerftv1 "github.com/ehilzinger/kwerft/api/v1alpha1"
 	"github.com/ehilzinger/kwerft/internal/auth"
 	"github.com/ehilzinger/kwerft/internal/controllers"
+	"github.com/ehilzinger/kwerft/internal/git"
 	"github.com/ehilzinger/kwerft/internal/server"
 	"github.com/ehilzinger/kwerft/internal/setup"
 	"github.com/ehilzinger/kwerft/internal/store"
@@ -117,6 +118,13 @@ func main() {
 		passkeyOrigins = devPasskeyOrigins(*listen)
 	}
 	kubeImp, kubeCache := workloadAccess(log, mgr)
+	// The console's own identity, for webhook builds and Git credentials
+	// (see internal/server/api_git.go); only with the controller manager.
+	var system client.Client
+	var systemReader client.Reader
+	if mgr != nil {
+		system, systemReader = mgr.GetClient(), mgr.GetAPIReader()
+	}
 
 	srv := server.New(server.Config{
 		Listen:        *listen,
@@ -136,6 +144,10 @@ func main() {
 		KubeCache:     kubeCache,
 		RecordingsDir: filepath.Join(*dataDir, "recordings"),
 		DebugImage:    *debugImage,
+
+		System:       system,
+		SystemReader: systemReader,
+		Git:          gitFactory,
 
 		ActiveConsoleDomain: activeConsoleDomain(mgr, *dev),
 	})
@@ -182,7 +194,7 @@ func cleanSessions(ctx context.Context, log *slog.Logger, st *store.Store) {
 // not-ready (so `helm --wait` fails) instead of passing silently.
 func waitUntilReady(ctx context.Context, log *slog.Logger, mgr ctrl.Manager, ready *atomic.Bool) {
 	types := []client.Object{&kwerftv1.Project{}, &kwerftv1.App{}, &kwerftv1.Domain{},
-		&kwerftv1.Volume{}, &kwerftv1.Task{}, &kwerftv1.Schedule{}, &kwerftv1.ConsoleSettings{}}
+		&kwerftv1.Volume{}, &kwerftv1.Task{}, &kwerftv1.Schedule{}, &kwerftv1.ConsoleSettings{}, &kwerftv1.GitConnection{}}
 	for _, obj := range types {
 		for {
 			_, err := mgr.GetCache().GetInformer(ctx, obj, cache.BlockUntilSynced(false))
@@ -246,5 +258,19 @@ func newManager(log *slog.Logger, leaderElect bool, domains *controllers.DomainR
 	if err := (&controllers.ScheduleReconciler{Client: mgr.GetClient()}).SetupWithManager(mgr); err != nil {
 		return nil, err
 	}
+	gitConnections := &controllers.GitConnectionReconciler{Client: mgr.GetClient(), APIReader: mgr.GetAPIReader(),
+		Git: gitFactory, ConsoleDomain: domains.ConsoleDomain}
+	if err := gitConnections.SetupWithManager(mgr); err != nil {
+		return nil, err
+	}
+	commitStatus := &controllers.CommitStatusReconciler{Client: mgr.GetClient(), APIReader: mgr.GetAPIReader(),
+		Git: gitFactory, ConsoleDomain: domains.ConsoleDomain}
+	if err := commitStatus.SetupWithManager(mgr); err != nil {
+		return nil, err
+	}
 	return mgr, nil
 }
+
+// gitFactory is shared by the Git reconcilers and the console, so GitHub App
+// installation tokens are cached once.
+var gitFactory = &git.Factory{}

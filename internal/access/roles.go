@@ -129,6 +129,18 @@ var Matrix = []Permission{
 		},
 	},
 	{
+		// Credentials are write-only even for owners and admins: the
+		// GitConnection reconciler grants them patch on each connection's
+		// Secret, never get (internal/server checks that against Kubernetes).
+		ID: "git", Label: "Manage Git connections and their credentials (write-only)", Enforced: ByKubernetes,
+		Grants: map[string]Grant{Owner: yes, Admin: yes, Developer: no, Viewer: no},
+		Kube: []Check{
+			{Group: "kwerft.dev", Resource: "gitconnections", Verb: "create"},
+			{Group: "kwerft.dev", Resource: "gitconnections", Verb: "update"},
+			{Group: "kwerft.dev", Resource: "gitconnections", Verb: "delete"},
+		},
+	},
+	{
 		ID: "secrets", Label: "Read Kubernetes Secrets (apps reference them by name)", Enforced: ByKubernetes,
 		Grants: all(no),
 		Kube: []Check{
