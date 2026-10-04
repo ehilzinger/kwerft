@@ -609,8 +609,10 @@ func TestValidationErrorsNameTheField(t *testing.T) {
 	if code := c.dev.do(t, "POST", "/api/v1/projects/no-such-project/apps", imageApp("web", "nginx"), &e); code != http.StatusNotFound || !strings.Contains(e.Error, "no-such-project") {
 		t.Errorf("app in a missing project: %d %+v, want 404", code, e)
 	}
-	if code := c.owner.do(t, "POST", "/api/v1/projects", map[string]string{"name": "kube-system"}, &e); code != http.StatusUnprocessableEntity || e.Field != "name" {
-		t.Errorf("reserved project name: %d %+v", code, e)
+	for _, name := range []string{"kube-system", "kwerft-builds", "kwerft-observability"} {
+		if code := c.owner.do(t, "POST", "/api/v1/projects", map[string]string{"name": name}, &e); code != http.StatusUnprocessableEntity || e.Field != "name" {
+			t.Errorf("reserved project name %s: %d %+v", name, code, e)
+		}
 	}
 }
 
