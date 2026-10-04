@@ -226,9 +226,10 @@ Work split and contracts: `docs/phase2.md`.
 
 - [x] Types: `GitConnection`, `Build` source snapshot and numbering, revisions record build and commit; `internal/builds`
 - [x] W1 Registry & infrastructure: zot, k3s registry mirror, `kwerft-builds` namespace and policies, installer/join, pins (on a server: with the exit criterion)
-- [ ] W2 Build engine: Build reconciler (BuildKit rootless, Dockerfile, Railpack, cache in zot, queue, cancel, timeout, retention); Git apps deploy their latest build
-- [ ] W3 Git connections (GitHub token/App, GitLab, Gitea, generic, deploy keys), webhooks, "Build now", commit checks
-- [ ] W4 Console: deploy wizard and settings for Git apps, Builds tab with live logs, Git connections page
+- [x] W2 Build engine: Build reconciler (BuildKit rootless, Dockerfile, Railpack, cache in zot, queue, cancel, timeout, retention); Git apps deploy their latest build
+- [x] W3 Git connections (GitHub token/App, GitLab, Gitea, generic, deploy keys), webhooks, "Build now", commit checks
+- [x] W4 Console: deploy wizard and settings for Git apps, Builds tab with live logs, Git connections page
+- [x] First real build on the test server (2026-10-04): public GitHub repository → clone, rootless BuildKit (AppArmor profile `kwerft-buildkit`, since Ubuntu restricts user namespaces), push to zot, rollout pinned by digest through the k3s mirror, live on the apps wildcard in ~70 s; a rebuild reused the cache
 - [ ] Exit criterion on the test server with a real repository: push → live revision in < 3 min, log in the UI, check on the commit
 
 ### Phase 0 checklist
