@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httputil"
 	"path"
@@ -36,8 +37,16 @@ import (
 //     notification credentials: "patch", never "get") — but a patch answers
 //     with the whole object, so through kubectl a patch would read them.
 //   - Writes are audited (kube.write), refusals too (kube.denied).
+//   - /k8s/... is the management cluster; /k8s/clusters/<name>/... another
+//     cluster the console manages (docs/phase5.md), reached through its
+//     agent with the same rules. A project-restricted token reaches a
+//     project's namespace only in the cluster the project lives in.
 
 const kubeProxyPrefix = "/k8s"
+
+// kubeClusterPrefix starts a path to another cluster: /k8s/clusters/<name>.
+// No Kubernetes API path starts with /clusters.
+const kubeClusterPrefix = "/clusters/"
 
 // maxKubeBody bounds a request body; the API server's own limit is 3 MiB
 // per object, and a List of them is a little more.
@@ -179,7 +188,23 @@ func (a *api) kubeProxy(w http.ResponseWriter, r *http.Request) {
 		deny("encoded path", "Kwerft's Kubernetes proxy does not accept encoded paths.")
 		return
 	}
-	k, ok := parseKubePath(strings.TrimPrefix(r.URL.Path, kubeProxyPrefix))
+	rest := strings.TrimPrefix(r.URL.Path, kubeProxyPrefix)
+	conn := a.clusters.local
+	if after, ok := strings.CutPrefix(rest, kubeClusterPrefix); ok {
+		name, path, _ := strings.Cut(after, "/")
+		c, err := a.clusters.byName(name)
+		if err != nil {
+			code, reason := http.StatusServiceUnavailable, "ServiceUnavailable"
+			var unknown *clusterUnknownError
+			if errors.As(err, &unknown) {
+				code, reason = http.StatusNotFound, "NotFound"
+			}
+			kubeStatus(w, code, reason, err.Error())
+			return
+		}
+		conn, rest = c, "/"+path
+	}
+	k, ok := parseKubePath(rest)
 	if !ok {
 		deny("unsupported path", "Kwerft's Kubernetes proxy does not serve this path.")
 		return
@@ -194,12 +219,12 @@ func (a *api) kubeProxy(w http.ResponseWriter, r *http.Request) {
 		deny("secrets", "Secrets are not available through Kwerft's kubeconfig: the console keeps credentials write-only.")
 		return
 	}
-	if p.token.Projects != nil && !k.allowedFor(r.Method, p.token.Projects) {
+	if p.token.Projects != nil && (!k.allowedFor(r.Method, p.token.Projects) || !a.inItsCluster(r.Context(), k, conn)) {
 		deny("outside the token's projects", "This token is limited to the projects "+strings.Join(p.token.Projects, ", ")+
 			"; it reaches only their namespaces.")
 		return
 	}
-	target, rt, err := a.cfg.Kube.Upstream(p.user.Email, p.user.Role)
+	target, rt, err := conn.kube.Upstream(p.user.Email, p.user.Role)
 	if err != nil {
 		a.internalError(w, r, err)
 		return
@@ -231,6 +256,21 @@ func (a *api) kubeProxy(w http.ResponseWriter, r *http.Request) {
 	// Recorded even when kubectl has hung up by now.
 	a.audit(r.WithContext(context.WithoutCancel(r.Context())), p.user.Email, "kube.write", r.Method+" "+k.path,
 		p.token.Name+", "+http.StatusText(rec.status))
+}
+
+// inItsCluster: a request a project-restricted token may make (allowedFor)
+// goes to the cluster its project lives in, so a namespace of the same name
+// elsewhere stays out of reach. Discovery and self-reviews go anywhere.
+func (a *api) inItsCluster(ctx context.Context, k kubeRequest, conn *clusterConn) bool {
+	project := k.namespace
+	if project == "" && k.group == "kwerft.dev" && k.resource == "projects" {
+		project = k.name
+	}
+	if project == "" {
+		return true
+	}
+	home, err := a.clusters.forProject(ctx, project)
+	return err == nil && home == conn
 }
 
 // stripClientCredentials removes what a client must never pass to the API

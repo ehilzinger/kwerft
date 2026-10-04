@@ -41,8 +41,9 @@ import (
 // podsAPI holds the pod endpoints and what they share.
 type podsAPI struct {
 	*api
-	// backend reaches Kubernetes as a console user. Tests swap it for a fake.
-	backend func(p *principal) (podBackend, error)
+	// backend reaches Kubernetes as a console user, in the cluster of the
+	// context (the project's, see clusters.go). Tests swap it for a fake.
+	backend func(ctx context.Context, p *principal) (podBackend, error)
 	logs    logLimits
 	shell   shellLimits
 	// streams and shells bound concurrent log streams and shell sessions.
@@ -129,17 +130,18 @@ type execStreams struct {
 	resize remotecommand.TerminalSizeQueue
 }
 
-func (p *podsAPI) kubeBackend(pr *principal) (podBackend, error) {
+func (p *podsAPI) kubeBackend(ctx context.Context, pr *principal) (podBackend, error) {
 	email, role := pr.user.Email, pr.user.Role
-	c, err := p.cfg.Kube.For(email, role)
+	imp := p.conn(ctx).kube
+	c, err := imp.For(email, role)
 	if err != nil {
 		return nil, err
 	}
-	cs, err := p.cfg.Kube.Clientset(email, role)
+	cs, err := imp.Clientset(email, role)
 	if err != nil {
 		return nil, err
 	}
-	cfg, err := p.cfg.Kube.RESTConfig(email, role)
+	cfg, err := imp.RESTConfig(email, role)
 	if err != nil {
 		return nil, err
 	}
@@ -350,7 +352,7 @@ func targetNotFound(kind, project, name string) string {
 
 func (p *podsAPI) listTargetPods(w http.ResponseWriter, r *http.Request, kind, project, name string, sel labels.Selector) {
 	pr := r.Context().Value(ctxKey{}).(*principal)
-	b, err := p.backend(pr)
+	b, err := p.backend(r.Context(), pr)
 	if err != nil {
 		p.internalError(w, r, err)
 		return

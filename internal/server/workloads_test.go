@@ -27,8 +27,10 @@ import (
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/rest"
+	"k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/config"
 	"sigs.k8s.io/controller-runtime/pkg/envtest"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
@@ -67,9 +69,23 @@ func TestMain(m *testing.M) {
 
 func runWithCluster(m *testing.M) int {
 	log.SetLogger(logr.Discard())
-	fail := func(what string, err error) int {
-		fmt.Println(what+":", err)
+	c, stop, err := startTestCluster()
+	if err != nil {
+		fmt.Println(err)
 		return 1
+	}
+	defer stop()
+	defer stopRemoteCluster()
+	cluster = c
+	return m.Run()
+}
+
+// startTestCluster starts an API server with the chart's CRDs and RBAC and
+// the reconcilers the console tests rely on. The second cluster of the
+// multi-cluster tests (multicluster_test.go) is made the same way.
+func startTestCluster() (_ *testCluster, _ func(), err error) {
+	fail := func(what string, err error) (*testCluster, func(), error) {
+		return nil, nil, fmt.Errorf("%s: %w", what, err)
 	}
 	out, err := exec.Command("go", "list", "-m", "-f", "{{.Dir}}", "sigs.k8s.io/gateway-api").Output()
 	if err != nil {
@@ -88,15 +104,22 @@ func runWithCluster(m *testing.M) int {
 	if err != nil {
 		return fail("start envtest", err)
 	}
-	defer func() { _ = env.Stop() }()
+	ctx, cancel := context.WithCancel(context.Background())
+	stop := func() {
+		cancel()
+		_ = env.Stop()
+	}
+	defer func() {
+		if err != nil {
+			stop()
+		}
+	}()
 
 	scheme := controllers.NewScheme()
 	admin, err := client.New(cfg, client.Options{Scheme: scheme})
 	if err != nil {
 		return fail("admin client", err)
 	}
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
 
 	// The chart's RBAC: console roles, and the console's own ClusterRole bound
 	// to a test user standing in for its service account. Some roles live in
@@ -123,7 +146,10 @@ func runWithCluster(m *testing.M) int {
 		return fail("impersonator", err)
 	}
 
-	mgr, err := ctrl.NewManager(cfg, ctrl.Options{Scheme: scheme, Metrics: metricsserver.Options{BindAddress: "0"}, HealthProbeBindAddress: "0"})
+	// Two clusters' managers in one process register the same controller
+	// names (multicluster_test.go).
+	mgr, err := ctrl.NewManager(cfg, ctrl.Options{Scheme: scheme, Metrics: metricsserver.Options{BindAddress: "0"}, HealthProbeBindAddress: "0",
+		Controller: config.Controller{SkipNameValidation: ptr.To(true)}})
 	if err != nil {
 		return fail("manager", err)
 	}
@@ -174,8 +200,7 @@ func runWithCluster(m *testing.M) int {
 	}
 	go func() { _ = mgr.Start(ctx) }()
 
-	cluster = &testCluster{admin: admin, console: user.Config(), imp: imp, cache: mgr.GetCache()}
-	return m.Run()
+	return &testCluster{admin: admin, console: user.Config(), imp: imp, cache: mgr.GetCache()}, stop, nil
 }
 
 // applyChartRBAC applies the ClusterRoles and bindings from the Helm chart,

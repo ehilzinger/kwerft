@@ -7,6 +7,7 @@ import { Field } from "../components/Field";
 import { Icon } from "../components/Icon";
 import { VolumeMounts, checkMounts, volumesOf, type Mount } from "../components/VolumeMounts";
 import { HOST_RE, NAME_RE, abilities, sizes, toYAML, workloads, type AppSpec, type GitSource, type Size } from "../workloads";
+import { LOCAL, useClusters } from "../clusters";
 import { settingsApi, underWildcard } from "../settings";
 import {
   branchProblem, buildsApi, gitApi, normalizeRepository, notOffered, repoPathProblem, repositoryProblem, shortSha, suggestConnection,
@@ -175,6 +176,8 @@ export function Deploy() {
     setProblem((p) => (p?.field === k ? undefined : p)); // the user is fixing it
   };
   const project = f.project || (projects.data?.length === 1 ? projects.data[0]!.name : "");
+  const { multi, unreachable } = useClusters();
+  const chosenProject = projects.data?.find((p) => p.name === project);
   // Until a hostname is typed, suggest <app>.<apps domain> (Settings).
   const settings = useQuery({ queryKey: ["settings"], queryFn: settingsApi.get, staleTime: 60_000 });
   const appsDomain = settings.data?.appsDomain;
@@ -297,11 +300,16 @@ export function Deploy() {
                 <select id="d-proj" className="input" value={project} aria-invalid={!!err("project")}
                   onChange={(e) => (e.target.value === "+new" ? setCreatingProject(true) : set("project", e.target.value))}>
                   {!project && <option value="">Choose a project…</option>}
-                  {projects.data?.map((p) => <option key={p.name} value={p.name}>{p.displayName ? `${p.name} — ${p.displayName}` : p.name}</option>)}
+                  {projects.data?.map((p) => (
+                    <option key={p.name} value={p.name}>
+                      {p.displayName ? `${p.name} — ${p.displayName}` : p.name}{multi ? ` · cluster ${p.cluster ?? LOCAL}` : ""}
+                    </option>
+                  ))}
                   {can.manageProjects && <option value="+new">New project…</option>}
                 </select>
                 {err("project") ? <span className="field-error" role="alert">{err("project")}</span>
-                  : projects.data?.length === 0 ? <span className="hint">No projects yet{can.manageProjects ? "; create one first." : ". Ask an owner or admin to create one."}</span> : null}
+                  : projects.data?.length === 0 ? <span className="hint">No projects yet{can.manageProjects ? "; create one first." : ". Ask an owner or admin to create one."}</span>
+                  : multi && chosenProject ? <span className="hint">Runs in cluster <b>{chosenProject.cluster ?? LOCAL}</b>{unreachable.includes(chosenProject.cluster ?? LOCAL) ? ", which cannot be reached right now" : ""}.</span> : null}
               </div>
               {f.source === "image" ? (
                 <>

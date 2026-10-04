@@ -258,7 +258,7 @@ func (s *shellSession) target() string { return s.project + "/" + s.pod }
 
 func (s *shellSession) run(ctx context.Context) {
 	p, email := s.p, s.pr.user.Email
-	b, err := p.backend(s.pr)
+	b, err := p.backend(s.r.Context(), s.pr)
 	if err != nil {
 		p.cfg.Logger.Error("shell: backend", "err", err)
 		s.fail("Something went wrong on the server. Details are in the console logs.")
@@ -292,7 +292,7 @@ func (s *shellSession) run(ctx context.Context) {
 
 	started := p.now()
 	meta := recordingMeta{
-		User: email, Project: s.project, Kind: s.owner.kind, Pod: s.pod, Container: s.container,
+		User: email, Project: s.project, Cluster: p.conn(s.r.Context()).name, Kind: s.owner.kind, Pod: s.pod, Container: s.container,
 		Shell: s.shell, DebugContainer: s.debug, IP: clientIP(s.r), Started: started,
 	}
 	if s.owner.kind == "task" {

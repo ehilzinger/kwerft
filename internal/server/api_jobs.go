@@ -41,18 +41,18 @@ func (a *api) registerJobs(mux *http.ServeMux) {
 	read := func(h http.HandlerFunc) http.HandlerFunc { return a.requireUser(a.requireKube(h)) }
 	write := func(h http.HandlerFunc) http.HandlerFunc { return a.sameOrigin(read(h)) }
 
-	mux.HandleFunc("GET /api/v1/volumes", read(a.volumeList))
+	mux.HandleFunc("GET /api/v1/volumes", read(a.withClusterParam(a.volumeList)))
 	mux.HandleFunc("POST /api/v1/projects/{project}/volumes", write(a.volumeCreate))
 	mux.HandleFunc("PATCH /api/v1/projects/{project}/volumes/{volume}", write(a.volumeResize))
 	mux.HandleFunc("DELETE /api/v1/projects/{project}/volumes/{volume}", write(a.volumeDelete))
 
-	mux.HandleFunc("GET /api/v1/tasks", read(a.taskList))
+	mux.HandleFunc("GET /api/v1/tasks", read(a.withClusterParam(a.taskList)))
 	mux.HandleFunc("POST /api/v1/projects/{project}/tasks", write(a.taskCreate))
 	mux.HandleFunc("GET /api/v1/projects/{project}/tasks/{task}", read(a.taskGet))
 	mux.HandleFunc("POST /api/v1/projects/{project}/tasks/{task}/cancel", write(a.taskCancel))
 	mux.HandleFunc("DELETE /api/v1/projects/{project}/tasks/{task}", write(a.taskDelete))
 
-	mux.HandleFunc("GET /api/v1/schedules", read(a.scheduleList))
+	mux.HandleFunc("GET /api/v1/schedules", read(a.withClusterParam(a.scheduleList)))
 	mux.HandleFunc("GET /api/v1/schedules/preview", a.requireUser(a.schedulePreview))
 	mux.HandleFunc("POST /api/v1/projects/{project}/schedules", write(a.scheduleCreate))
 	mux.HandleFunc("GET /api/v1/projects/{project}/schedules/{schedule}", read(a.scheduleGet))
@@ -62,7 +62,7 @@ func (a *api) registerJobs(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/v1/projects/{project}/schedules/{schedule}/resume", write(a.scheduleSuspend(false)))
 	mux.HandleFunc("POST /api/v1/projects/{project}/schedules/{schedule}/run", write(a.scheduleRun))
 
-	mux.HandleFunc("GET /api/v1/domains", read(a.domainList))
+	mux.HandleFunc("GET /api/v1/domains", read(a.withClusterParam(a.domainList)))
 }
 
 // decodeOptional is decodeStrict for bodies that may be left out entirely.
@@ -111,6 +111,7 @@ func stripObject(obj client.Object, kind string) {
 type volumeJSON struct {
 	Name     string    `json:"name"`
 	Project  string    `json:"project"`
+	Cluster  string    `json:"cluster,omitempty"`
 	Size     string    `json:"size"`
 	Class    string    `json:"class"`
 	Capacity string    `json:"capacity,omitempty"`
@@ -160,24 +161,23 @@ func volumeNotFound(project, name string) string {
 }
 
 func (a *api) volumeList(w http.ResponseWriter, r *http.Request) {
-	c, p, ctx, cancel, err := a.userClient(r)
+	p := principalOf(r)
+	ctx, cancel := context.WithTimeout(r.Context(), kubeTimeout)
 	defer cancel()
-	if err != nil {
-		a.internalError(w, r, err)
+	out := []volumeJSON{}
+	if !a.visitClusters(w, r, ctx, p, "volume.list", "No volumes found.", func(v *clusterVisit) error {
+		var list kwerftv1.VolumeList
+		if err := a.scopedList(v.ctx, v.c, v.scope, &list, inProject(r)...); err != nil {
+			return err
+		}
+		for i := range list.Items {
+			s := volumeSummary(&list.Items[i])
+			s.Cluster = v.conn.name
+			out = append(out, s)
+		}
+		return nil
+	}) {
 		return
-	}
-	scope, ok := a.requestScope(w, r, ctx, p, "volume.list")
-	if !ok {
-		return
-	}
-	var list kwerftv1.VolumeList
-	if err := a.scopedList(ctx, c, scope, &list, inProject(r)...); err != nil {
-		a.kubeError(w, r, p, "volume.list", "", "No volumes found.", err)
-		return
-	}
-	out := make([]volumeJSON, 0, len(list.Items))
-	for i := range list.Items {
-		out = append(out, volumeSummary(&list.Items[i]))
 	}
 	slices.SortFunc(out, func(x, y volumeJSON) int { return byProjectAndName(x.Project, x.Name, y.Project, y.Name) })
 	writeJSON(w, http.StatusOK, out)
@@ -327,6 +327,7 @@ func (a *api) volumeDelete(w http.ResponseWriter, r *http.Request) {
 type taskJSON struct {
 	Name        string     `json:"name"`
 	Project     string     `json:"project"`
+	Cluster     string     `json:"cluster,omitempty"`
 	Phase       string     `json:"phase"` // pending | running | succeeded | failed
 	Reason      string     `json:"reason,omitempty"`
 	Message     string     `json:"message,omitempty"`
@@ -389,12 +390,10 @@ func taskObject(t *kwerftv1.Task) *kwerftv1.Task {
 // taskList lists runs, newest first. Filters: project, app (fromApp),
 // schedule, phase, and limit.
 func (a *api) taskList(w http.ResponseWriter, r *http.Request) {
-	c, p, ctx, cancel, err := a.userClient(r)
+	p := principalOf(r)
+	ctx, cancel := context.WithTimeout(r.Context(), kubeTimeout)
 	defer cancel()
-	if err != nil {
-		a.internalError(w, r, err)
-		return
-	}
+	var err error
 	q := r.URL.Query()
 	opts := inProject(r)
 	if s := q.Get("schedule"); s != "" {
@@ -407,23 +406,25 @@ func (a *api) taskList(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	scope, ok := a.requestScope(w, r, ctx, p, "task.list")
-	if !ok {
-		return
-	}
-	var list kwerftv1.TaskList
-	if err := a.scopedList(ctx, c, scope, &list, opts...); err != nil {
-		a.kubeError(w, r, p, "task.list", "", "No tasks found.", err)
-		return
-	}
 	app, phase := q.Get("app"), strings.ToLower(q.Get("phase"))
-	out := make([]taskJSON, 0, len(list.Items))
-	for i := range list.Items {
-		t := &list.Items[i]
-		if (app != "" && t.Spec.FromApp != app) || (phase != "" && taskPhase(t) != phase) {
-			continue
+	out := []taskJSON{}
+	if !a.visitClusters(w, r, ctx, p, "task.list", "No tasks found.", func(v *clusterVisit) error {
+		var list kwerftv1.TaskList
+		if err := a.scopedList(v.ctx, v.c, v.scope, &list, opts...); err != nil {
+			return err
 		}
-		out = append(out, taskSummary(t))
+		for i := range list.Items {
+			t := &list.Items[i]
+			if (app != "" && t.Spec.FromApp != app) || (phase != "" && taskPhase(t) != phase) {
+				continue
+			}
+			s := taskSummary(t)
+			s.Cluster = v.conn.name
+			out = append(out, s)
+		}
+		return nil
+	}) {
+		return
 	}
 	slices.SortFunc(out, func(x, y taskJSON) int {
 		if n := y.Created.Compare(x.Created); n != 0 {
@@ -651,6 +652,7 @@ func (a *api) taskDelete(w http.ResponseWriter, r *http.Request) {
 type scheduleJSON struct {
 	Name          string     `json:"name"`
 	Project       string     `json:"project"`
+	Cluster       string     `json:"cluster,omitempty"`
 	Schedule      string     `json:"schedule"`
 	TimeZone      string     `json:"timeZone,omitempty"`
 	Suspend       bool       `json:"suspend"`
@@ -729,43 +731,44 @@ func scheduleObject(s *kwerftv1.Schedule) *kwerftv1.Schedule {
 }
 
 func (a *api) scheduleList(w http.ResponseWriter, r *http.Request) {
-	c, p, ctx, cancel, err := a.userClient(r)
+	p := principalOf(r)
+	ctx, cancel := context.WithTimeout(r.Context(), kubeTimeout)
 	defer cancel()
-	if err != nil {
-		a.internalError(w, r, err)
-		return
-	}
-	scope, ok := a.requestScope(w, r, ctx, p, "schedule.list")
-	if !ok {
-		return
-	}
-	var list kwerftv1.ScheduleList
-	if err := a.scopedList(ctx, c, scope, &list, inProject(r)...); err != nil {
-		a.kubeError(w, r, p, "schedule.list", "", "No schedules found.", err)
-		return
-	}
-	var tasks kwerftv1.TaskList
-	if err := a.scopedList(ctx, c, scope, &tasks, append(inProject(r), client.HasLabels{controllers.LabelSchedule})...); err != nil {
-		a.kubeError(w, r, p, "schedule.list", "", "No tasks found.", err)
-		return
-	}
-	latest := map[types.NamespacedName]*kwerftv1.Task{}
-	for i := range tasks.Items {
-		t := &tasks.Items[i]
-		key := types.NamespacedName{Namespace: t.Namespace, Name: t.Labels[controllers.LabelSchedule]}
-		if cur := latest[key]; cur == nil || cur.CreationTimestamp.Before(&t.CreationTimestamp) ||
-			(cur.CreationTimestamp.Equal(&t.CreationTimestamp) && cur.Name < t.Name) {
-			latest[key] = t
+	out := []scheduleJSON{}
+	if !a.visitClusters(w, r, ctx, p, "schedule.list", "No schedules found.", func(v *clusterVisit) error {
+		var list kwerftv1.ScheduleList
+		if err := a.scopedList(v.ctx, v.c, v.scope, &list, inProject(r)...); err != nil {
+			return err
 		}
-	}
-	out := make([]scheduleJSON, 0, len(list.Items))
-	for i := range list.Items {
-		s := &list.Items[i]
-		last := latest[types.NamespacedName{Namespace: s.Namespace, Name: s.Name}]
-		if last != nil && !metav1.IsControlledBy(last, s) {
-			last = nil
+		var tasks kwerftv1.TaskList
+		if err := a.scopedList(v.ctx, v.c, v.scope, &tasks, append(inProject(r), client.HasLabels{controllers.LabelSchedule})...); err != nil {
+			return err
 		}
-		out = append(out, scheduleSummary(s, last))
+		latest := map[types.NamespacedName]*kwerftv1.Task{}
+		for i := range tasks.Items {
+			t := &tasks.Items[i]
+			key := types.NamespacedName{Namespace: t.Namespace, Name: t.Labels[controllers.LabelSchedule]}
+			if cur := latest[key]; cur == nil || cur.CreationTimestamp.Before(&t.CreationTimestamp) ||
+				(cur.CreationTimestamp.Equal(&t.CreationTimestamp) && cur.Name < t.Name) {
+				latest[key] = t
+			}
+		}
+		for i := range list.Items {
+			s := &list.Items[i]
+			last := latest[types.NamespacedName{Namespace: s.Namespace, Name: s.Name}]
+			if last != nil && !metav1.IsControlledBy(last, s) {
+				last = nil
+			}
+			sum := scheduleSummary(s, last)
+			sum.Cluster = v.conn.name
+			if sum.LastRun != nil {
+				sum.LastRun.Cluster = v.conn.name
+			}
+			out = append(out, sum)
+		}
+		return nil
+	}) {
+		return
 	}
 	slices.SortFunc(out, func(x, y scheduleJSON) int { return byProjectAndName(x.Project, x.Name, y.Project, y.Name) })
 	writeJSON(w, http.StatusOK, out)
@@ -1051,6 +1054,7 @@ func mergeEnv(base, over []corev1.EnvVar) []corev1.EnvVar {
 type domainJSON struct {
 	Name        string     `json:"name"`
 	Project     string     `json:"project"`
+	Cluster     string     `json:"cluster,omitempty"`
 	Hostname    string     `json:"hostname"`
 	App         string     `json:"app,omitempty"` // the App that claimed it, if any
 	Listener    string     `json:"listener,omitempty"`
@@ -1089,24 +1093,23 @@ func domainSummary(d *kwerftv1.Domain) domainJSON {
 }
 
 func (a *api) domainList(w http.ResponseWriter, r *http.Request) {
-	c, p, ctx, cancel, err := a.userClient(r)
+	p := principalOf(r)
+	ctx, cancel := context.WithTimeout(r.Context(), kubeTimeout)
 	defer cancel()
-	if err != nil {
-		a.internalError(w, r, err)
+	out := []domainJSON{}
+	if !a.visitClusters(w, r, ctx, p, "domain.list", "No domains found.", func(v *clusterVisit) error {
+		var list kwerftv1.DomainList
+		if err := a.scopedList(v.ctx, v.c, v.scope, &list, inProject(r)...); err != nil {
+			return err
+		}
+		for i := range list.Items {
+			s := domainSummary(&list.Items[i])
+			s.Cluster = v.conn.name
+			out = append(out, s)
+		}
+		return nil
+	}) {
 		return
-	}
-	scope, ok := a.requestScope(w, r, ctx, p, "domain.list")
-	if !ok {
-		return
-	}
-	var list kwerftv1.DomainList
-	if err := a.scopedList(ctx, c, scope, &list, inProject(r)...); err != nil {
-		a.kubeError(w, r, p, "domain.list", "", "No domains found.", err)
-		return
-	}
-	out := make([]domainJSON, 0, len(list.Items))
-	for i := range list.Items {
-		out = append(out, domainSummary(&list.Items[i]))
 	}
 	slices.SortFunc(out, func(x, y domainJSON) int {
 		if n := strings.Compare(x.Hostname, y.Hostname); n != 0 {

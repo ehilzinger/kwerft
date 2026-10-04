@@ -3,6 +3,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../api";
 import { alertKeys, alertsApi } from "../alerts";
 import { Icon, type IconName } from "./Icon";
+import { UnreachableBanner } from "./ClusterUI";
 import "../styles/monitoring.css";
 
 type NavItem = { to: string; label: string; icon: IconName; adminOnly?: boolean };
@@ -88,6 +89,7 @@ export function Shell() {
         <header className="topbar">
           <div className="crumb"><b>{titles[section] ?? "Kwerft"}</b></div>
         </header>
+        {user.data && !user.data.mustEnrol && <UnreachableBanner />}
         <Outlet />
       </div>
     </div>

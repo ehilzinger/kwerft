@@ -47,7 +47,7 @@ func (a *api) registerTraffic(mux *http.ServeMux) {
 	mux.HandleFunc("PUT /api/v1/projects/{project}/trafficrules/{rule}", write(a.trafficRuleUpdate))
 	mux.HandleFunc("DELETE /api/v1/projects/{project}/trafficrules/{rule}", write(a.trafficRuleDelete))
 	mux.HandleFunc("PUT /api/v1/projects/{project}/isolation", write(a.projectIsolation))
-	mux.HandleFunc("GET /api/v1/traffic/drops", read(a.trafficDrops))
+	mux.HandleFunc("GET /api/v1/traffic/drops", read(a.withClusterParam(a.trafficDrops)))
 }
 
 // ---- JSON --------------------------------------------------------------------
@@ -93,12 +93,21 @@ type trafficJSON struct {
 	Drops    []dropJSON        `json:"drops"`
 }
 
-func (a *api) hubbleStatus() hubbleJSON {
-	if a.cfg.Hubble == nil {
+// hubbleStatus is the state of the context's cluster's flows. The console
+// reads Hubble's relay in its own cluster only: for remote clusters the
+// counts are those their own reconciler wrote into the rules' status
+// (docs/phase5.md), and dropped connections are not shown.
+func (a *api) hubbleStatus(ctx context.Context) hubbleJSON {
+	conn := a.conn(ctx)
+	if conn.hubble == nil && !conn.isLocal() {
+		return hubbleJSON{Status: hubble.Status{State: "off",
+			Message: "Live flows of cluster " + conn.name + " are not available in the console yet; the counts are those its own Hubble reported."}, Window: "1h"}
+	}
+	if conn.hubble == nil {
 		return hubbleJSON{Status: hubble.Status{State: "off",
 			Message: "Hubble is off on this cluster (installed with --lite), so there are no counts or dropped connections."}, Window: "1h"}
 	}
-	return hubbleJSON{Status: a.cfg.Hubble.Status(), Window: "1h"}
+	return hubbleJSON{Status: conn.hubble.Status(), Window: "1h"}
 }
 
 func trafficRuleSummary(tr *kwerftv1.TrafficRule, live *hubble.Aggregator) trafficRuleJSON {
@@ -183,15 +192,16 @@ func (a *api) trafficOverview(w http.ResponseWriter, r *http.Request) {
 	}
 	out := trafficJSON{
 		Project: project, Isolated: proj.Spec.Isolated == nil || *proj.Spec.Isolated,
-		Hubble: a.hubbleStatus(), Rules: make([]trafficRuleJSON, 0, len(rules.Items)), Drops: []dropJSON{},
+		Hubble: a.hubbleStatus(ctx), Rules: make([]trafficRuleJSON, 0, len(rules.Items)), Drops: []dropJSON{},
 	}
+	flows := a.conn(ctx).hubble
 	for i := range rules.Items {
-		out.Rules = append(out.Rules, trafficRuleSummary(&rules.Items[i], a.cfg.Hubble))
+		out.Rules = append(out.Rules, trafficRuleSummary(&rules.Items[i], flows))
 	}
 	slices.SortFunc(out.Rules, func(x, y trafficRuleJSON) int { return strings.Compare(x.Name, y.Name) })
-	if a.cfg.Hubble != nil {
+	if flows != nil {
 		scope := hubble.Namespaces(project)
-		out.Drops = dropsJSON(a.cfg.Hubble.Drops(scope, nil, maxDrops), scope)
+		out.Drops = dropsJSON(flows.Drops(scope, nil, maxDrops), scope)
 	}
 	writeJSON(w, http.StatusOK, out)
 }
@@ -227,9 +237,9 @@ func (a *api) trafficDrops(w http.ResponseWriter, r *http.Request) {
 	out := struct {
 		Hubble hubbleJSON `json:"hubble"`
 		Drops  []dropJSON `json:"drops"`
-	}{Hubble: a.hubbleStatus(), Drops: []dropJSON{}}
-	if a.cfg.Hubble != nil {
-		out.Drops = dropsJSON(a.cfg.Hubble.Drops(scope, nil, maxDrops), scope)
+	}{Hubble: a.hubbleStatus(ctx), Drops: []dropJSON{}}
+	if flows := a.conn(ctx).hubble; flows != nil {
+		out.Drops = dropsJSON(flows.Drops(scope, nil, maxDrops), scope)
 	}
 	writeJSON(w, http.StatusOK, out)
 }

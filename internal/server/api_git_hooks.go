@@ -21,6 +21,7 @@ import (
 
 	kwerftv1 "github.com/ehilzinger/kwerft/api/v1alpha1"
 	"github.com/ehilzinger/kwerft/internal/builds"
+	"github.com/ehilzinger/kwerft/internal/clusters"
 	"github.com/ehilzinger/kwerft/internal/controllers"
 	"github.com/ehilzinger/kwerft/internal/git"
 )
@@ -171,13 +172,13 @@ func (g *gitAPI) hook(w http.ResponseWriter, r *http.Request) {
 	}
 	actor := "git:" + name
 	for i := range apps {
-		app := &apps[i]
+		app := &apps[i].app
 		b, err := webhookBuild(app, ev, trigger)
 		if err != nil {
 			g.internalError(w, r, err)
 			return
 		}
-		err = g.cfg.System.Create(ctx, b)
+		err = apps[i].conn.system.Create(ctx, b)
 		switch {
 		case apierrors.IsAlreadyExists(err):
 			res.Existing = append(res.Existing, app.Namespace+"/"+b.Name)
@@ -209,20 +210,54 @@ func (g *gitAPI) recordDelivery(ctx context.Context, name string) {
 	}
 }
 
-// matchingApps are the Apps a delivery is for.
-func (g *gitAPI) matchingApps(ctx context.Context, gc *kwerftv1.GitConnection, ev git.Event) ([]kwerftv1.App, error) {
+// hookApp is an App a delivery is for, with the cluster it lives in: its
+// Build is created there.
+type hookApp struct {
+	app  kwerftv1.App
+	conn *clusterConn
+}
+
+// matchingApps are the Apps a delivery is for, in every connected cluster
+// (Git connections live in the management cluster and serve all of them,
+// docs/phase5.md). A remote cluster that cannot be listed is skipped and
+// logged; its apps build on the host's next delivery.
+func (g *gitAPI) matchingApps(ctx context.Context, gc *kwerftv1.GitConnection, ev git.Event) ([]hookApp, error) {
 	keys := map[string]bool{}
 	for _, u := range ev.Repositories {
 		if repo, err := git.ParseRepository(u); err == nil {
 			keys[repo.Key()] = true
 		}
 	}
-	var list kwerftv1.AppList
-	if err := g.cfg.System.List(ctx, &list); err != nil {
-		return nil, err
+	var out []hookApp
+	for _, st := range g.clusters.states() {
+		conn := st.conn
+		if conn == nil || conn.system == nil {
+			if st.name != clusters.Local {
+				g.cfg.Logger.Warn("git webhook: cluster skipped", "cluster", st.name, "connection", gc.Name)
+			}
+			continue
+		}
+		var list kwerftv1.AppList
+		if err := conn.system.List(ctx, &list); err != nil {
+			if conn.isLocal() {
+				return nil, err
+			}
+			g.cfg.Logger.Warn("git webhook: cannot list apps", "cluster", st.name, "connection", gc.Name, "err", err)
+			continue
+		}
+		for _, app := range matchingAppsIn(list.Items, gc, ev, keys) {
+			out = append(out, hookApp{app: app, conn: conn})
+		}
 	}
+	slices.SortFunc(out, func(a, b hookApp) int {
+		return strings.Compare(a.app.Namespace+"/"+a.app.Name, b.app.Namespace+"/"+b.app.Name)
+	})
+	return out, nil
+}
+
+func matchingAppsIn(items []kwerftv1.App, gc *kwerftv1.GitConnection, ev git.Event, keys map[string]bool) []kwerftv1.App {
 	var out []kwerftv1.App
-	for _, app := range list.Items {
+	for _, app := range items {
 		src := app.Spec.Source.Git
 		if src == nil || src.Connection != gc.Name || !controllers.ProjectAllowed(gc, app.Namespace) || !app.DeletionTimestamp.IsZero() {
 			continue
@@ -240,10 +275,7 @@ func (g *gitAPI) matchingApps(ctx context.Context, gc *kwerftv1.GitConnection, e
 		}
 		out = append(out, app)
 	}
-	slices.SortFunc(out, func(a, b kwerftv1.App) int {
-		return strings.Compare(a.Namespace+"/"+a.Name, b.Namespace+"/"+b.Name)
-	})
-	return out, nil
+	return out
 }
 
 // webhookBuild is builds.New with a name that is the same for every

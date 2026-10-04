@@ -58,8 +58,10 @@ func (a *api) registerFirewall(mux *http.ServeMux) {
 	if a.cfg.firewallHook != nil {
 		a.cfg.firewallHook(fw)
 	}
+	// FirewallRules are per cluster (docs/phase5.md): every route takes
+	// ?cluster= (default: the local cluster).
 	read := func(h http.HandlerFunc) http.HandlerFunc {
-		return a.requireUser(a.requireKube(a.requireRole(h, store.RoleOwner, store.RoleAdmin)))
+		return a.requireUser(a.requireKube(a.requireRole(a.withClusterParam(h), store.RoleOwner, store.RoleAdmin)))
 	}
 	write := func(h http.HandlerFunc) http.HandlerFunc { return a.sameOrigin(read(h)) }
 	mux.HandleFunc("GET /api/v1/firewall", read(fw.get))
@@ -178,17 +180,18 @@ type firewallState struct {
 
 func (fw *firewallAPI) state(ctx context.Context) (firewallState, error) {
 	var st firewallState
-	if fw.cfg.SystemReader == nil {
+	sys := fw.conn(ctx).systemReader
+	if sys == nil {
 		return st, nil
 	}
 	var cm corev1.ConfigMap
-	err := fw.cfg.SystemReader.Get(ctx, client.ObjectKey{Namespace: firewall.Namespace, Name: firewall.DesiredConfigMap}, &cm)
+	err := sys.Get(ctx, client.ObjectKey{Namespace: firewall.Namespace, Name: firewall.DesiredConfigMap}, &cm)
 	if err != nil && !apierrors.IsNotFound(err) {
 		return st, err
 	}
 	_ = json.Unmarshal([]byte(cm.Data[firewall.DesiredKey]), &st.desired)
 	_ = json.Unmarshal([]byte(cm.Data[firewall.SnapshotKey]), &st.snapshot)
-	if st.statuses, err = controllers.ReadFirewallStatus(ctx, fw.cfg.SystemReader); err != nil {
+	if st.statuses, err = controllers.ReadFirewallStatus(ctx, sys); err != nil {
 		return st, err
 	}
 	st.progress = controllers.AggregateFirewall(st.desired, st.statuses, fw.now())

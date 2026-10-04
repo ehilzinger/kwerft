@@ -19,6 +19,8 @@ export type Project = {
   role?: User["role"];
   /** Owners and admins only. */
   members?: ProjectMember[];
+  /** The cluster the project lives in ("local": the console's own). */
+  cluster?: string;
 };
 
 export type ProjectAccess = "Team" | "Members";
@@ -28,6 +30,7 @@ export type ProjectAccessInfo = { project: string; access: ProjectAccess; member
 export type AppSummary = {
   name: string;
   project: string;
+  cluster?: string;
   source: {
     type: "image" | "git";
     image?: string;
@@ -125,7 +128,8 @@ const appPath = (project: string, name: string) => `/projects/${encodeURICompone
 
 export const workloads = {
   projects: () => request<Project[]>("/projects"),
-  createProject: (p: { name: string; displayName?: string }) => request<Project>("/projects", { method: "POST", json: p }),
+  /** cluster: owners and admins choose; the default is the console's own. */
+  createProject: (p: { name: string; displayName?: string; cluster?: string }) => request<Project>("/projects", { method: "POST", json: p }),
   deleteProject: (name: string) => request<void>(`/projects/${encodeURIComponent(name)}`, { method: "DELETE" }),
   // Who reaches a project (owners and admins manage it).
   projectAccess: (name: string) => request<ProjectAccessInfo>(`/projects/${encodeURIComponent(name)}/access`),

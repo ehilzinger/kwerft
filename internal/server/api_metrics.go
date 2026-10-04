@@ -38,8 +38,10 @@ const (
 )
 
 func (a *api) registerMetrics(mux *http.ServeMux) {
+	// ?cluster= (or ?project=) picks the cluster whose VictoriaMetrics the
+	// overview and the explorer read (clusters.go); without, the local one's.
 	read := func(h http.HandlerFunc) http.HandlerFunc {
-		return a.requireUser(a.requireKube(a.requireMetrics(h)))
+		return a.requireUser(a.requireKube(a.withClusterParam(a.requireMetrics(h))))
 	}
 	mux.HandleFunc("GET /api/v1/metrics/overview", read(a.metricsOverview))
 	mux.HandleFunc("GET /api/v1/metrics/query", read(a.metricsQuery))
@@ -48,12 +50,20 @@ func (a *api) registerMetrics(mux *http.ServeMux) {
 
 func (a *api) requireMetrics(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if a.cfg.Metrics == nil {
+		if a.metricsClient(r.Context()) == nil {
 			writeError(w, http.StatusServiceUnavailable, "Metrics are not set up on this console.")
 			return
 		}
 		next(w, r)
 	}
+}
+
+// metricsClient is the VictoriaMetrics of the context's cluster.
+func (a *api) metricsClient(ctx context.Context) *metrics.Client {
+	if m := a.conn(ctx).metrics; m != nil {
+		return m
+	}
+	return a.cfg.Metrics
 }
 
 func unconfined(p *principal) bool {
@@ -137,9 +147,9 @@ func (a *api) runQueries(ctx context.Context, qs []query, rng metrics.Range, sco
 			var s []metrics.Series
 			var err error
 			if q.instant {
-				s, err = a.cfg.Metrics.Query(ctx, q.expr, rng.End, scope)
+				s, err = a.metricsClient(ctx).Query(ctx, q.expr, rng.End, scope)
 			} else {
-				s, err = a.cfg.Metrics.QueryRange(ctx, q.expr, rng, scope)
+				s, err = a.metricsClient(ctx).QueryRange(ctx, q.expr, rng, scope)
 			}
 			mu.Lock()
 			defer mu.Unlock()
@@ -288,6 +298,7 @@ func (a *api) metricsOverview(w http.ResponseWriter, r *http.Request) {
 	out := map[string]any{
 		"range": label, "step": int64(rng.Step / time.Second), "start": rng.Start.Unix(), "end": rng.End.Unix(),
 		"scope":    map[bool]string{true: "all", false: "projects"}[scope.All()],
+		"cluster":  a.conn(r.Context()).name,
 		"nodes":    []nodeUsageJSON{},
 		"platform": nil,
 		"topApps":  topApps(res["appsCPU"], res["appsMemory"]),
@@ -413,7 +424,7 @@ func (a *api) metricsQuery(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	series, err := a.cfg.Metrics.QueryRange(r.Context(), expr, rng, scope)
+	series, err := a.metricsClient(r.Context()).QueryRange(r.Context(), expr, rng, scope)
 	if err != nil {
 		a.metricsError(w, r, err)
 		return
@@ -425,6 +436,6 @@ func (a *api) metricsQuery(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
 		"query": expr, "range": label, "step": int64(rng.Step / time.Second), "start": rng.Start.Unix(), "end": rng.End.Unix(),
 		"scope":  map[bool]string{true: "all", false: "projects"}[scope.All()],
-		"series": series, "truncated": truncated,
+		"series": series, "truncated": truncated, "cluster": a.conn(r.Context()).name,
 	})
 }

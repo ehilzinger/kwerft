@@ -3,6 +3,8 @@ import { Link, getRouteApi, useNavigate } from "@tanstack/react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../api";
 import { Icon } from "../components/Icon";
+import { ClusterBadge, ClusterFilter } from "../components/ClusterUI";
+import { inCluster, useClusterFilter } from "../clusters";
 import { TaskStatus } from "../components/TaskStatus";
 import { abilities, ago, words, workloads } from "../workloads";
 import { describeCron, duration, jobs, startedBy, when, type ScheduleSummary, type TaskSummary } from "../jobs";
@@ -29,8 +31,10 @@ export function Jobs() {
 
   const project = search.project;
   const setProject = (p?: string) => void navigate({ to: "/jobs", search: p ? { project: p } : {}, replace: true });
-  const shownSchedules = (schedules.data ?? []).filter((s) => !project || s.project === project);
-  const shownTasks = (tasks.data ?? []).filter((t) => !project || t.project === project);
+  const [cluster, setCluster] = useClusterFilter();
+  const projectList = inCluster(projects.data ?? [], cluster);
+  const shownSchedules = inCluster(schedules.data ?? [], cluster).filter((s) => !project || s.project === project);
+  const shownTasks = inCluster(tasks.data ?? [], cluster).filter((t) => !project || t.project === project);
   const failed = shownSchedules
     .filter((s) => s.lastRun?.phase === "failed" && s.lastRun.reason !== "Cancelled")
     .sort((a, b) => (b.lastRun!.finished ?? "").localeCompare(a.lastRun!.finished ?? ""));
@@ -61,12 +65,15 @@ export function Jobs() {
       <div className="card">
         <div className="ch-h">
           <h3>Schedules</h3>
-          {(projects.data?.length ?? 0) > 1 && (
-            <div className="seg" role="group" aria-label="Project">
-              <button aria-pressed={!project} onClick={() => setProject(undefined)}>All projects</button>
-              {projects.data!.map((p) => <button key={p.name} aria-pressed={project === p.name} onClick={() => setProject(p.name)}>{p.name}</button>)}
-            </div>
-          )}
+          <div className="acts">
+            <ClusterFilter value={cluster} onChange={(c) => { setCluster(c); setProject(undefined); }} />
+            {projectList.length > 1 && (
+              <div className="seg" role="group" aria-label="Project">
+                <button aria-pressed={!project} onClick={() => setProject(undefined)}>All projects</button>
+                {projectList.map((p) => <button key={p.name} aria-pressed={project === p.name} onClick={() => setProject(p.name)}>{p.name}</button>)}
+              </div>
+            )}
+          </div>
         </div>
         {schedules.isPending ? (
           <p className="loading pad">Loading schedules…</p>
@@ -145,7 +152,7 @@ function ScheduleRow({ s, canEdit, onOpen, onRun }: { s: ScheduleSummary; canEdi
     <tr className="click" onClick={onOpen}>
       <td className="nowrap">
         <span className="nm"><Link to="/jobs/$project/schedules/$name" params={{ project: s.project, name: s.name }} onClick={(e) => e.stopPropagation()}>{s.name}</Link></span>
-        <span className="sub">{s.project}</span>
+        <span className="sub">{s.project}<ClusterBadge cluster={s.cluster} /></span>
       </td>
       <td className="mono ell" title={s.image ?? `from app ${s.fromApp}`}>{s.image ?? <>from app <b>{s.fromApp}</b></>}</td>
       <td>
@@ -199,6 +206,7 @@ export function RunsTable({ tasks, showProject, showSource = true }: { tasks: Ta
                   <span className="sub">
                     {sub.join(" · ")}
                     {t.overrides.length > 0 && <>{sub.length ? " · " : ""}{t.overrides.map((o) => <span key={o} className="tag">{o}</span>)}</>}
+                    {showProject && <ClusterBadge cluster={t.cluster} />}
                   </span>
                 </td>
                 <td className={by.who === "schedule" ? "dim" : undefined}>{by.who}{by.how ? <span className="sub">{by.how}</span> : null}</td>

@@ -58,6 +58,14 @@ import (
 //     condition, so the console keeps Custom rules (spec.expr, arbitrary
 //     MetricsQL over every metric) to owners and admins: developers may not
 //     create one, turn a rule into one, or change or delete one.
+//   - Clusters (docs/phase5.md): every cluster runs its own vmalert and
+//     Alertmanager. Alerts and silences are read from each connected
+//     cluster's Alertmanager (through its API server's service proxy) and
+//     carry "cluster"; a silence is created in the cluster of its alert or
+//     project (or the one named, for owners' and admins' platform
+//     silences). AlertRules are per cluster too: a rule watches projects of
+//     one cluster, the one its scope names (or "cluster", default local).
+//     NotificationChannels live in the management cluster only.
 //   - Channel credentials are write-only, as for Git connections: the
 //     console merge-patches the Secret notify-<channel> in
 //     kwerft-observability as the user (the reconciler's Role grants owners
@@ -93,19 +101,20 @@ func (a *api) registerAlerts(mux *http.ServeMux) {
 		return write(a.requireRole(h, store.RoleOwner, store.RoleAdmin))
 	}
 
-	mux.HandleFunc("GET /api/v1/alerts", read(al.list))
-	mux.HandleFunc("GET /api/v1/alerts/silences", read(al.silences))
+	mux.HandleFunc("GET /api/v1/alerts", read(a.withClusterParam(al.list)))
+	mux.HandleFunc("GET /api/v1/alerts/silences", read(a.withClusterParam(al.silences)))
 	// Everyone who sees an alert may ask; maySilence decides by the role in
 	// the alert's project (a console viewer can be a developer in a Members
 	// project).
 	mux.HandleFunc("POST /api/v1/alerts/silences", write(al.silenceCreate))
-	mux.HandleFunc("DELETE /api/v1/alerts/silences/{id}", write(al.silenceDelete))
+	mux.HandleFunc("DELETE /api/v1/alerts/silences/{id}", write(a.withClusterParam(al.silenceDelete)))
 
 	mux.HandleFunc("GET /api/v1/alerts/conditions", read(al.conditions))
-	mux.HandleFunc("GET /api/v1/alerts/rules", read(al.rules))
+	mux.HandleFunc("GET /api/v1/alerts/rules", read(a.withClusterParam(al.rules)))
 	mux.HandleFunc("POST /api/v1/alerts/rules", may(access.AlertRules, al.ruleCreate))
-	mux.HandleFunc("PUT /api/v1/alerts/rules/{name}", may(access.AlertRules, al.ruleUpdate))
-	mux.HandleFunc("DELETE /api/v1/alerts/rules/{name}", may(access.AlertRules, al.ruleDelete))
+	// A rule is named within its cluster: ?cluster= (default local).
+	mux.HandleFunc("PUT /api/v1/alerts/rules/{name}", may(access.AlertRules, a.withClusterParam(al.ruleUpdate)))
+	mux.HandleFunc("DELETE /api/v1/alerts/rules/{name}", may(access.AlertRules, a.withClusterParam(al.ruleDelete)))
 
 	mux.HandleFunc("GET /api/v1/alerts/channels", read(al.channels))
 	mux.HandleFunc("POST /api/v1/alerts/channels", admin(al.channelCreate))
@@ -125,6 +134,22 @@ func (al *alertsAPI) upstreamError(w http.ResponseWriter, r *http.Request, err e
 	al.internalError(w, r, err)
 }
 
+// amFor is the Alertmanager of a cluster; metricsFor its VictoriaMetrics
+// for resolved alerts.
+func (al *alertsAPI) amFor(conn *clusterConn) *alerting.Alertmanager {
+	if conn.am != nil && !conn.isLocal() {
+		return conn.am
+	}
+	return al.am
+}
+
+func (al *alertsAPI) metricsFor(conn *clusterConn) *alerting.Metrics {
+	if conn.alertMetrics != nil && !conn.isLocal() {
+		return conn.alertMetrics
+	}
+	return al.metrics
+}
+
 // ---- who sees what -------------------------------------------------------------------
 
 // visibility is what a user may see of alerts: the namespaces of the
@@ -140,11 +165,16 @@ func (al *alertsAPI) visibility(ctx context.Context, _ client.Client, p *princip
 	if err != nil {
 		return visibility{}, err
 	}
+	return al.visibilityOf(scope), nil
+}
+
+// visibilityOf is the visibility a project scope (one cluster's) gives.
+func (al *alertsAPI) visibilityOf(scope *projectScope) visibility {
 	v := visibility{projects: map[string]bool{}, platform: scope.platform, scope: scope}
 	for _, ns := range scope.namespaces() {
 		v.projects[ns] = true
 	}
-	return v, nil
+	return v
 }
 
 // maySilence: owners and admins silence anything they see; others the
@@ -261,6 +291,7 @@ type alertJSON struct {
 	SilencedUntil *time.Time        `json:"silencedUntil,omitempty"`
 	SilencedBy    []string          `json:"silencedBy"`
 	ConsoleURL    string            `json:"consoleURL,omitempty"`
+	Cluster       string            `json:"cluster"`
 }
 
 func newAlertJSON(v visibility, labels map[string]string) alertJSON {
@@ -294,28 +325,47 @@ func (al *alertsAPI) list(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "state must be firing, silenced or resolved.")
 		return
 	}
-	c, p, ctx, cancel, err := al.userClient(r)
+	p := principalOf(r)
+	ctx, cancel := context.WithTimeout(r.Context(), kubeTimeout)
 	defer cancel()
-	if err != nil {
-		al.internalError(w, r, err)
+	out := []alertJSON{}
+	// The local Alertmanager failing fails the list, as before; a remote
+	// one is left out like an unreachable cluster.
+	var localErr error
+	if !al.visitClusters(w, r, ctx, p, "alerts.list", "Projects not found.", func(vc *clusterVisit) error {
+		alerts, err := al.clusterAlerts(vc.ctx, vc.conn, al.visibilityOf(vc.scope), state)
+		if err != nil && vc.conn.isLocal() {
+			localErr = err
+			return nil
+		}
+		out = append(out, alerts...)
+		return err
+	}) {
 		return
 	}
-	v, err := al.visibility(ctx, c, p)
-	if err != nil {
-		al.kubeError(w, r, p, "alerts.list", "", "Projects not found.", err)
+	if localErr != nil {
+		al.upstreamError(w, r, localErr)
 		return
 	}
-	current, err := al.am.Alerts(ctx)
+	sortAlerts(out)
+	if state == "resolved" && len(out) > 200 {
+		out = out[:200]
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+// clusterAlerts are the alerts of one cluster the user sees.
+func (al *alertsAPI) clusterAlerts(ctx context.Context, conn *clusterConn, v visibility, state string) ([]alertJSON, error) {
+	am := al.amFor(conn)
+	current, err := am.Alerts(ctx)
 	if err != nil {
-		al.upstreamError(w, r, err)
-		return
+		return nil, err
 	}
 	out := []alertJSON{}
 	if state == "resolved" {
-		resolved, err := al.resolved(ctx, v, current)
+		resolved, err := al.resolved(ctx, conn, v, current)
 		if err != nil {
-			al.upstreamError(w, r, err)
-			return
+			return nil, err
 		}
 		out = resolved
 	} else {
@@ -333,10 +383,9 @@ func (al *alertsAPI) list(w http.ResponseWriter, r *http.Request) {
 				j.SilencedBy = a.Status.SilencedBy
 				if silences == nil {
 					silences = map[string]alerting.Silence{}
-					all, err := al.am.Silences(ctx)
+					all, err := am.Silences(ctx)
 					if err != nil {
-						al.upstreamError(w, r, err)
-						return
+						return nil, err
 					}
 					for _, s := range all {
 						silences[s.ID] = s
@@ -354,8 +403,10 @@ func (al *alertsAPI) list(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	sortAlerts(out)
-	writeJSON(w, http.StatusOK, out)
+	for i := range out {
+		out[i].Cluster = conn.name
+	}
+	return out, nil
 }
 
 // resolvedAfter: vmalert writes ALERTS at every evaluation (20s, or 10s)
@@ -364,14 +415,15 @@ const resolvedAfter = 90 * time.Second
 
 // resolved are the alerts that fired in the last 24 hours and no longer do:
 // Alertmanager forgets them, but vmalert writes the ALERTS series.
-func (al *alertsAPI) resolved(ctx context.Context, v visibility, current []alerting.AMAlert) ([]alertJSON, error) {
+func (al *alertsAPI) resolved(ctx context.Context, conn *clusterConn, v visibility, current []alerting.AMAlert) ([]alertJSON, error) {
 	const sel = `ALERTS{alertstate="firing",` + observability.LabelRule + `!=""}[24h]`
 	now := al.now()
-	last, err := al.metrics.Query(ctx, "tlast_over_time("+sel+")", now)
+	m := al.metricsFor(conn)
+	last, err := m.Query(ctx, "tlast_over_time("+sel+")", now)
 	if err != nil {
 		return nil, err
 	}
-	first, err := al.metrics.Query(ctx, "tfirst_over_time("+sel+")", now)
+	first, err := m.Query(ctx, "tfirst_over_time("+sel+")", now)
 	if err != nil {
 		return nil, err
 	}
@@ -475,6 +527,7 @@ type silenceJSON struct {
 	Comment   string             `json:"comment"`
 	State     string             `json:"state"`
 	Project   string             `json:"project,omitempty"`
+	Cluster   string             `json:"cluster"`
 }
 
 func silenceView(v visibility, s alerting.Silence) silenceJSON {
@@ -490,28 +543,36 @@ func silenceView(v visibility, s alerting.Silence) silenceJSON {
 }
 
 func (al *alertsAPI) silences(w http.ResponseWriter, r *http.Request) {
-	c, p, ctx, cancel, err := al.userClient(r)
+	p := principalOf(r)
+	ctx, cancel := context.WithTimeout(r.Context(), kubeTimeout)
 	defer cancel()
-	if err != nil {
-		al.internalError(w, r, err)
-		return
-	}
-	v, err := al.visibility(ctx, c, p)
-	if err != nil {
-		al.kubeError(w, r, p, "alerts.silences", "", "Projects not found.", err)
-		return
-	}
-	all, err := al.am.Silences(ctx)
-	if err != nil {
-		al.upstreamError(w, r, err)
-		return
-	}
 	out := []silenceJSON{}
-	for _, s := range all {
-		if s.Status != nil && s.Status.State == "expired" || !v.seesSilence(s.Matchers) {
-			continue
+	var localErr error
+	if !al.visitClusters(w, r, ctx, p, "alerts.silences", "Projects not found.", func(vc *clusterVisit) error {
+		all, err := al.amFor(vc.conn).Silences(vc.ctx)
+		if err != nil {
+			if vc.conn.isLocal() {
+				localErr = err
+				return nil
+			}
+			return err
 		}
-		out = append(out, silenceView(v, s))
+		v := al.visibilityOf(vc.scope)
+		for _, s := range all {
+			if s.Status != nil && s.Status.State == "expired" || !v.seesSilence(s.Matchers) {
+				continue
+			}
+			sv := silenceView(v, s)
+			sv.Cluster = vc.conn.name
+			out = append(out, sv)
+		}
+		return nil
+	}) {
+		return
+	}
+	if localErr != nil {
+		al.upstreamError(w, r, localErr)
+		return
 	}
 	slices.SortFunc(out, func(a, b silenceJSON) int { return a.EndsAt.Compare(b.EndsAt) })
 	writeJSON(w, http.StatusOK, out)
@@ -522,6 +583,9 @@ type silenceInput struct {
 	Matchers    []alerting.Matcher `json:"matchers"`
 	Duration    string             `json:"duration"`
 	Comment     string             `json:"comment"`
+	// Cluster whose Alertmanager gets the silence; found from the alert or
+	// the project when left out (default local).
+	Cluster string `json:"cluster"`
 }
 
 var (
@@ -549,24 +613,27 @@ func (al *alertsAPI) silenceCreate(w http.ResponseWriter, r *http.Request) {
 		writeFieldError(w, "comment", "Keep the comment under 1000 characters.")
 		return
 	}
-	c, p, ctx, cancel, err := al.userClient(r)
+	p := principalOf(r)
+	ctx, cancel := context.WithTimeout(r.Context(), kubeTimeout)
 	defer cancel()
-	if err != nil {
-		al.internalError(w, r, err)
+	conn, ok := al.silenceCluster(w, r, ctx, &in)
+	if !ok {
 		return
 	}
-	v, err := al.visibility(ctx, c, p)
+	ctx = withCluster(ctx, conn, true)
+	v, err := al.visibility(ctx, nil, p)
 	if err != nil {
 		al.kubeError(w, r, p, "alerts.silence_create", "", "Projects not found.", err)
 		return
 	}
+	am := al.amFor(conn)
 	var matchers []alerting.Matcher
 	switch {
 	case in.Fingerprint != "" && len(in.Matchers) > 0:
 		writeFieldError(w, "matchers", "Silence either one alert (fingerprint) or by matchers, not both.")
 		return
 	case in.Fingerprint != "":
-		current, err := al.am.Alerts(ctx)
+		current, err := am.Alerts(ctx)
 		if err != nil {
 			al.upstreamError(w, r, err)
 			return
@@ -613,7 +680,7 @@ func (al *alertsAPI) silenceCreate(w http.ResponseWriter, r *http.Request) {
 	}
 	now := al.now()
 	s := alerting.Silence{Matchers: matchers, StartsAt: now, EndsAt: now.Add(d), CreatedBy: p.user.Email, Comment: comment}
-	id, err := al.am.CreateSilence(ctx, s)
+	id, err := am.CreateSilence(ctx, s)
 	if err != nil {
 		al.upstreamError(w, r, err)
 		return
@@ -622,8 +689,62 @@ func (al *alertsAPI) silenceCreate(w http.ResponseWriter, r *http.Request) {
 	s.Status = &struct {
 		State string `json:"state"`
 	}{State: "active"}
-	al.audit(r, p.user.Email, "alerts.silence_create", id, matchersString(matchers)+" for "+d.String())
-	writeJSON(w, http.StatusCreated, silenceView(v, s))
+	al.audit(r, p.user.Email, "alerts.silence_create", id, matchersString(matchers)+" for "+d.String()+clusterDetail(conn))
+	out := silenceView(v, s)
+	out.Cluster = conn.name
+	writeJSON(w, http.StatusCreated, out)
+}
+
+// clusterDetail names a remote cluster in an audit detail.
+func clusterDetail(conn *clusterConn) string {
+	if conn.isLocal() {
+		return ""
+	}
+	return " in cluster " + conn.name
+}
+
+// silenceCluster is the cluster a new silence belongs to: the one named,
+// the one whose Alertmanager has the alert (fingerprint), the cluster of
+// the project its namespace matcher names, or the local one. On false it
+// has answered.
+func (al *alertsAPI) silenceCluster(w http.ResponseWriter, r *http.Request, ctx context.Context, in *silenceInput) (*clusterConn, bool) {
+	if in.Cluster != "" {
+		conn, err := al.clusters.byName(in.Cluster)
+		if err != nil {
+			clusterError(w, err)
+			return nil, false
+		}
+		return conn, true
+	}
+	if !al.clusters.multi() {
+		return al.clusters.local, true
+	}
+	if in.Fingerprint != "" {
+		for _, st := range al.clusters.states() {
+			if st.conn == nil {
+				continue
+			}
+			current, err := al.amFor(st.conn).Alerts(ctx)
+			if err != nil {
+				continue
+			}
+			if slices.ContainsFunc(current, func(a alerting.AMAlert) bool { return a.Fingerprint == in.Fingerprint }) {
+				return st.conn, true
+			}
+		}
+		return al.clusters.local, true
+	}
+	for _, m := range in.Matchers {
+		if m.Name == "namespace" && m.Equal() && !m.IsRegex && m.Value != "" {
+			conn, err := al.clusters.forProject(ctx, m.Value)
+			if err != nil {
+				clusterError(w, err)
+				return nil, false
+			}
+			return conn, true
+		}
+	}
+	return al.clusters.local, true
 }
 
 func matchersString(ms []alerting.Matcher) string {
@@ -651,18 +772,18 @@ func (al *alertsAPI) silenceDelete(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "Silence not found.")
 		return
 	}
-	c, p, ctx, cancel, err := al.userClient(r)
+	p := principalOf(r)
+	ctx, cancel := context.WithTimeout(r.Context(), kubeTimeout)
 	defer cancel()
-	if err != nil {
-		al.internalError(w, r, err)
-		return
-	}
-	v, err := al.visibility(ctx, c, p)
+	conn := al.silenceHome(ctx, id)
+	ctx = withCluster(ctx, conn, true)
+	v, err := al.visibility(ctx, nil, p)
 	if err != nil {
 		al.kubeError(w, r, p, "alerts.silence_delete", id, "Projects not found.", err)
 		return
 	}
-	s, err := al.am.Silence(ctx, id)
+	am := al.amFor(conn)
+	s, err := am.Silence(ctx, id)
 	if errors.Is(err, alerting.ErrNotFound) || err == nil && !v.seesSilence(s.Matchers) {
 		writeError(w, http.StatusNotFound, "Silence not found.")
 		return
@@ -676,12 +797,33 @@ func (al *alertsAPI) silenceDelete(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusForbidden, "Your role in this project does not allow silencing alerts.")
 		return
 	}
-	if err := al.am.DeleteSilence(ctx, id); err != nil && !errors.Is(err, alerting.ErrNotFound) {
+	if err := am.DeleteSilence(ctx, id); err != nil && !errors.Is(err, alerting.ErrNotFound) {
 		al.upstreamError(w, r, err)
 		return
 	}
-	al.audit(r, p.user.Email, "alerts.silence_delete", id, matchersString(s.Matchers))
+	al.audit(r, p.user.Email, "alerts.silence_delete", id, matchersString(s.Matchers)+clusterDetail(conn))
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// silenceHome is the cluster whose Alertmanager has the silence: the one
+// the request names (?cluster=), or the first that knows the ID (IDs are
+// UUIDs), or the local one.
+func (al *alertsAPI) silenceHome(ctx context.Context, id string) *clusterConn {
+	if sel := selectedCluster(ctx); sel != nil {
+		return sel
+	}
+	if !al.clusters.multi() {
+		return al.clusters.local
+	}
+	for _, st := range al.clusters.states() {
+		if st.conn == nil {
+			continue
+		}
+		if _, err := al.amFor(st.conn).Silence(ctx, id); err == nil {
+			return st.conn
+		}
+	}
+	return al.clusters.local
 }
 
 // ---- conditions ----------------------------------------------------------------------------
@@ -738,6 +880,8 @@ type ruleJSON struct {
 	Ready         bool      `json:"ready"`
 	Message       string    `json:"message,omitempty"`
 	EffectiveExpr string    `json:"effectiveExpr"`
+	// Cluster the rule lives in (and whose projects it watches).
+	Cluster string `json:"cluster"`
 	// Description says in plain words what the rule watches, defaults
 	// filled in ("More than 5 restarts in 15 minutes, in all projects").
 	Description string `json:"description"`
@@ -782,7 +926,7 @@ func (al *alertsAPI) firingByRule(ctx context.Context, v visibility) map[string]
 	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
 	out := map[string]int{}
-	current, err := al.am.Alerts(ctx)
+	current, err := al.amFor(al.conn(ctx)).Alerts(ctx)
 	if err != nil {
 		return out
 	}
@@ -797,33 +941,34 @@ func (al *alertsAPI) firingByRule(ctx context.Context, v visibility) map[string]
 func ruleNotFound(name string) string { return fmt.Sprintf("Alert rule %q not found.", name) }
 
 func (al *alertsAPI) rules(w http.ResponseWriter, r *http.Request) {
-	c, p, ctx, cancel, err := al.userClient(r)
+	p := principalOf(r)
+	ctx, cancel := context.WithTimeout(r.Context(), kubeTimeout)
 	defer cancel()
-	if err != nil {
-		al.internalError(w, r, err)
-		return
-	}
-	// Every role lists kwerft.dev resources (roles.yaml); rules carry no
-	// secrets, so the cache may serve them.
-	var list kwerftv1.AlertRuleList
-	if err := al.api.list(ctx, c, &list); err != nil {
-		al.kubeError(w, r, p, "alerts.rule_list", "", "Alert rules not found.", err)
-		return
-	}
-	v, err := al.visibility(ctx, c, p)
-	if err != nil {
-		al.kubeError(w, r, p, "alerts.rule_list", "", "Projects not found.", err)
-		return
-	}
-	firing := al.firingByRule(ctx, v)
-	out := make([]ruleJSON, 0, len(list.Items))
-	for i := range list.Items {
-		if !v.seesRule(&list.Items[i].Spec) {
-			continue // about projects the user does not reach
+	out := []ruleJSON{}
+	if !al.visitClusters(w, r, ctx, p, "alerts.rule_list", "Alert rules not found.", func(vc *clusterVisit) error {
+		// Every role lists kwerft.dev resources (roles.yaml); rules carry
+		// no secrets, so the cache may serve them.
+		var list kwerftv1.AlertRuleList
+		if err := al.api.list(vc.ctx, vc.c, &list); err != nil {
+			return err
 		}
-		out = append(out, ruleView(&list.Items[i], firing[list.Items[i].Name]))
+		v := al.visibilityOf(vc.scope)
+		firing := al.firingByRule(vc.ctx, v)
+		for i := range list.Items {
+			if !v.seesRule(&list.Items[i].Spec) {
+				continue // about projects the user does not reach
+			}
+			rv := ruleView(&list.Items[i], firing[list.Items[i].Name])
+			rv.Cluster = vc.conn.name
+			out = append(out, rv)
+		}
+		return nil
+	}) {
+		return
 	}
-	slices.SortFunc(out, func(a, b ruleJSON) int { return strings.Compare(a.Name, b.Name) })
+	slices.SortFunc(out, func(a, b ruleJSON) int {
+		return cmp.Or(strings.Compare(a.Name, b.Name), strings.Compare(a.Cluster, b.Cluster))
+	})
 	writeJSON(w, http.StatusOK, out)
 }
 
@@ -838,6 +983,9 @@ type ruleInput struct {
 	Severity  string     `json:"severity"`
 	Channels  []string   `json:"channels"`
 	Disabled  bool       `json:"disabled"`
+	// Cluster the rule is created in (create only): by default the cluster
+	// of the projects it watches, or the local one.
+	Cluster string `json:"cluster"`
 }
 
 // ruleSpec validates a RuleInput into a spec.
@@ -951,7 +1099,13 @@ func (al *alertsAPI) ruleCreate(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	c, p, ctx, cancel, err := al.userClient(r)
+	p := principalOf(r)
+	conn, ok := al.ruleCluster(w, r, &in, spec)
+	if !ok {
+		return
+	}
+	r = r.WithContext(withCluster(r.Context(), conn, true))
+	c, _, ctx, cancel, err := al.userClient(r)
 	defer cancel()
 	if err != nil {
 		al.internalError(w, r, err)
@@ -965,8 +1119,42 @@ func (al *alertsAPI) ruleCreate(w http.ResponseWriter, r *http.Request) {
 		al.kubeError(w, r, p, "alerts.rule_create", name, ruleNotFound(name), err)
 		return
 	}
-	al.audit(r, p.user.Email, "alerts.rule_create", name, ruleDetail(spec))
-	writeJSON(w, http.StatusCreated, ruleView(rule, 0))
+	al.audit(r, p.user.Email, "alerts.rule_create", name, ruleDetail(spec)+clusterDetail(conn))
+	out := ruleView(rule, 0)
+	out.Cluster = conn.name
+	writeJSON(w, http.StatusCreated, out)
+}
+
+// ruleCluster is the cluster a new rule goes to: the one named, else the
+// cluster of the projects it watches (all in one cluster), else the local
+// one. On false it has answered.
+func (al *alertsAPI) ruleCluster(w http.ResponseWriter, r *http.Request, in *ruleInput, spec kwerftv1.AlertRuleSpec) (*clusterConn, bool) {
+	if in.Cluster != "" {
+		conn, err := al.clusters.byName(in.Cluster)
+		if err != nil {
+			clusterError(w, err)
+			return nil, false
+		}
+		return conn, true
+	}
+	var home *clusterConn
+	for _, project := range ruleProjects(&spec) {
+		conn, err := al.clusters.forProject(r.Context(), project)
+		if err != nil {
+			clusterError(w, err)
+			return nil, false
+		}
+		if home != nil && home != conn {
+			writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"field": "scope",
+				"error": "A rule watches projects of one cluster. The projects you picked are in different clusters: write one rule per cluster."})
+			return nil, false
+		}
+		home = conn
+	}
+	if home == nil {
+		home = al.clusters.local
+	}
+	return home, true
 }
 
 func (al *alertsAPI) ruleUpdate(w http.ResponseWriter, r *http.Request) {
@@ -1114,6 +1302,8 @@ func channelNotFound(name string) string {
 }
 
 func (al *alertsAPI) channels(w http.ResponseWriter, r *http.Request) {
+	// Channels live in the management cluster (no route here names
+	// another), as do the rules listed with them.
 	c, p, ctx, cancel, err := al.userClient(r)
 	defer cancel()
 	if err != nil {

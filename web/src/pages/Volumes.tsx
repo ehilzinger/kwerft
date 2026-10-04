@@ -6,6 +6,8 @@ import { AppsTabs } from "../components/AppsTabs";
 import { Dialog } from "../components/Dialog";
 import { Field } from "../components/Field";
 import { Icon } from "../components/Icon";
+import { ClusterBadge, ClusterFilter } from "../components/ClusterUI";
+import { inCluster, useClusterFilter, useClusters } from "../clusters";
 import { jobs, type Volume, type VolumeClass, type VolumeInUse } from "../jobs";
 import { abilities, ago, workloads } from "../workloads";
 import { errorText } from "./Apps";
@@ -29,10 +31,13 @@ export function Volumes() {
   const volumes = useQuery({ queryKey: ["volumes"], queryFn: () => jobs.volumes(), refetchInterval: POLL });
   const [dialog, setDialog] = useState<"create" | { resize: Volume } | { delete: Volume }>();
   const [notice, setNotice] = useState<string>();
+  const { multi } = useClusters();
 
   const project = search.project;
   const setProject = (p?: string) => void navigate({ to: "/apps/volumes", search: p ? { project: p } : {}, replace: true });
-  const shown = (volumes.data ?? []).filter((v) => !project || v.project === project);
+  const [cluster, setCluster] = useClusterFilter();
+  const projectList = inCluster(projects.data ?? [], cluster);
+  const shown = inCluster(volumes.data ?? [], cluster).filter((v) => !project || v.project === project);
   const noProjects = projects.isSuccess && projects.data.length === 0;
   const denied = can.deploy ? undefined : "Your role can view volumes but not change them.";
 
@@ -56,12 +61,15 @@ export function Volumes() {
         <div className="banner info" role="status"><Icon name="disk" /><span>{notice}</span><button className="btn sm" onClick={() => setNotice(undefined)}>Dismiss</button></div>
       )}
 
-      {(projects.data?.length ?? 0) > 1 && (
+      {((projects.data?.length ?? 0) > 1 || multi) && (
         <div className="toolbar">
-          <div className="seg" role="group" aria-label="Project">
-            <button aria-pressed={!project} onClick={() => setProject(undefined)}>All projects</button>
-            {projects.data!.map((p) => <button key={p.name} aria-pressed={project === p.name} onClick={() => setProject(p.name)}>{p.name}</button>)}
-          </div>
+          <ClusterFilter value={cluster} onChange={(c) => { setCluster(c); setProject(undefined); }} />
+          {projectList.length > 1 && (
+            <div className="seg" role="group" aria-label="Project">
+              <button aria-pressed={!project} onClick={() => setProject(undefined)}>All projects</button>
+              {projectList.map((p) => <button key={p.name} aria-pressed={project === p.name} onClick={() => setProject(p.name)}>{p.name}</button>)}
+            </div>
+          )}
         </div>
       )}
 
@@ -80,7 +88,7 @@ export function Volumes() {
             <tbody>
               {shown.map((v) => (
                 <tr key={`${v.project}/${v.name}`}>
-                  <td><span className="nm">{v.name}</span><span className="sub">{v.project}</span></td>
+                  <td><span className="nm">{v.name}</span><span className="sub">{v.project}<ClusterBadge cluster={v.cluster} /></span></td>
                   <td className="num">{v.size}{v.capacity && v.capacity !== v.size ? <span className="sub">{v.capacity} provisioned</span> : null}</td>
                   <td>{v.class === "hcloud-volume" ? "Cloud Volume" : "Local NVMe"}</td>
                   <td><VolumeStatus v={v} /></td>

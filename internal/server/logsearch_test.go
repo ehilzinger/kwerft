@@ -309,7 +309,7 @@ func TestBuildLogFromHistoryWhenThePodIsGone(t *testing.T) {
 		c.LogsURL = vl.srv.URL
 		c.buildsHook = func(b *buildsAPI) {
 			b.getBuild = fb.get
-			b.ownPods = func() (podBackend, error) { return fakeBackend{fake}, nil }
+			b.ownPods = func(context.Context) (podBackend, error) { return fakeBackend{fake}, nil }
 			b.logs = fastLogLimits()
 			api = b
 		}

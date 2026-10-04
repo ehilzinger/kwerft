@@ -11,6 +11,7 @@ import { Dialog } from "../components/Dialog";
 import { Field } from "../components/Field";
 import { Icon } from "../components/Icon";
 import { workloads } from "../workloads";
+import { ClusterBadge } from "../components/ClusterUI";
 import { MonitoringLayout } from "./Monitoring";
 import { errText } from "./MonitoringAlerts";
 import "../styles/monitoring.css";
@@ -69,7 +70,7 @@ export function MonitoringRules() {
               </thead>
               <tbody>
                 {list.map((r) => (
-                  <RuleRow key={r.name} r={r} channels={channels.data} canEdit={can.act && (r.condition !== "Custom" || can.admin)}
+                  <RuleRow key={`${r.cluster ?? ""}/${r.name}`} r={r} channels={channels.data} canEdit={can.act && (r.condition !== "Custom" || can.admin)}
                     onEdit={() => setDialog({ edit: r })} onRemove={() => setDialog({ remove: r })} />
                 ))}
               </tbody>
@@ -94,6 +95,7 @@ function inputOf(r: Rule): RuleInput {
   return {
     name: r.name, condition: r.condition, threshold: r.threshold, window: r.window, for: r.for, expr: r.expr,
     scope: { projects: r.scope?.projects ?? [], apps: r.scope?.apps ?? [] }, severity: r.severity, channels: r.channels ?? [], disabled: r.disabled,
+    cluster: r.cluster,
   };
 }
 
@@ -110,6 +112,7 @@ function RuleRow({ r, channels, canEdit, onEdit, onRemove }: { r: Rule; channels
         <span className="rule-name">
           {r.name}
           {r.default && <span className="tag" title="Comes with Kwerft; it returns with its defaults if deleted">default</span>}
+          <ClusterBadge cluster={r.cluster} />
           {!r.ready && !r.disabled && <span className="pill warn" title={r.message}>{r.message ? "Not active" : "Setting up"}</span>}
         </span>
         {!r.ready && !r.disabled && r.message && <span className="sub">{r.message}</span>}
@@ -205,7 +208,7 @@ function RuleDialog({ edit, admin, readOnly, channels, onClose }: { edit?: Rule;
   };
   const info = conditions[f.condition];
   const save = useMutation({
-    mutationFn: () => (edit ? alertsApi.updateRule(ruleOf(f)) : alertsApi.createRule(ruleOf(f))),
+    mutationFn: () => (edit ? alertsApi.updateRule({ ...ruleOf(f), cluster: edit.cluster }) : alertsApi.createRule(ruleOf(f))),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: alertKeys.rules });
       onClose();
@@ -405,7 +408,7 @@ function DeleteRuleDialog({ r, onClose }: { r: Rule; onClose: () => void }) {
     void queryClient.invalidateQueries({ queryKey: alertKeys.rules });
     onClose();
   };
-  const del = useMutation({ mutationFn: () => alertsApi.deleteRule(r.name), onSuccess: done });
+  const del = useMutation({ mutationFn: () => alertsApi.deleteRule(r.name, r.cluster), onSuccess: done });
   const disable = useMutation({ mutationFn: () => alertsApi.updateRule({ ...inputOf(r), disabled: true }), onSuccess: done });
   const error = del.error ?? disable.error;
   return (

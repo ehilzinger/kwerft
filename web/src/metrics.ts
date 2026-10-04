@@ -3,6 +3,7 @@
 // VictoriaMetrics; points are [unix seconds, value].
 
 import { request } from "./api";
+import { clusterQuery } from "./clusters";
 
 export type Point = { t: number; v: number };
 /** null: no data for this chart in the range. */
@@ -51,8 +52,10 @@ const enc = encodeURIComponent;
 export const metricsApi = {
   app: (project: string, app: string, range: RangeId) =>
     request<AppMetrics>(`/projects/${enc(project)}/apps/${enc(app)}/metrics?range=${range}`),
-  overview: (range: RangeId) => request<MetricsOverview>(`/metrics/overview?range=${range}`),
-  query: (query: string, range: RangeId) => request<ExploreResult>(`/metrics/query?range=${range}&query=${enc(query)}`),
+  // Each cluster has its own VictoriaMetrics (Phase 5): cluster picks one; the default is the console's own.
+  overview: (range: RangeId, cluster?: string) => request<MetricsOverview>(`/metrics/overview?range=${range}${clusterQuery(cluster, "&")}`),
+  query: (query: string, range: RangeId, cluster?: string) =>
+    request<ExploreResult>(`/metrics/query?range=${range}&query=${enc(query)}${clusterQuery(cluster, "&")}`),
 };
 
 // ---- formats ---------------------------------------------------------------

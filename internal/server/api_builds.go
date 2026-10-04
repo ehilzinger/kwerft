@@ -164,9 +164,10 @@ func (a *api) latestBuild(ctx context.Context, c client.Client, app *kwerftv1.Ap
 type buildsAPI struct {
 	*api
 	// getBuild reads a Build as the user; ownPods reaches the build pods with
-	// the console's own identity. Tests swap both for fakes.
+	// the console's own identity; both in the cluster of the context (the
+	// project's). Tests swap both for fakes.
 	getBuild func(ctx context.Context, pr *principal, project, name string) (*kwerftv1.Build, error)
-	ownPods  func() (podBackend, error)
+	ownPods  func(ctx context.Context) (podBackend, error)
 	logs     logLimits
 	streams  *slots
 	// running counts open streams, so tests can wait for cleanup.
@@ -202,7 +203,7 @@ func (b *buildsAPI) requireBackend(next http.HandlerFunc) http.HandlerFunc {
 }
 
 func (b *buildsAPI) kubeBuild(ctx context.Context, pr *principal, project, name string) (*kwerftv1.Build, error) {
-	c, err := b.cfg.Kube.For(pr.user.Email, pr.user.Role)
+	c, err := b.conn(ctx).kube.For(pr.user.Email, pr.user.Role)
 	if err != nil {
 		return nil, err
 	}
@@ -213,8 +214,8 @@ func (b *buildsAPI) kubeBuild(ctx context.Context, pr *principal, project, name 
 	return &build, nil
 }
 
-func (b *buildsAPI) kubeOwnPods() (podBackend, error) {
-	cs, err := b.cfg.Kube.Self()
+func (b *buildsAPI) kubeOwnPods(ctx context.Context) (podBackend, error) {
+	cs, err := b.conn(ctx).kube.Self()
 	if err != nil {
 		return nil, err
 	}
@@ -351,7 +352,7 @@ func (b *buildsAPI) buildLogs(w http.ResponseWriter, r *http.Request) {
 		b.kubeError(w, r, pr, "build.logs", target, buildNotFound(project, name), err)
 		return
 	}
-	own, err := b.ownPods()
+	own, err := b.ownPods(ctx)
 	if err != nil {
 		b.internalError(w, r, err)
 		return
@@ -519,13 +520,19 @@ func validateGitSource(w http.ResponseWriter, g *kwerftv1.GitSource) bool {
 // checkGitConnection makes sure an App's Git connection exists and may be
 // used in the project, so the user hears it now rather than from a failed
 // build. Anything but a clear answer (no access, the CRD missing) lets the
-// request through: the Build reconciler reports problems as well.
-func checkGitConnection(ctx context.Context, w http.ResponseWriter, c client.Client, project string, g *kwerftv1.GitSource) bool {
+// request through: the Build reconciler reports problems as well. Git
+// connections live in the management cluster (docs/phase5.md), so they are
+// read there as the user, whatever cluster the project is in.
+func (a *api) checkGitConnection(ctx context.Context, w http.ResponseWriter, p *principal, project string, g *kwerftv1.GitSource) bool {
 	if g == nil || g.Connection == "" {
 		return true
 	}
+	c, err := a.managementClient(p)
+	if err != nil {
+		return true
+	}
 	var conn kwerftv1.GitConnection
-	err := c.Get(ctx, types.NamespacedName{Name: g.Connection}, &conn)
+	err = c.Get(ctx, types.NamespacedName{Name: g.Connection}, &conn)
 	switch {
 	case apierrors.IsNotFound(err):
 		invalid(w, "spec.source.git.connection", fmt.Sprintf("There is no Git connection %q. Owners and admins add them in Settings.", g.Connection))

@@ -36,6 +36,12 @@ import (
 // may patch — never read — the DNS token Secret (roles.yaml). The token is
 // write-only: no endpoint returns it, and the audit log records only that it
 // changed.
+//
+// Every cluster has its own ConsoleSettings (docs/phase5.md): the apps
+// domain, certificates and DNS of the apps it serves. GET /settings, the DNS
+// check and PUT /settings/apps take ?cluster= (default: the local cluster);
+// the console's own hostname exists only in the management cluster, so
+// PUT /settings/console-domain always writes there.
 
 type settingsAPI struct {
 	*api
@@ -54,11 +60,11 @@ func (a *api) registerSettings(mux *http.ServeMux) {
 	admin := func(h http.HandlerFunc) http.HandlerFunc {
 		return a.sameOrigin(read(a.requireRole(h, store.RoleOwner, store.RoleAdmin)))
 	}
-	mux.HandleFunc("GET /api/v1/settings", read(s.get))
-	mux.HandleFunc("POST /api/v1/settings/dns-check", admin(s.dnsCheck))
+	mux.HandleFunc("GET /api/v1/settings", read(a.withClusterParam(s.get)))
+	mux.HandleFunc("POST /api/v1/settings/dns-check", admin(a.withClusterParam(s.dnsCheck)))
 	mux.HandleFunc("GET /api/v1/settings/passkeys", read(a.requireRole(s.passkeyHolders, store.RoleOwner, store.RoleAdmin)))
 	mux.HandleFunc("PUT /api/v1/settings/console-domain", admin(s.setConsoleDomain))
-	mux.HandleFunc("PUT /api/v1/settings/apps", admin(s.setApps))
+	mux.HandleFunc("PUT /api/v1/settings/apps", admin(a.withClusterParam(s.setApps)))
 }
 
 // ---- reading -----------------------------------------------------------------
@@ -88,6 +94,8 @@ type settingsJSON struct {
 	PublicAddresses       []string          `json:"publicAddresses"`
 	Certificates          []certificateJSON `json:"certificates"`
 	Ready                 *conditionJSON    `json:"ready,omitempty"`
+	// Cluster whose settings these are.
+	Cluster string `json:"cluster"`
 }
 
 // dnsRecordJSON is one hostname whose records Kwerft keeps (status.dns).
@@ -188,7 +196,9 @@ func (s *settingsAPI) get(w http.ResponseWriter, r *http.Request) {
 		s.kubeError(w, r, p, "settings.read", "settings", "Settings not found.", err)
 		return
 	}
-	writeJSON(w, http.StatusOK, s.view(cs))
+	out := s.view(cs)
+	out.Cluster = s.conn(ctx).name
+	writeJSON(w, http.StatusOK, out)
 }
 
 // ---- DNS ---------------------------------------------------------------------

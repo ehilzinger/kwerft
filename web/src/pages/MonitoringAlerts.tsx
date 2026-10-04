@@ -9,6 +9,7 @@ import {
 import { Dialog } from "../components/Dialog";
 import { Field } from "../components/Field";
 import { Icon } from "../components/Icon";
+import { ClusterBadge } from "../components/ClusterUI";
 import { duration, when } from "../jobs";
 import { ago } from "../workloads";
 import { MonitoringLayout } from "./Monitoring";
@@ -124,7 +125,7 @@ function AlertRow({ a, canAct, onSilence }: { a: Alert; canAct: boolean; onSilen
   const logs = alertLogsLink(a, window.location.origin);
   const unsilence = useMutation({
     mutationFn: async () => {
-      for (const id of a.silencedBy ?? []) await alertsApi.unsilence(id);
+      for (const id of a.silencedBy ?? []) await alertsApi.unsilence(id, a.cluster);
     },
     onSuccess: () => void queryClient.invalidateQueries({ queryKey: ["alerts"] }),
   });
@@ -135,7 +136,7 @@ function AlertRow({ a, canAct, onSilence }: { a: Alert; canAct: boolean; onSilen
     <div className="li">
       <span className={`ico ${a.state === "resolved" ? "ok" : tone}`}><Icon name="alert" /></span>
       <div className="grow">
-        <b>{a.rule}</b>{where && <> · {where}</>}
+        <b>{a.rule}</b>{where && <> · {where}</>}<ClusterBadge cluster={a.cluster} />
         {(a.summary || a.description) && <p>{a.summary || a.description}</p>}
         {a.summary && a.description && a.description !== a.summary && <p>{a.description}</p>}
         <div className="meta">
@@ -168,7 +169,7 @@ function SilenceDialog({ alert, hours: initial, onClose }: { alert: Alert; hours
   const [hours, setHours] = useState(initial);
   const [comment, setComment] = useState("");
   const silence = useMutation({
-    mutationFn: () => alertsApi.silence({ fingerprint: alert.fingerprint, duration: `${hours}h`, comment: comment.trim() || "Silenced from the Kwerft console" }),
+    mutationFn: () => alertsApi.silence({ fingerprint: alert.fingerprint, duration: `${hours}h`, comment: comment.trim() || "Silenced from the Kwerft console", cluster: alert.cluster }),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ["alerts"] });
       onClose();

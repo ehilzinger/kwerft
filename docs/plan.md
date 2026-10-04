@@ -231,7 +231,7 @@ Work split and contracts: `docs/phase5.md`. Full multi-cluster; verification on 
 - [ ] W1 Hetzner Cloud integrations: Cloud API token, Cloud Firewall sync, hcloud CCM + CSI, optional Load Balancer
 - [ ] W2 Node pools & HA: Cloud servers as nodes (join, replace, drain, delete), 3-node HA control plane, build pools scaling to zero, dedicated join and remove, vSwitch coupling (fakes)
 - [ ] W3 Multi-cluster core: `kwerft agent` tunnel, Cluster reconciler (local, Hetzner Cloud, adopted), agent mode in the installer and chart
-- [ ] W4 Multi-cluster console: every API and page cluster-aware through the Registry, observability per cluster
+- [x] W4 Multi-cluster console: every API and page cluster-aware through the Registry (project → cluster, unique names, aggregated lists with `cluster`, 503 for unreachable clusters), observability per cluster through the service proxy, isolation suite across two clusters, cluster badges/filter/picker; per-kind decisions in `docs/phase5.md` (open: mirroring Git connections and notification channels into remote clusters, remote Hubble flows)
 - [ ] W5 e2e install runs per release tag and nightly, sweeper
 - [ ] Exit criteria on real Cloud servers: a node lost with apps reachable; a second cluster managed; a release tag passes e2e
 

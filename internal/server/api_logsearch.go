@@ -72,7 +72,11 @@ func (a *api) registerLogSearch(mux *http.ServeMux) {
 		a.cfg.logsHook(s)
 	}
 	// Application output: refused from other sites, like the log streams.
-	read := func(h http.HandlerFunc) http.HandlerFunc { return a.sameOrigin(a.requireUser(a.requireKube(h))) }
+	// ?project= and ?cluster= pick the cluster whose VictoriaLogs is searched
+	// (clusters.go); without either, the local cluster's.
+	read := func(h http.HandlerFunc) http.HandlerFunc {
+		return a.sameOrigin(a.requireUser(a.requireKube(a.withClusterParam(h))))
+	}
 	mux.HandleFunc("GET /api/v1/logs", read(s.search))
 	mux.HandleFunc("GET /api/v1/logs/tail", read(s.tail))
 }
@@ -91,7 +95,7 @@ func (s *logSearchAPI) kubeProjectNamespaces(ctx context.Context, pr *principal)
 }
 
 func (s *logSearchAPI) kubeAllNamespaces(ctx context.Context) ([]string, error) {
-	cs, err := s.cfg.Kube.Self()
+	cs, err := s.conn(ctx).kube.Self()
 	if err != nil {
 		return nil, err
 	}
@@ -113,7 +117,7 @@ func (s *logSearchAPI) searchRequest(w http.ResponseWriter, r *http.Request, wit
 	pr := r.Context().Value(ctxKey{}).(*principal)
 	project, app := q.Get("project"), q.Get("app")
 	req := logs.Request{Query: q.Get("query"), Level: q.Get("level")}
-	if err := logs.CheckQuery(req.Query, s.vlogs.Limits.MaxQuery); err != nil {
+	if err := logs.CheckQuery(req.Query, s.logsClient(r.Context()).Limits.MaxQuery); err != nil {
 		invalid(w, "query", err.Error())
 		return req, nil, false
 	}
@@ -144,7 +148,7 @@ func (s *logSearchAPI) searchRequest(w http.ResponseWriter, r *http.Request, wit
 			invalid(w, "since", "The start of the time range must be before its end.")
 			return req, nil, false
 		}
-		if max := s.vlogs.Limits.MaxRange; req.End.Sub(req.Start) > max {
+		if max := s.logsClient(r.Context()).Limits.MaxRange; req.End.Sub(req.Start) > max {
 			invalid(w, "since", fmt.Sprintf("Search at most %s at a time.", humanDuration(max)))
 			return req, nil, false
 		}
@@ -181,7 +185,7 @@ func (s *logSearchAPI) searchRequest(w http.ResponseWriter, r *http.Request, wit
 		}
 		req.Scope.Namespaces = []string{project}
 		if app != "" {
-			c, err := s.cfg.Kube.For(pr.user.Email, pr.user.Role)
+			c, err := s.conn(ctx).kube.For(pr.user.Email, pr.user.Role)
 			if err != nil {
 				s.internalError(w, r, err)
 				return req, nil, false
@@ -238,6 +242,8 @@ type searchJSON struct {
 	Truncated bool         `json:"truncated"`
 	From      time.Time    `json:"from"`
 	To        time.Time    `json:"to"`
+	// Cluster whose logs these are (clusters.go).
+	Cluster string `json:"cluster"`
 }
 
 func (s *logSearchAPI) search(w http.ResponseWriter, r *http.Request) {
@@ -245,12 +251,12 @@ func (s *logSearchAPI) search(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	res, err := s.vlogs.Query(r.Context(), req)
+	res, err := s.logsClient(r.Context()).Query(r.Context(), req)
 	if err != nil {
 		s.logsError(w, r, err)
 		return
 	}
-	out := searchJSON{Entries: res.Entries, Truncated: res.Truncated, From: req.Start.UTC(), To: req.End.UTC()}
+	out := searchJSON{Entries: res.Entries, Truncated: res.Truncated, From: req.Start.UTC(), To: req.End.UTC(), Cluster: s.conn(r.Context()).name}
 	if out.Entries == nil {
 		out.Entries = []logs.Entry{}
 	}
@@ -285,7 +291,7 @@ func (s *logSearchAPI) tail(w http.ResponseWriter, r *http.Request) {
 
 	ctx, cancel := context.WithCancel(r.Context())
 	defer cancel()
-	t, err := s.vlogs.Tail(ctx, req)
+	t, err := s.logsClient(ctx).Tail(ctx, req)
 	if err != nil {
 		s.logsError(w, r, err)
 		return
@@ -316,7 +322,7 @@ func (s *logSearchAPI) tail(w http.ResponseWriter, r *http.Request) {
 
 	out := startSSE(w, s.lim.writeTimeout)
 	if out.event("start", map[string]any{"limits": map[string]any{
-		"maxLine": s.vlogs.Limits.MaxLine, "linesPerSecond": s.lim.rate, "maxSeconds": int(s.lim.maxDuration / time.Second),
+		"maxLine": s.logsClient(r.Context()).Limits.MaxLine, "linesPerSecond": s.lim.rate, "maxSeconds": int(s.lim.maxDuration / time.Second),
 	}}) != nil || out.flush() != nil {
 		return
 	}
@@ -394,6 +400,14 @@ func (a *api) streamSessionAlive(ctx context.Context, pr *principal) bool {
 	return a.stillValid(ctx, pr)
 }
 
+// logsClient is the VictoriaLogs of the context's cluster.
+func (a *api) logsClient(ctx context.Context) *logs.Client {
+	if l := a.conn(ctx).logs; l != nil {
+		return l
+	}
+	return a.vlogs
+}
+
 // ---- history of Task and Build logs ------------------------------------------------
 
 // historyLog reads a finished Task's or Build's log from VictoriaLogs once
@@ -411,10 +425,10 @@ func (a *api) historyLog(ctx context.Context, scope logs.Scope, start, end time.
 		}
 		scope.Fields[logs.FieldContainer] = container
 	}
-	if max := a.vlogs.Limits.MaxRange; end.Sub(start) > max {
+	if max := a.logsClient(ctx).Limits.MaxRange; end.Sub(start) > max {
 		start = end.Add(-max)
 	}
-	res, err := a.vlogs.Query(ctx, logs.Request{Scope: scope, Start: start, End: end, Limit: int(tail)})
+	res, err := a.logsClient(ctx).Query(ctx, logs.Request{Scope: scope, Start: start, End: end, Limit: int(tail)})
 	if err != nil {
 		if ctx.Err() == nil {
 			a.cfg.Logger.Warn("log history unavailable", "scope", scope, "err", err)
