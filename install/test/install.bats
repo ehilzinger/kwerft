@@ -628,3 +628,55 @@ mirror_env() {
   [ "$status" -eq 0 ]
   [ -z "$output" ]
 }
+
+@test "write_vlogs_values: Vector sends the fields the console filters on" {
+  KWERFT_SOURCED=1 source "$SCRIPT"
+  values="$BATS_TEST_TMPDIR/vlogs.yaml"
+  write_vlogs_values >"$values"
+  grep -qx '            VL-Stream-Fields: namespace,pod,container,stream,project,app,build,task' "$values"
+  grep -qx '            VL-Msg-Field: message' "$values"
+  grep -qx '            VL-Time-Field: timestamp' "$values"
+  # Only Vector and the console may reach VictoriaLogs.
+  grep -qx '              kubernetes.io/metadata.name: kwerft-observability' "$values"
+  grep -qx '              kubernetes.io/metadata.name: kwerft-system' "$values"
+  # The remap is embedded as the parser's source, indented under it.
+  grep -qx '          .app = labels."kwerft.dev/app"' "$values"
+  # Same output every run (the stage is idempotent).
+  [ "$(write_vlogs_values | cksum)" = "$(cksum <"$values")" ]
+}
+
+@test "vector_remap: sets every field internal/logs relies on" {
+  KWERFT_SOURCED=1 source "$SCRIPT"
+  remap=$(vector_remap)
+  for f in namespace pod container node project app build task schedule job level log; do
+    [[ "$remap" == *".$f = "* ]] || { echo "missing .$f"; return 1; }
+  done
+  # The Go side names the same fields.
+  fields="$BATS_TEST_DIRNAME/../../internal/logs/fields.go"
+  for f in namespace pod container stream project app build task level; do
+    grep -q "= \"$f\"" "$fields" || { echo "internal/logs lacks $f"; return 1; }
+  done
+}
+
+@test "vector_remap: flattens Kubernetes metadata and keeps a JSON line's fields under log" {
+  command -v vector >/dev/null || skip "vector is not installed"
+  KWERFT_SOURCED=1 source "$SCRIPT"
+  vector_remap >"$BATS_TEST_TMPDIR/remap.vrl"
+  cat >"$BATS_TEST_TMPDIR/vector.yaml" <<YAML
+sources:
+  in: {type: stdin, decoding: {codec: json}}
+transforms:
+  parser: {type: remap, inputs: [in], file: "$BATS_TEST_TMPDIR/remap.vrl"}
+sinks:
+  out: {type: console, inputs: [parser], encoding: {codec: json}}
+YAML
+  cat >"$BATS_TEST_TMPDIR/in.json" <<'JSON'
+{"message":"{\"level\":\"WARN\",\"namespace\":\"other\"}","stream":"stderr","file":"/var/log/pods/x","source_type":"kubernetes_logs","kubernetes":{"pod_name":"web-1","pod_namespace":"shop","container_name":"app","pod_owner":"Job/nightly","pod_uid":"u","pod_labels":{"kwerft.dev/app":"web","kwerft.dev/project":"shop","kwerft.dev/task":"nightly","other":"x"}}}
+JSON
+  line=$(vector --quiet -c "$BATS_TEST_TMPDIR/vector.yaml" <"$BATS_TEST_TMPDIR/in.json" | grep '"pod"')
+  for kv in '"namespace":"shop"' '"pod":"web-1"' '"container":"app"' '"app":"web"' '"project":"shop"' \
+            '"task":"nightly"' '"job":"nightly"' '"level":"warn"' '"stream":"stderr"' '"log":{"level":"WARN","namespace":"other"}'; do
+    [[ "$line" == *"$kv"* ]] || { echo "missing $kv in $line"; return 1; }
+  done
+  [[ "$line" != *'"kubernetes"'* && "$line" != *'"file"'* && "$line" != *'"build"'* ]]
+}

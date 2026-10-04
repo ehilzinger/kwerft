@@ -847,6 +847,135 @@ install_dns_webhook() {
   kc delete clusterrolebinding "$release:read-secrets" --ignore-not-found >>"$LOG_FILE" 2>&1
 }
 
+# vector_remap prints the VRL program Vector runs on every container log line
+# before it goes to VictoriaLogs. It flattens what Kwerft filters on into
+# top-level fields (internal/logs relies on these names):
+#
+#   namespace pod container node stream    from the kubernetes_logs source
+#   project app build task schedule         pod labels kwerft.dev/<name>
+#   job                                     the owning Job (pod_owner Job/<name>)
+#   level                                   level|lvl|severity of a JSON line, lower case
+#   log.*                                   the fields of a JSON line
+#   message                                 the raw line (VictoriaLogs' _msg)
+#
+# The rest of the Kubernetes metadata (all labels, annotations, uid, image)
+# is dropped to keep storage and Vector's memory small. A JSON line's own
+# fields stay under log.*, so a line can never set namespace or app itself.
+vector_remap() {
+  cat <<'EOF'
+k = object(.kubernetes) ?? {}
+labels = object(k.pod_labels) ?? {}
+.namespace = k.pod_namespace
+.pod = k.pod_name
+.container = k.container_name
+.node = k.pod_node_name
+.project = labels."kwerft.dev/project"
+.app = labels."kwerft.dev/app"
+.build = labels."kwerft.dev/build"
+.task = labels."kwerft.dev/task"
+.schedule = labels."kwerft.dev/schedule"
+owner = string(k.pod_owner) ?? ""
+if starts_with(owner, "Job/") {
+  .job = slice!(owner, 4)
+}
+parsed = parse_json(string(.message) ?? "") ?? null
+if is_object(parsed) {
+  .log = parsed
+  lvl = parsed.level || parsed.lvl || parsed.severity
+  if is_string(lvl) { .level = downcase(string!(lvl)) }
+}
+del(.kubernetes)
+del(.file)
+del(.source_type)
+. = compact(., recursive: false)
+EOF
+}
+
+# write_vlogs_values prints the values for the victoria-logs-single chart:
+# Vector's pipeline (vector_remap), the stream fields, small resource
+# limits, and a NetworkPolicy so that only Vector (kwerft-observability) and
+# the console (kwerft-system) reach VictoriaLogs: it has no authentication,
+# and the console confines every query to the user's projects.
+#
+# Stream fields are constant for a container, so they add no streams beyond
+# namespace/pod/container/stream, and the console's namespace confinement
+# and app/build/task filters become fast stream filters.
+write_vlogs_values() {
+  cat <<'EOF'
+server:
+  resources:
+    requests: {cpu: 50m, memory: 128Mi}
+    limits: {memory: 1Gi}
+networkPolicy:
+  enabled: true
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kwerft-observability
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kwerft-system
+      ports:
+        - port: 9428
+          protocol: TCP
+vector:
+  enabled: true
+  resources:
+    requests: {cpu: 20m, memory: 64Mi}
+    limits: {memory: 256Mi}
+  customConfig:
+    data_dir: /vector-data-dir
+    api:
+      enabled: false
+    sources:
+      k8s:
+        type: kubernetes_logs
+        insert_namespace_fields: false
+        use_apiserver_cache: true
+        pod_annotation_fields:
+          pod_annotations: ""
+          pod_uid: ""
+          pod_ip: ""
+          pod_ips: ""
+          container_id: ""
+          container_image: ""
+          container_image_id: ""
+        node_annotation_fields:
+          node_labels: ""
+      internal_metrics:
+        type: internal_metrics
+    transforms:
+      parser:
+        type: remap
+        inputs: [k8s]
+        source: |
+EOF
+  vector_remap | sed 's/^/          /'
+  cat <<'EOF'
+    sinks:
+      exporter:
+        type: prometheus_exporter
+        address: 0.0.0.0:9090
+        inputs: [internal_metrics]
+      vlogs:
+        type: elasticsearch
+        inputs: [parser]
+        mode: bulk
+        api_version: v8
+        compression: gzip
+        healthcheck:
+          enabled: false
+        request:
+          headers:
+            VL-Time-Field: timestamp
+            VL-Msg-Field: message
+            VL-Stream-Fields: namespace,pod,container,stream,project,app,build,task
+            AccountID: "0"
+            ProjectID: "0"
+EOF
+}
+
 stage_observability() {
   local retention=30d log_retention=14d
   (( LITE )) && { retention=7d; log_retention=3d; }
@@ -857,10 +986,12 @@ stage_observability() {
     --set vmsingle.spec.retentionPeriod="$retention" \
     --set alertmanager.enabled=true \
     >>"$LOG_FILE" 2>&1 || die $EXIT_PLATFORM "VictoriaMetrics installation failed"
+  mkdir -p "$STATE_DIR/values"
+  write_vlogs_values >"$STATE_DIR/values/vlogs.yaml"
   helmk upgrade --install vlogs vm/victoria-logs-single --version "$VLOGS_CHART_VERSION" \
     --namespace kwerft-observability --wait --timeout 10m \
+    -f "$STATE_DIR/values/vlogs.yaml" \
     --set server.retentionPeriod="$log_retention" \
-    --set vector.enabled=true \
     >>"$LOG_FILE" 2>&1 || die $EXIT_PLATFORM "VictoriaLogs installation failed"
   mark_system_namespace kwerft-observability
   echo "VictoriaMetrics ($retention) · VictoriaLogs ($log_retention) · kube-state-metrics · node-exporter"

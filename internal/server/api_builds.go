@@ -23,6 +23,7 @@ import (
 	kwerftv1 "github.com/ehilzinger/kwerft/api/v1alpha1"
 	"github.com/ehilzinger/kwerft/internal/builds"
 	"github.com/ehilzinger/kwerft/internal/controllers"
+	"github.com/ehilzinger/kwerft/internal/logs"
 )
 
 // Builds of Git apps (docs/phase2.md): list an App's builds, show one, stream
@@ -331,8 +332,9 @@ func buildPodSelector(project, name string) labels.Selector {
 // buildLogs streams the build pod's log as Server-Sent Events, exactly like
 // the App and Task logs (api_logs.go): the same events, query and limits. It
 // follows while the build runs and waits for the pod of a queued build. A
-// finished build whose pod is gone gets a start event and an end event with
-// reason "gone".
+// finished build whose pod is gone is served from log history (VictoriaLogs,
+// see logHistory: the start event says "source": "history"); when that has
+// nothing either, it gets a start event and an end event with reason "gone".
 func (b *buildsAPI) buildLogs(w http.ResponseWriter, r *http.Request) {
 	project, name := r.PathValue("project"), r.PathValue("build")
 	lq, ok := b.logs.parseLogQuery(w, r)
@@ -405,6 +407,13 @@ func (b *buildsAPI) buildLogs(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 	s.out = &sseWriter{w: w, rc: http.NewResponseController(w), timeout: b.logs.writeTimeout}
 	if finished && len(pods) == 0 {
+		// The pod is gone: its log may still be in VictoriaLogs, read with
+		// the console's identity like the pod, confined to this Build's pods.
+		start, end := historyRange(build.CreationTimestamp, build.Status.CompletionTime, b.now())
+		scope := logs.Scope{Namespaces: []string{builds.Namespace}, Fields: map[string]string{logs.FieldBuild: name, logs.FieldProject: project}}
+		if b.logHistory(r.Context(), s.out, scope, start, end, lq.tail, lq.container) {
+			return
+		}
 		if s.out.event("start", map[string]any{"pods": []string{}, "container": "", "follow": false, "previous": false}) == nil {
 			_ = s.end("gone", "This build's log is no longer available: its pod has been removed.")
 		}

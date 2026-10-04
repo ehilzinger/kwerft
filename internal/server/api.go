@@ -1,6 +1,7 @@
 package server
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -13,6 +14,8 @@ import (
 	"time"
 
 	"github.com/ehilzinger/kwerft/internal/auth"
+	"github.com/ehilzinger/kwerft/internal/logs"
+	"github.com/ehilzinger/kwerft/internal/observability"
 	"github.com/ehilzinger/kwerft/internal/setup"
 	"github.com/ehilzinger/kwerft/internal/store"
 )
@@ -35,6 +38,8 @@ type api struct {
 	loginIP  *limiter // logins per IP
 	loginAcc *limiter // logins per account
 	mfa      *mfa     // second factors, see api_mfa.go
+	// vlogs reads VictoriaLogs: log search and log history (api_logsearch.go).
+	vlogs *logs.Client
 
 	mu     sync.Mutex
 	grants map[string]time.Time // setup grant hash → expiry
@@ -59,6 +64,7 @@ func newAPI(cfg Config) *api {
 		loginAcc: newLimiter(10, 15*time.Minute, now),
 		grants:   map[string]time.Time{},
 		mfa:      newMFA(cfg, now),
+		vlogs:    logs.New(cmp.Or(cfg.LogsURL, observability.LogsURL)),
 	}
 }
 
@@ -80,6 +86,7 @@ func (a *api) register(mux *http.ServeMux) {
 	a.registerSettings(mux)
 	a.registerBuilds(mux) // Git builds: list, logs, cancel (api_builds.go)
 	a.registerGit(mux)    // Git connections, checks, "Build now", webhooks
+	a.registerLogSearch(mux)
 }
 
 // ---- setup -----------------------------------------------------------------
