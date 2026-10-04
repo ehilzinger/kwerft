@@ -14,6 +14,7 @@ the same plan in long form.
 | Sources | **Registry images and Git repositories in v1** | Adds Phase 2: the `Build` resource, rootless BuildKit, Railpack, an in-cluster zot registry. |
 | License | **To be decided before the public beta** | All dependencies chosen so far are Apache-2.0 or MIT, so every option stays open. No LICENSE file until then. |
 | Jobs | **One-off and scheduled jobs in v1** (`Task`, `Schedule`) | Added to Phase 1. Real workloads are more than long-running services: the first pilot (hatchure, 2026-10-04) has eight cron jobs and a dozen jobs started by hand next to its six services. |
+| Local development | **Kwerft for Mac, a native app on Apple's `container`, after the beta** (Phase 7) | Runs the same Kwerft binary and resources in a local Kubernetes VM, so a Project developed on a Mac can be pushed to a Hetzner instance unchanged except for per-target overrides. Apple silicon and macOS 26+ only. |
 | Name & hosting | **Kwerft, under the personal GitHub account `ehilzinger`** | Module `github.com/ehilzinger/kwerft`, image `ghcr.io/ehilzinger/kwerft`, chart `oci://ghcr.io/ehilzinger/charts/kwerft`. Can move to an organisation later. The installer is served from GitHub raw until Kwerft has its own domain (then `get.kwerft.dev`). |
 
 ## Principles
@@ -114,6 +115,7 @@ Exit codes: 0 ok · 2 usage · 10 preflight · 20 network/DNS · 30 Kubernetes �
 | `FirewallRule` | Cilium host policy + Hetzner Cloud Firewall | Phase 4 |
 | `NodePool`, `Cluster` | Hetzner Cloud servers + cloud-init join; agent for remote clusters | Phase 5 |
 | `BackupPlan`, `AlertRule` | Velero Schedule; VMRule + Alertmanager route | Phases 3, 6 |
+| `Environment` (name tentative) | Per-target overrides (hostnames, storage class, quota, replicas) applied when a Project is pushed to another instance | Phase 7 |
 
 ### Jobs (`Task`, `Schedule`)
 
@@ -156,7 +158,7 @@ Exit codes: 0 ok · 2 usage · 10 preflight · 20 network/DNS · 30 Kubernetes �
 - Default-deny between projects, WireGuard between nodes, host firewall with lock-out protection.
 - API tokens scoped, expiring, stored hashed. Signed images, pinned digests, SBOMs.
 
-## Roadmap (~28 weeks, 1–2 engineers)
+## Roadmap (~28 weeks to the public beta, then 8 for the Mac app; 1–2 engineers)
 
 | Phase | Weeks | Scope | Exit criterion |
 |---|---|---|---|
@@ -167,6 +169,7 @@ Exit codes: 0 ok · 2 usage · 10 preflight · 20 network/DNS · 30 Kubernetes �
 | 4 Network & access | 16–19 | TrafficRules + Hubble, server firewall + Cloud Firewall sync, members, SSO, tokens, audit | Automated RBAC suite proves project isolation |
 | 5 Nodes & clusters | 20–24 | Cloud API nodes, join script, hcloud CSI/LB, vSwitch coupling, build node pool, HA, agent | Mixed cluster survives losing a node; second cluster managed |
 | 6 Backups, upgrades, beta | 25–28 | Velero to Object Storage, upgrades with rollback, Compose import, templates, docs, license | Full restore onto a new server — **public beta** |
+| 7 Kwerft for Mac | 29–36 | Spike on Apple `container`, `local` profile, SwiftUI app around the console, push/pull Projects between instances | A Project runs on a Mac without a terminal and goes live on a Hetzner server with one push |
 
 ### Phase 0 checklist
 
@@ -185,6 +188,48 @@ Exit codes: 0 ok · 2 usage · 10 preflight · 20 network/DNS · 30 Kubernetes �
 - [ ] e2e harness: create Cloud server via API, install, assert, destroy (+ nightly sweeper)
 - [ ] Publish the image and chart to GHCR (`ghcr.io/ehilzinger`) from CI
 
+## Kwerft for Mac (Phase 7)
+
+A native macOS app for running dev workloads locally and mirroring them to a
+Kwerft instance. Feasibility checked 2026-10-04 against Apple `container`
+1.5.0 (1.0 shipped at WWDC26; macOS 26+, Apple silicon only, each container
+in its own lightweight VM).
+
+- **Same Kwerft, not a second implementation.** The app runs the real
+  Kwerft binary and CRDs in a local Kubernetes VM. Mapping App/Task/Schedule
+  straight onto `container run` and launchd would be lighter, but it
+  re-implements every semantic (policies, routes, restart-on-success) and
+  drifts from production, which defeats mirroring.
+- **Local cluster — decided by a one-week spike:**
+  - `container k8s` (kind, `kindest/node`; Cilium via `--cni` since 1.5):
+    turnkey, but a stopped control plane must be deleted and re-created, so
+    the app keeps desired state on disk and re-applies it; volume data is
+    lost.
+  - k3s in a `container machine` (persistent, systemd PID 1, all
+    capabilities): matches production and survives restarts, possibly via
+    `install.sh --local`; k3s support there is undocumented.
+- **`local` profile** in the chart and controller: `local-nvme` and
+  `hcloud-volume` map to `local-path`; Domains get a self-signed (or mkcert)
+  issuer and `*.kwerft.localhost` hostnames; Hetzner-only resources
+  (`FirewallRule`, `NodePool`) are disabled.
+- **The app** is SwiftUI around the existing console: menu bar, local
+  cluster lifecycle and resource sizing, the React console in a WKWebView,
+  remote instances with their API tokens in the Keychain. It drives Apple's
+  `container` through its CLI and JSON output (the XPC API is not a public
+  contract) and requires `container` to be installed.
+- **Push and pull.** "Push to Kwerft…" exports a Project's Kwerft resources
+  (not the rendered objects), strips status and UIDs, applies the target's
+  `Environment` overrides, shows a diff, and server-side applies through the
+  remote Kwerft API with the user's token, so impersonation still holds.
+  Secrets travel by name and keys only; the app asks for values. Pull is the
+  same flow in reverse.
+- **Images.** Git-sourced Apps build on the server (Phase 2). Images built
+  on the Mac with `container build` are arm64; pushing them needs a
+  multi-platform build (Rosetta) and a registry the server can pull from —
+  zot exposed through Kwerft with token auth, or GHCR.
+- **Depends on** Phase 2 (builds, zot) and Phase 4 (API tokens); can start
+  in parallel once those land.
+
 ## Risks
 
 - **Single node is a single point of failure** — say so in the UI; etcd snapshots to Object Storage from day one.
@@ -192,4 +237,5 @@ Exit codes: 0 ok · 2 usage · 10 preflight · 20 network/DNS · 30 Kubernetes �
 - **Builds and Tasks compete with apps for memory** — Jobs with limits, one build at a time on small nodes, Tasks in the lower `kwerft-batch` priority class, optional build node pool.
 - **Cloud vs. dedicated asymmetry** — Robot cannot create servers on demand; vSwitch ↔ Cloud Network coupling is per network zone; otherwise WireGuard over public IPs (requires the console to open node ports per joiner — Phase 5).
 - **Firewall lock-out** — caller-IP check, auto-revert timer, `install.sh --reset-firewall`.
+- **Apple `container` is young** — `container k8s start` was removed in 1.5.0 and the XPC API is not a public contract; pin the supported `container` version in the app, drive it only through the CLI's JSON output, and keep desired state outside the local cluster.
 - **Upstream churn** — pinned release manifest; upgrade tests from N-1 and N-2.

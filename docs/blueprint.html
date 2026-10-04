@@ -327,7 +327,7 @@ svg.ch{width:100%;height:auto;display:block}
 @media (max-width:640px){.arch{grid-template-columns:1fr}}
 
 .timeline{display:grid;gap:8px;overflow-x:auto}
-.tl{display:grid;grid-template-columns:200px repeat(28,minmax(12px,1fr));align-items:center;min-width:640px;font-size:13px}
+.tl{display:grid;grid-template-columns:200px repeat(36,minmax(12px,1fr));align-items:center;min-width:800px;font-size:13px}
 .tl .nm{padding-right:10px}
 .tl .nm small{display:block;color:var(--muted);font-size:12px}
 .tl .b{height:22px;border-radius:5px;background:var(--accent);opacity:.85;display:flex;align-items:center;padding-left:8px;color:var(--accent-ink);font-size:11px;font-family:var(--mono);white-space:nowrap;overflow:hidden}
@@ -1150,6 +1150,7 @@ curl -fsSL https://get.kwerft.dev | sudo bash -s -- --config /root/kwerft.yaml -
             <tr><td>FirewallRule</td><td>CiliumClusterwideNetworkPolicy (host), Hetzner Cloud Firewall</td><td>Lock-out protection: rejects rules that block the caller; auto-revert timer.</td></tr>
             <tr><td>NodePool · Cluster</td><td>Hetzner servers via API + cloud-init join; agent install for remote clusters</td><td>Robot (dedicated) servers join via script; pools are cloud-only.</td></tr>
             <tr><td>BackupPlan · AlertRule</td><td>Velero Schedule · VMRule + Alertmanager route</td><td>Notification channels: email, Slack, webhook, ntfy.</td></tr>
+            <tr><td>Environment</td><td>Per-target overrides applied when a Project moves between instances</td><td>Phase 7, name tentative. Hostnames, storage class, quota and replicas differ between a Mac and a Hetzner server; everything else is pushed unchanged.</td></tr>
           </tbody></table></div>
         </section>
 
@@ -1183,9 +1184,9 @@ curl -fsSL https://get.kwerft.dev | sudo bash -s -- --config /root/kwerft.yaml -
         <section id="roadmap">
           <p class="eyebrow">Roadmap</p>
           <h2>About 28 weeks to a public beta with 1–2 engineers</h2>
-          <p>Estimates assume engineers comfortable with Go and Kubernetes. Building from Git adds a 4-week phase. Three to four engineers shorten this to roughly 16 weeks, because Phases 3 and 4 can run in parallel with Phase 2.</p>
-          <div class="timeline" role="img" aria-label="Seven phases over 28 weeks">
-            <div class="tl wk"><span></span><span style="grid-column:2">1</span><span style="grid-column:6">5</span><span style="grid-column:11">10</span><span style="grid-column:16">15</span><span style="grid-column:21">20</span><span style="grid-column:26">25</span><span style="grid-column:29">28</span></div>
+          <p>Estimates assume engineers comfortable with Go and Kubernetes. Building from Git adds a 4-week phase. Three to four engineers shorten this to roughly 16 weeks, because Phases 3 and 4 can run in parallel with Phase 2. Phase 7, a native Mac app for local development, follows the beta and adds about 8 weeks.</p>
+          <div class="timeline" role="img" aria-label="Eight phases over 36 weeks; public beta after week 28">
+            <div class="tl wk"><span></span><span style="grid-column:2">1</span><span style="grid-column:6">5</span><span style="grid-column:11">10</span><span style="grid-column:16">15</span><span style="grid-column:21">20</span><span style="grid-column:26">25</span><span style="grid-column:29">28</span><span style="grid-column:31">30</span><span style="grid-column:36">35</span></div>
             <div class="tl"><span class="nm">0 · Foundations</span><span class="b" style="grid-column:2/4">2 wk</span></div>
             <div class="tl"><span class="nm">1 · Installer &amp; deploy MVP</span><span class="b" style="grid-column:4/10">6 wk</span></div>
             <div class="tl"><span class="nm">2 · Builds from Git</span><span class="b" style="grid-column:10/14">4 wk</span></div>
@@ -1193,6 +1194,7 @@ curl -fsSL https://get.kwerft.dev | sudo bash -s -- --config /root/kwerft.yaml -
             <div class="tl"><span class="nm">4 · Network &amp; access</span><span class="b" style="grid-column:17/21">4 wk</span></div>
             <div class="tl"><span class="nm">5 · Nodes &amp; clusters</span><span class="b" style="grid-column:21/26">5 wk</span></div>
             <div class="tl"><span class="nm">6 · Backups, upgrades, beta</span><span class="b" style="grid-column:26/30">4 wk</span></div>
+            <div class="tl"><span class="nm">7 · Kwerft for Mac<small>after the beta</small></span><span class="b" style="grid-column:30/38;background:var(--c2)">8 wk</span></div>
           </div>
           <div class="phases">
             <div class="phase"><div class="h"><b>Phase 0 · Foundations</b><span>weeks 1–2</span></div>
@@ -1216,6 +1218,9 @@ curl -fsSL https://get.kwerft.dev | sudo bash -s -- --config /root/kwerft.yaml -
             <div class="phase"><div class="h"><b>Phase 6 · Backups, upgrades, beta</b><span>weeks 25–28</span></div>
               <ul><li>BackupPlans to Object Storage with tested restore; etcd snapshot schedule.</li><li>One-click Kwerft and k3s upgrades with automatic rollback; Docker Compose import; templates.</li><li>Docs site, security review, load test of the console with 200 apps; license decided.</li></ul>
               <div class="exit"><b>Exit:</b> restore a full cluster from Object Storage onto a brand-new server with one script flag. <b>Milestone: public beta.</b></div></div>
+            <div class="phase"><div class="h"><b>Phase 7 · Kwerft for Mac</b><span>weeks 29–36</span></div>
+              <ul><li>One-week spike on Apple <code>container</code> (1.5, macOS 26+, Apple silicon): the Kwerft chart on <code>container k8s</code> with Cilium via <code>--cni</code>, against k3s in a persistent <code>container machine</code>; pick one.</li><li>A <code>local</code> profile: <code>local-path</code> for both storage classes, a self-signed issuer and <code>*.kwerft.localhost</code> hostnames, Hetzner-only resources off. Same binary, same resources.</li><li>SwiftUI app around the existing console: menu bar, local cluster lifecycle and sizing, the console in a web view, remote instances with tokens in the Keychain. Drives <code>container</code> through its CLI and JSON output.</li><li>Push and pull a Project between instances: export the Kwerft resources, apply the target's Environment overrides, show a diff, apply through the remote API as the signed-in user. Secrets travel by name only; Mac-built images are rebuilt for amd64 and pushed to the server's registry.</li></ul>
+              <div class="exit"><b>Exit:</b> a Project with an app, a schedule and a volume runs on a Mac without a terminal, and one “Push to Kwerft” makes it live on a Hetzner server under its production domain.</div></div>
           </div>
           <p>Later: preview environments per pull request, cost view from the Hetzner API, a Terraform provider for <code>App</code> and <code>Project</code>, and multi-team tenancy.</p>
         </section>
@@ -1257,6 +1262,7 @@ curl -fsSL https://get.kwerft.dev | sudo bash -s -- --config /root/kwerft.yaml -
             <li><b>Dedicated vs. Cloud asymmetry.</b> The Robot API cannot create servers on demand like the Cloud API; dedicated nodes always join by script, and vSwitch coupling to Cloud Networks only works within one network zone.</li>
             <li><b>Firewall lock-out.</b> Mitigated by caller-IP checks and an automatic revert timer, plus an <code>install.sh --reset-firewall</code> rescue path via the Hetzner console.</li>
             <li><b>Upstream churn.</b> k3s, Cilium and Gateway API move quickly; pin versions in a release manifest and test upgrades from N-1 and N-2.</li>
+          <li><b>Apple <code>container</code> is young.</b> Version 1.5 removed <code>container k8s start</code>, and its XPC API is not a public contract. The Mac app pins a supported version, talks only to the CLI's JSON output and keeps desired state outside the local cluster, so a re-created cluster is re-applied in seconds.</li>
           <li><b>Builds and jobs compete with apps for memory.</b> Builds run as Jobs with limits and queue one at a time on small nodes; Tasks run in a lower priority class, so a job goes before a service; heavy users add a build node pool.</li>
           </ul>
           <h3>Decisions, 4 Oct 2026</h3>
@@ -1265,6 +1271,7 @@ curl -fsSL https://get.kwerft.dev | sudo bash -s -- --config /root/kwerft.yaml -
             <div class="q"><b>One team</b><span>A single organization with projects and roles; no tenant isolation in v1. Records carry an organization ID so tenancy can come later without a migration.</span></div>
             <div class="q"><b>Images from registries and from Git in v1</b><span>Adds Phase 2, the Build resource, BuildKit and an in-cluster registry.</span></div>
             <div class="q"><b>One-off and scheduled jobs in v1</b><span>Task and Schedule join Phase 1. Real workloads are more than services: the first pilot runs eight cron jobs and a dozen manual ones beside six services.</span></div>
+            <div class="q"><b>Kwerft for Mac after the beta</b><span>A native app on Apple's <code>container</code> runs the same Kwerft locally, so dev workloads move to a Hetzner instance with one push. Re-implementing Kwerft on bare containers was rejected: it would drift from production.</span></div>
             <div class="q"><b>License: to be decided before the public beta</b><span>Every dependency chosen so far is Apache-2.0 or MIT, so all options stay open.</span></div>
           </div>
         </section>
