@@ -21,7 +21,7 @@ the same plan in long form.
 | Members (2026-10-04) | **Invites pulled forward into Phase 1** | Owner/admin invite by email with a role via a single-use link (no email sending yet); member list, role changes, removal, last-owner protection. Per-project roles stay in Phase 4. |
 | DNS records (2026-10-04) | **Kwerft keeps A/AAAA records for the console hostname and `*.<appsDomain>` only (Settings switch, `--config dns.records`)** | One wildcard record covers every app, whatever the certificate method, so app deploys never write DNS and developers cannot place records in the zone. RRsets Kwerft creates carry `kwerft.dev/managed-by` and `kwerft.dev/instance` (kube-system UID) labels; records without them are never changed (reported as conflicts), a reinstalled server takes over the old installation's records, and the old one yields. Turning it off leaves the records. Per-Domain records for custom hostnames: later, opt-in. |
 | DNS-01 provider (2026-10-04) | **Hetzner DNS through the Cloud API, official `hetzner/cert-manager-webhook-hetzner` (0.9.0)** | The old DNS Console API (dns.hetzner.com) was shut down in May 2026; zones now live in the Cloud API and use a Cloud project token. The webhook's chart may read every Secret; the installer narrows it to the one token Secret. |
-| Test servers (2026-10-04) | **Hetzner Cloud now, a dedicated server later** | The e2e harness runs on Cloud servers with a test-project API token stored as a GitHub secret; the dedicated-server run follows when one is available. |
+| Test servers (2026-10-04) | **Hetzner Cloud now, a dedicated server later** | The e2e harness runs on Cloud servers with a test-project API token stored as a GitHub secret; the dedicated-server run follows when one is available. Deferred to Phase 4 (2026-10-04): until then releases are checked by hand on the test server. |
 
 ## Principles
 
@@ -186,11 +186,11 @@ Exit codes: 0 ok · 2 usage · 10 preflight · 20 network/DNS · 30 Kubernetes �
 
 | Phase | Weeks | Scope | Exit criterion |
 |---|---|---|---|
-| 0 Foundations | 1–2 | Repo, CI, chart, CRDs, installer stages 1–4 on Cloud **and** dedicated, memory budget | Nightly CI installs on a fresh Cloud server; weekly on a dedicated test server |
+| 0 Foundations | 1–2 | Repo, CI, chart, CRDs, installer stages 1–4 on Cloud **and** dedicated, memory budget | All stages pass on a fresh Cloud server (automated runs: Phase 4) |
 | 1 Installer & deploy MVP | 3–8 | Full installer, setup wizard, auth, Project/App/Domain/Task/Schedule reconcilers, apps and jobs UI, logs, shell, rollback | Fresh server → app on HTTPS in < 10 min; a scheduled job runs and restarts an app on success |
 | 2 Builds from Git | 9–12 | GitConnection, webhooks, Build reconciler, BuildKit, Railpack, zot, auto-deploy, commit checks | Push to main live in < 3 min with build log and commit check |
 | 3 Monitoring & logs | 13–15 | VictoriaMetrics/Logs, charts, log search, alerts, notification channels | Crash loop alerts in Slack in < 2 min — **usable by the team** |
-| 4 Network & access | 16–19 | TrafficRules + Hubble, server firewall + Cloud Firewall sync, members, SSO, tokens, audit | Automated RBAC suite proves project isolation |
+| 4 Network & access | 16–19 | TrafficRules + Hubble, server firewall + Cloud Firewall sync, members, SSO, tokens, audit; e2e install runs on fresh Cloud servers (per release tag and nightly, upgrade from the previous release, Let's Encrypt staging, sweeper) | Automated RBAC suite proves project isolation; every release tag passes a fresh install and an upgrade |
 | 5 Nodes & clusters | 20–24 | Cloud API nodes, join script, hcloud CSI/LB, vSwitch coupling, build node pool, HA, agent | Mixed cluster survives losing a node; second cluster managed |
 | 6 Backups, upgrades, beta | 25–28 | Velero to Object Storage, upgrades with rollback, Compose import, templates, docs, license | Full restore onto a new server — **public beta** |
 | 7 Kwerft for Mac | 29–36 | Kernel build in CI, installer `--platform mac`, `local` profile, SwiftUI app around the console, push/pull Projects between instances (spike done 2026-10-04) | A Project runs on a Mac without a terminal and goes live on a Hetzner server with one push |
@@ -215,7 +215,6 @@ Exit codes: 0 ok · 2 usage · 10 preflight · 20 network/DNS · 30 Kubernetes �
 - [x] Release pipeline: tag `v*` → multi-arch image (ko) and chart on GHCR, stamped install/join scripts to the public `kwerft-install` repo, GitHub Release; signing opt-in (`SIGN_RELEASES`); see RELEASING.md
 - [x] Cut the first release and do the one-time GitHub setup (packages public, install repo, token): v0.1.0-rc.1/rc.2, then **v0.1.0** (2026-10-04, the first stable: top-level `install.sh` in kwerft-install, image `:latest`)
 - [x] Exit criterion on a fresh Cloud server from the published release (rc.2, 2026-10-04): app on HTTPS in 7:06; a schedule restarted an app on success
-- [ ] Automate the exit criterion as the e2e test (fresh Cloud server per release tag, install, assert, destroy)
 - [ ] Not yet: admin reset of a member's second factors, data-key rotation, a per-org "require 2FA" setting (Phase 4); shared storage for pending logins before running more than one replica
 
 ### Phase 0 checklist
@@ -232,7 +231,7 @@ Exit codes: 0 ok · 2 usage · 10 preflight · 20 network/DNS · 30 Kubernetes �
 - [ ] Same on a dedicated server
 - [x] Measure the memory budget (see table above)
 - [ ] Decide `--lite` defaults
-- [ ] e2e harness: create Cloud server via API, install, assert, destroy (+ nightly sweeper)
+- [ ] ~~e2e harness~~ moved to Phase 4
 - [ ] Publish the image and chart to GHCR (`ghcr.io/ehilzinger`) from CI
 
 ## Kwerft for Mac (Phase 7)
