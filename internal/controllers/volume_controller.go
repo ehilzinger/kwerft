@@ -157,7 +157,7 @@ func (r *VolumeReconciler) patchStatus(ctx context.Context, orig, vol *kwerftv1.
 	if equality.Semantic.DeepEqual(orig.Status, vol.Status) {
 		return nil
 	}
-	return r.Status().Patch(ctx, vol, client.MergeFrom(orig))
+	return patchStatus(ctx, r.Client, vol, orig)
 }
 
 // setFinalizer adds or removes the volume-protection finalizer with its own

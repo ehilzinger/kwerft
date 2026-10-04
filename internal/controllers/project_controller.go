@@ -70,7 +70,7 @@ func (r *ProjectReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	}
 	p.Status.ObservedGeneration = p.Generation
 	if !equality.Semantic.DeepEqual(orig.Status, p.Status) {
-		if perr := r.Status().Patch(ctx, &p, client.MergeFrom(orig)); perr != nil {
+		if perr := patchStatus(ctx, r.Client, &p, orig); perr != nil {
 			return ctrl.Result{}, perr
 		}
 	}

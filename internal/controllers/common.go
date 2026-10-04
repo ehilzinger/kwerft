@@ -56,6 +56,16 @@ func must(err error) {
 	}
 }
 
+// patchStatus writes obj's status as a merge patch against orig, guarded by
+// orig's resourceVersion. A merge patch carries only what differs from orig,
+// so from a stale cached copy a field that changed and changed back since
+// (a Schedule's next run while it was suspended) would be left out and the
+// stored value kept. The guard turns that into a conflict, and the retry
+// starts from fresh data.
+func patchStatus(ctx context.Context, c client.Client, obj, orig client.Object) error {
+	return c.Status().Patch(ctx, obj, client.MergeFromWithOptions(orig, client.MergeFromWithOptimisticLock{}))
+}
+
 func apply(ctx context.Context, c client.Client, obj runtime.ApplyConfiguration) error {
 	return c.Apply(ctx, obj, client.FieldOwner(FieldOwner), client.ForceOwnership)
 }

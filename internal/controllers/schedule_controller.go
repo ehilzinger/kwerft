@@ -71,7 +71,7 @@ func (r *ScheduleReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 	}
 	s.Status.ObservedGeneration = s.Generation
 	if !equality.Semantic.DeepEqual(orig.Status, s.Status) {
-		if perr := r.Status().Patch(ctx, &s, client.MergeFrom(orig)); perr != nil {
+		if perr := patchStatus(ctx, r.Client, &s, orig); perr != nil {
 			return ctrl.Result{}, perr
 		}
 	}

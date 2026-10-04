@@ -124,6 +124,10 @@ func (r *BuildReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 		}
 	}
 	if !equality.Semantic.DeepEqual(orig.Status, b.Status) {
+		// A plain merge patch, not patchStatus: the reconciler reads what
+		// numbering and the queue depend on from the API server, and it
+		// patches the Build's metadata (owner) first, which a
+		// resourceVersion guard would turn into a conflict on every start.
 		if perr := r.Status().Patch(ctx, &b, client.MergeFrom(orig)); perr != nil {
 			return ctrl.Result{}, perr
 		}
@@ -170,6 +174,11 @@ func (r *BuildReconciler) reconcile(ctx context.Context, b *kwerftv1.Build) (ctr
 			return ctrl.Result{}, terminalf("JobConflict", "a Job named %q already exists in %s and does not belong to this build", name, builds.Namespace)
 		}
 		b.Status.Job = name
+		// start() records these with the Job; if that status write was lost
+		// (a conflict), they must not be.
+		if b.Status.Image == "" {
+			b.Status.Image = builds.ImageRef(b.Namespace, b.Spec.App, b.Spec.Commit)
+		}
 	}
 	return r.observe(ctx, b)
 }

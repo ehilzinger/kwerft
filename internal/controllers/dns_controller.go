@@ -462,7 +462,7 @@ func (r *DNSReconciler) report(ctx context.Context, s *kwerftv1.ConsoleSettings,
 	}
 	orig := s.DeepCopy()
 	s.Status.DNS = st
-	if err := r.Status().Patch(ctx, s, client.MergeFrom(orig)); err != nil && !apierrors.IsNotFound(err) {
+	if err := patchStatus(ctx, r.Client, s, orig); err != nil && !apierrors.IsNotFound(err) {
 		return err
 	}
 	return nil

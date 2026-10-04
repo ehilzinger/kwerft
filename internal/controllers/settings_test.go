@@ -263,10 +263,14 @@ func TestWildcardListenerServesAppsUnderTheAppsDomain(t *testing.T) {
 	eventually(t, func() error {
 		return k8s.Get(ctx, client.ObjectKey{Namespace: GatewayNamespace, Name: DNSTokenSecret}, &token)
 	})
-	// ...and no shim certificate for the wildcard listener.
-	if gw := getGateway(t); gw.Annotations["cert-manager.io/ignore-tls-listeners"] != WildcardListener {
-		t.Errorf("gateway annotations = %v", gw.Annotations)
-	}
+	// ...and no shim certificate for the wildcard listener (the Gateway is
+	// applied after the certificate, so wait for it too).
+	eventually(t, func() error {
+		if gw := getGateway(t); gw.Annotations["cert-manager.io/ignore-tls-listeners"] != WildcardListener {
+			return fmt.Errorf("gateway annotations = %v", gw.Annotations)
+		}
+		return nil
+	})
 
 	// Until the wildcard certificate exists, apps keep per-host listeners.
 	if listener(getGateway(t), WildcardListener) != nil {

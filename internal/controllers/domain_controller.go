@@ -195,7 +195,7 @@ func (r *DomainReconciler) Reconcile(ctx context.Context, _ ctrl.Request) (ctrl.
 		setReady(&d.Status.Conditions, d.Generation, verdict.status, verdict.reason, verdict.message)
 		d.Status.ObservedGeneration = d.Generation
 		if !equality.Semantic.DeepEqual(orig.Status, d.Status) {
-			if err := r.Status().Patch(ctx, d, client.MergeFrom(orig)); err != nil && !apierrors.IsNotFound(err) {
+			if err := patchStatus(ctx, r.Client, d, orig); err != nil && !apierrors.IsNotFound(err) {
 				return ctrl.Result{}, err
 			}
 		}
@@ -278,7 +278,7 @@ func (r *DomainReconciler) reportSettings(ctx context.Context, s *kwerftv1.Conso
 	if equality.Semantic.DeepEqual(orig.Status, s.Status) {
 		return wait, nil
 	}
-	if err := r.Status().Patch(ctx, s, client.MergeFrom(orig)); err != nil && !apierrors.IsNotFound(err) {
+	if err := patchStatus(ctx, r.Client, s, orig); err != nil && !apierrors.IsNotFound(err) {
 		return 0, err
 	}
 	return wait, nil

@@ -84,7 +84,7 @@ func (r *TaskReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 	}
 	task.Status.ObservedGeneration = task.Generation
 	if !equality.Semantic.DeepEqual(orig.Status, task.Status) {
-		if perr := r.Status().Patch(ctx, &task, client.MergeFrom(orig)); perr != nil {
+		if perr := patchStatus(ctx, r.Client, &task, orig); perr != nil {
 			return ctrl.Result{}, perr
 		}
 	}

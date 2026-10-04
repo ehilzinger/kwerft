@@ -58,7 +58,7 @@ func (r *AppReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.R
 	}
 	app.Status.ObservedGeneration = app.Generation
 	if !equality.Semantic.DeepEqual(orig.Status, app.Status) {
-		if perr := r.Status().Patch(ctx, &app, client.MergeFrom(orig)); perr != nil {
+		if perr := patchStatus(ctx, r.Client, &app, orig); perr != nil {
 			return ctrl.Result{}, perr
 		}
 	}
