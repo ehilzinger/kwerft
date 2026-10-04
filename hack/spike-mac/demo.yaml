@@ -1,0 +1,45 @@
+# Spike workload: one public stateless App and one App with a volume, plus a
+# client in another project to check that project isolation is enforced.
+apiVersion: kwerft.dev/v1alpha1
+kind: Project
+metadata:
+  name: spike
+spec:
+  displayName: Phase 7 spike
+---
+apiVersion: kwerft.dev/v1alpha1
+kind: Project
+metadata:
+  name: spike-other
+---
+apiVersion: kwerft.dev/v1alpha1
+kind: App
+metadata:
+  name: whoami
+  namespace: spike
+spec:
+  source:
+    image:
+      ref: docker.io/traefik/whoami:v1.11
+  ports:
+    - container: 80
+      public: whoami.kwerft.test
+  healthCheck:
+    http: /health
+    port: 80
+---
+apiVersion: kwerft.dev/v1alpha1
+kind: App
+metadata:
+  name: notes
+  namespace: spike
+spec:
+  source:
+    image:
+      ref: docker.io/library/busybox:1.37
+  command: ["sh", "-c", "date >> /data/boots && sleep infinity"]
+  egress: none
+  volumes:
+    - path: /data
+      size: 1Gi
+      class: local-nvme

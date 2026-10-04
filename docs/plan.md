@@ -15,6 +15,7 @@ the same plan in long form.
 | License | **To be decided before the public beta** | All dependencies chosen so far are Apache-2.0 or MIT, so every option stays open. No LICENSE file until then. |
 | Jobs | **One-off and scheduled jobs in v1** (`Task`, `Schedule`) | Added to Phase 1. Real workloads are more than long-running services: the first pilot (hatchure, 2026-10-04) has eight cron jobs and a dozen jobs started by hand next to its six services. |
 | Local development | **Kwerft for Mac, a native app on Apple's `container`, after the beta** (Phase 7) | Runs the same Kwerft binary and resources in a local Kubernetes VM, so a Project developed on a Mac can be pushed to a Hetzner instance unchanged except for per-target overrides. Apple silicon and macOS 26+ only. |
+| Local cluster for Kwerft for Mac | **k3s in an Apple `container machine`, set up by `install.sh`, on Kwerft's own kernel** (spike, 2026-10-04: `docs/spike-mac.md`) | The machine survives restarts with its volumes; `container k8s` (kind) cannot come back after a stop. The production stack runs unchanged through the same installer. Neither kernel `container` offers runs Cilium, so the app ships a kernel built from Apple's config plus `hack/spike-mac/kernel/kwerft.config`. |
 | Name & hosting | **Kwerft, under the personal GitHub account `ehilzinger`** | Module `github.com/ehilzinger/kwerft`, image `ghcr.io/ehilzinger/kwerft`, chart `oci://ghcr.io/ehilzinger/charts/kwerft`. Can move to an organisation later. The installer is served from GitHub raw until Kwerft has its own domain (then `get.kwerft.dev`). |
 
 ## Principles
@@ -186,7 +187,7 @@ Exit codes: 0 ok · 2 usage · 10 preflight · 20 network/DNS · 30 Kubernetes �
 | 4 Network & access | 16–19 | TrafficRules + Hubble, server firewall + Cloud Firewall sync, members, SSO, tokens, audit | Automated RBAC suite proves project isolation |
 | 5 Nodes & clusters | 20–24 | Cloud API nodes, join script, hcloud CSI/LB, vSwitch coupling, build node pool, HA, agent | Mixed cluster survives losing a node; second cluster managed |
 | 6 Backups, upgrades, beta | 25–28 | Velero to Object Storage, upgrades with rollback, Compose import, templates, docs, license | Full restore onto a new server — **public beta** |
-| 7 Kwerft for Mac | 29–36 | Spike on Apple `container`, `local` profile, SwiftUI app around the console, push/pull Projects between instances | A Project runs on a Mac without a terminal and goes live on a Hetzner server with one push |
+| 7 Kwerft for Mac | 29–36 | Kernel build in CI, installer `--platform mac`, `local` profile, SwiftUI app around the console, push/pull Projects between instances (spike done 2026-10-04) | A Project runs on a Mac without a terminal and goes live on a Hetzner server with one push |
 
 ### Phase 1 checklist
 
@@ -222,32 +223,51 @@ Exit codes: 0 ok · 2 usage · 10 preflight · 20 network/DNS · 30 Kubernetes �
 ## Kwerft for Mac (Phase 7)
 
 A native macOS app for running dev workloads locally and mirroring them to a
-Kwerft instance. Feasibility checked 2026-10-04 against Apple `container`
-1.5.0 (1.0 shipped at WWDC26; macOS 26+, Apple silicon only, each container
-in its own lightweight VM).
+Kwerft instance. Feasibility checked and spiked 2026-10-04 against Apple
+`container` 1.5.0 (1.0 shipped at WWDC26; macOS 26+, Apple silicon only, each
+container in its own lightweight VM). Spike report: `docs/spike-mac.md`;
+scripts: `hack/spike-mac/`.
 
 - **Same Kwerft, not a second implementation.** The app runs the real
   Kwerft binary and CRDs in a local Kubernetes VM. Mapping App/Task/Schedule
   straight onto `container run` and launchd would be lighter, but it
   re-implements every semantic (policies, routes, restart-on-success) and
   drifts from production, which defeats mirroring.
-- **Local cluster — decided by a one-week spike:**
-  - `container k8s` (kind, `kindest/node`; Cilium via `--cni` since 1.5):
-    turnkey, but a stopped control plane must be deleted and re-created, so
-    the app keeps desired state on disk and re-applies it; volume data is
-    lost.
-  - k3s in a `container machine` (persistent, systemd PID 1, all
-    capabilities): matches production and survives restarts, possibly via
-    `install.sh --local`; k3s support there is undocumented.
-- **`local` profile** in the chart and controller: `local-nvme` and
-  `hcloud-volume` map to `local-path`; Domains get a self-signed (or mkcert)
-  issuer and `*.kwerft.localhost` hostnames; Hetzner-only resources
-  (`FirewallRule`, `NodePool`) are disabled.
+- **Local cluster: k3s in a `container machine`** (decided by the spike).
+  Both candidates ran Kwerft end to end; only the machine survives a restart
+  (new IP, API back in 34 s, pods in ~2 min, volume intact), while a
+  `container k8s` cluster cannot regenerate its certificates for the node's
+  new IP and has to be re-created. The machine runs the production stack
+  (Cilium with WireGuard and Hubble, Traefik, cert-manager, observability)
+  through the unmodified installer in ~9 minutes and 2.5 GB.
+- **Kwerft ships its own kernel.** `container`'s default (Kata) lacks
+  `xt_socket`, so Cilium's iptables rules fail and Kwerft's default-deny
+  policies drop kubelet probes and Traefik; Apple's containerization config
+  lacks legacy iptables, the eBPF JIT and BTF. CI builds Apple's config plus
+  `hack/spike-mac/kernel/kwerft.config` (under three minutes) and the app
+  selects it per machine with `container machine create --kernel`.
+- **Installer `--platform mac`:** accept built-in kernel modules, skip
+  `swapoff` without swap support, install a boot unit for shared mounts,
+  bpffs and a stable node address on a dummy interface (eth0's address
+  changes on every start), pin k3s to that address, default to `--lite`, and
+  let the Mac reach the API (or use Kwerft's API proxy).
+- **`local` profile** in the chart and controllers: Domains get certificates
+  from a local CA (the app adds it to the login keychain) and `*.kwerft.test`
+  hostnames resolved by `container system dns`; the chart can name any
+  ClusterIssuer; Hetzner-only resources (`FirewallRule`, `NodePool`) are
+  disabled. With no issuer at all, the Domain reconciler must not create
+  HTTPS listeners whose certificates nobody issues (today every route then
+  returns 404).
 - **The app** is SwiftUI around the existing console: menu bar, local
   cluster lifecycle and resource sizing, the React console in a WKWebView,
   remote instances with their API tokens in the Keychain. It drives Apple's
   `container` through its CLI and JSON output (the XPC API is not a public
-  contract) and requires `container` to be installed.
+  contract) and requires `container` to be installed. It checks container
+  egress first: a connected VPN silently cuts containers off from the
+  internet. `container machine run` re-parses its arguments through a shell,
+  so the app passes scripts as files. Locally built images reach the cluster
+  like the installer's own: `container image save`, then `k3s ctr images
+  import` inside the machine.
 - **Push and pull.** "Push to Kwerft…" exports a Project's Kwerft resources
   (not the rendered objects), strips status and UIDs, applies the target's
   `Environment` overrides, shows a diff, and server-side applies through the
@@ -268,5 +288,6 @@ in its own lightweight VM).
 - **Builds and Tasks compete with apps for memory** — Jobs with limits, one build at a time on small nodes, Tasks in the lower `kwerft-batch` priority class, optional build node pool.
 - **Cloud vs. dedicated asymmetry** — Robot cannot create servers on demand; vSwitch ↔ Cloud Network coupling is per network zone; otherwise WireGuard over public IPs (requires the console to open node ports per joiner — Phase 5).
 - **Firewall lock-out** — caller-IP check, auto-revert timer, `install.sh --reset-firewall`.
-- **Apple `container` is young** — `container k8s start` was removed in 1.5.0 and the XPC API is not a public contract; pin the supported `container` version in the app, drive it only through the CLI's JSON output, and keep desired state outside the local cluster.
+- **Apple `container` is young** — `container k8s` is experimental and cannot survive a restart, `container machine run` loses argument quoting, and the XPC API is not a public contract; pin the supported `container` version in the app, drive it only through the CLI's JSON output, and keep desired state outside the local cluster.
+- **Owning a kernel** — Kwerft for Mac needs its own kernel build (Apple's config plus a fragment). Building is cheap; tracking Apple's config and kernel security releases is a standing cost. Upstream the missing options to apple/containerization to shrink the fragment.
 - **Upstream churn** — pinned release manifest; upgrade tests from N-1 and N-2.

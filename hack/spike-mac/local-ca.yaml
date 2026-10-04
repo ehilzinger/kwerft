@@ -1,0 +1,30 @@
+# A local CA for HTTPS on the Mac: cert-manager issues every Domain's
+# certificate from it. The app can add the CA to the login keychain so
+# browsers trust *.kwerft.test without warnings.
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: kwerft-selfsigned
+spec:
+  selfSigned: {}
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: kwerft-local-ca
+  namespace: cert-manager
+spec:
+  isCA: true
+  commonName: Kwerft local CA
+  secretName: kwerft-local-ca
+  duration: 87600h
+  privateKey: { algorithm: ECDSA, size: 256 }
+  issuerRef: { name: kwerft-selfsigned, kind: ClusterIssuer }
+---
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: kwerft-local
+spec:
+  ca:
+    secretName: kwerft-local-ca
