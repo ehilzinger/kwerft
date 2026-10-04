@@ -106,6 +106,13 @@ func (r *ScheduleReconciler) reconcile(ctx context.Context, s *kwerftv1.Schedule
 	if due.IsZero() {
 		return requeue, scheduled, nil
 	}
+	// A reconcile that read a stale status (the cache still has the
+	// LastScheduleTime from before the last start) finds the same run due
+	// again. It has started already, and Replace must not stop it.
+	if slices.ContainsFunc(active, func(t *kwerftv1.Task) bool { return t.Name == runName(s, due) }) {
+		s.Status.LastScheduleTime = &metav1.Time{Time: due}
+		return requeue, scheduled, nil
+	}
 
 	if len(active) > 0 {
 		switch s.Spec.Concurrency {
