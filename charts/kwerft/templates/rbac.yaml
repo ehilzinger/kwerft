@@ -10,8 +10,13 @@ metadata:
   labels: {{- include "kwerft.labels" . | nindent 4 }}
 rules:
   - apiGroups: [""]
-    resources: [users, groups, serviceaccounts]
+    resources: [users, serviceaccounts]
     verbs: [impersonate]
+  # Only the groups the console hands out (see roles.yaml), never system:masters.
+  - apiGroups: [""]
+    resources: [groups]
+    verbs: [impersonate]
+    resourceNames: ["kwerft:role:owner", "kwerft:role:admin", "kwerft:role:developer", "kwerft:role:viewer", "system:authenticated"]
   - apiGroups: [kwerft.dev]
     resources: ["*"]
     verbs: ["*"]

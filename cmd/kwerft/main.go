@@ -71,8 +71,9 @@ func main() {
 
 	var tokens setup.TokenSource = setup.NewStaticTokenSource("", 0) // expired: no setup possible
 	var ready atomic.Bool
+	var mgr ctrl.Manager
 	if *runControllers {
-		mgr, err := newManager(log, *leaderElect, &controllers.DomainReconciler{
+		mgr, err = newManager(log, *leaderElect, &controllers.DomainReconciler{
 			ConsoleDomain: *consoleDomain,
 			GatewayClass:  *gatewayClass,
 			ClusterIssuer: *clusterIssuer,
@@ -102,6 +103,8 @@ func main() {
 		log.Warn("development mode: plain-HTTP cookies; setup token for /setup", "token", token)
 	}
 
+	kubeImp, kubeCache := workloadAccess(log, mgr)
+
 	srv := server.New(server.Config{
 		Listen:        *listen,
 		ConsoleDomain: *consoleDomain,
@@ -113,6 +116,9 @@ func main() {
 		Store:           st,
 		SetupTokens:     tokens,
 		InsecureCookies: *dev,
+
+		Kube:      kubeImp,
+		KubeCache: kubeCache,
 	})
 
 	go func() {

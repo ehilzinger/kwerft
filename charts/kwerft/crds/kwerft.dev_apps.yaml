@@ -382,6 +382,12 @@ spec:
                         default: /
                         description: Path is the build context inside the repository.
                         type: string
+                      pinnedImage:
+                        description: |-
+                          PinnedImage runs this image (an earlier build) instead of the latest
+                          successful build. The console sets it on rollback; clear it to follow
+                          builds again.
+                        type: string
                       repository:
                         description: Repository URL, e.g. https://github.com/acme/api.git
                           or git@host:acme/api.git.

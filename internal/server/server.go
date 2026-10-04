@@ -11,6 +11,9 @@ import (
 	"strings"
 	"time"
 
+	"sigs.k8s.io/controller-runtime/pkg/client"
+
+	"github.com/ehilzinger/kwerft/internal/kube"
 	"github.com/ehilzinger/kwerft/internal/setup"
 	"github.com/ehilzinger/kwerft/internal/store"
 	"github.com/ehilzinger/kwerft/internal/version"
@@ -35,6 +38,12 @@ type Config struct {
 	InsecureCookies bool
 	// Now is the clock; nil means time.Now (tests override it).
 	Now func() time.Time
+
+	// Kube enables the workload API (projects, apps); it acts as the
+	// signed-in user. KubeCache, optional, serves list endpoints for speed
+	// (see api_workloads.go for when that is allowed).
+	Kube      *kube.Impersonator
+	KubeCache client.Reader
 }
 
 // New returns an http.Server ready to ListenAndServe.

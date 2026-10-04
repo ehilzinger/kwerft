@@ -70,6 +70,8 @@ func (a *api) register(mux *http.ServeMux) {
 	mux.HandleFunc("DELETE /api/v1/session", a.sameOrigin(a.requireUser(a.logout)))
 
 	mux.HandleFunc("GET /api/v1/audit", a.requireUser(a.requireRole(a.auditList, store.RoleOwner, store.RoleAdmin)))
+
+	a.registerWorkloads(mux)
 }
 
 // ---- setup -----------------------------------------------------------------

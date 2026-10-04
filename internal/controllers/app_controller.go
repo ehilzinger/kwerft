@@ -228,10 +228,14 @@ func (r *AppReconciler) reconcileRoutes(ctx context.Context, app *kwerftv1.App, 
 }
 
 // resolveImage returns the image to run. Git apps run the image of their last
-// successful build, recorded in status by the Build reconciler (Phase 2).
+// successful build, recorded in status by the Build reconciler (Phase 2),
+// unless a rollback pinned an earlier one.
 func resolveImage(app *kwerftv1.App) (string, bool) {
 	if src := app.Spec.Source.Image; src != nil {
 		return src.Ref, true
+	}
+	if git := app.Spec.Source.Git; git != nil && git.PinnedImage != "" {
+		return git.PinnedImage, true
 	}
 	if app.Status.Image != "" {
 		return app.Status.Image, true
@@ -244,7 +248,9 @@ func resolveImage(app *kwerftv1.App) (string, bool) {
 func (r *AppReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		// Status writes do not bump the generation, so they do not re-trigger.
-		For(&kwerftv1.App{}, builder.WithPredicates(predicate.GenerationChangedPredicate{})).
+		// Annotation changes do: a restart is requested through one.
+		For(&kwerftv1.App{}, builder.WithPredicates(predicate.Or(
+			predicate.GenerationChangedPredicate{}, predicate.AnnotationChangedPredicate{}))).
 		Owns(&appsv1.Deployment{}).
 		Owns(&appsv1.StatefulSet{}).
 		Owns(&corev1.Service{}).
