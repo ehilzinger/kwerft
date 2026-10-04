@@ -50,6 +50,7 @@ KWERFT_IMAGE_REPO="ghcr.io/ehilzinger/kwerft"   # the chart's image.repository; 
 readonly EXIT_OK=0 EXIT_USAGE=2 EXIT_PREFLIGHT=10 EXIT_NETWORK=20 EXIT_K8S=30 EXIT_PLATFORM=40 EXIT_KWERFT=50
 
 readonly STATE_DIR="/var/lib/kwerft"
+VALUES_DIR="$STATE_DIR/values"            # Helm values the installer writes; not readonly so tests can point it elsewhere
 readonly CONF_DIR="/etc/kwerft"
 SETUP_TOKEN_FILE="$CONF_DIR/setup-token"  # not readonly so tests can point it elsewhere
 readonly LOG_DIR="/var/log/kwerft"
@@ -773,12 +774,12 @@ stage_ingress_tls() {
     >>"$LOG_FILE" 2>&1 || die $EXIT_PLATFORM "cert-manager installation failed"
   install_dns_webhook
 
-  mkdir -p "$STATE_DIR/values"
-  traefik_values >"$STATE_DIR/values/traefik.yaml"
+  mkdir -p "$VALUES_DIR"
+  traefik_values >"$VALUES_DIR/traefik.yaml"
   helmk repo add traefik https://traefik.github.io/charts --force-update >>"$LOG_FILE" 2>&1
   helmk upgrade --install traefik traefik/traefik --version "$TRAEFIK_CHART_VERSION" \
     --namespace traefik --create-namespace --wait --timeout 10m \
-    -f "$STATE_DIR/values/traefik.yaml" \
+    -f "$VALUES_DIR/traefik.yaml" \
     >>"$LOG_FILE" 2>&1 || die $EXIT_PLATFORM "Traefik installation failed"
   mark_system_namespace traefik
   echo "Traefik · cert-manager · Hetzner DNS-01 · Gateway API $gateway_api"
@@ -997,19 +998,27 @@ stage_observability() {
   local retention=30d log_retention=14d
   (( LITE )) && { retention=7d; log_retention=3d; }
   helmk repo add vm https://victoriametrics.github.io/helm-charts/ --force-update >>"$LOG_FILE" 2>&1
-  mkdir -p "$STATE_DIR/values"
-  vm_stack_values >"$STATE_DIR/values/vm-stack.yaml"
+  # disableNamespaceMatcher: Kwerft routes alerts to notification channels
+  # with one VMAlertmanagerConfig per channel in kwerft-observability; by
+  # default the operator confines such a route to alerts whose namespace
+  # label is kwerft-observability, which would drop every project and node
+  # alert. Timing (crash loop in Slack < 2 min) needs no change here: vmalert
+  # evaluates every 20s (Kwerft's crash-loop group every 10s) and Kwerft's
+  # routes set their own group_wait (10s).
+  mkdir -p "$VALUES_DIR"
+  vm_stack_values >"$VALUES_DIR/vm-stack.yaml"
   helmk upgrade --install vm vm/victoria-metrics-k8s-stack --version "$VM_STACK_CHART_VERSION" \
     --namespace kwerft-observability --create-namespace --wait --timeout 15m \
-    -f "$STATE_DIR/values/vm-stack.yaml" \
+    -f "$VALUES_DIR/vm-stack.yaml" \
     --set grafana.enabled=false \
     --set vmsingle.spec.retentionPeriod="$retention" \
     --set alertmanager.enabled=true \
+    --set alertmanager.spec.disableNamespaceMatcher=true \
     >>"$LOG_FILE" 2>&1 || die $EXIT_PLATFORM "VictoriaMetrics installation failed"
-  write_vlogs_values >"$STATE_DIR/values/vlogs.yaml"
+  write_vlogs_values >"$VALUES_DIR/vlogs.yaml"
   helmk upgrade --install vlogs vm/victoria-logs-single --version "$VLOGS_CHART_VERSION" \
     --namespace kwerft-observability --wait --timeout 10m \
-    -f "$STATE_DIR/values/vlogs.yaml" \
+    -f "$VALUES_DIR/vlogs.yaml" \
     --set server.retentionPeriod="$log_retention" \
     >>"$LOG_FILE" 2>&1 || die $EXIT_PLATFORM "VictoriaLogs installation failed"
   mark_system_namespace kwerft-observability

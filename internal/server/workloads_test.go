@@ -78,6 +78,8 @@ func runWithCluster(m *testing.M) int {
 		CRDDirectoryPaths: []string{
 			filepath.Join("..", "..", "charts", "kwerft", "crds"),
 			filepath.Join(strings.TrimSpace(string(out)), "config", "crd", "standard"),
+			// VictoriaMetrics operator (and cert-manager stand-ins), for alerting.
+			filepath.Join("..", "controllers", "testdata", "crds"),
 		},
 		ErrorIfCRDPathMissing: true,
 	}
@@ -148,6 +150,18 @@ func runWithCluster(m *testing.M) int {
 	if err := (&controllers.GitConnectionReconciler{Client: mgr.GetClient(), APIReader: mgr.GetAPIReader(),
 		Git: &git.Factory{HTTP: &http.Client{Transport: gitHosts}}, ConsoleDomain: "console.example.com"}).SetupWithManager(mgr); err != nil {
 		return fail("git connection reconciler", err)
+	}
+	// Alerting (alerts_test.go): rules and channels render into the
+	// operator's objects in kwerft-observability, next to the stack's
+	// VMAlertmanager. No default rules: tests create their own.
+	if err := setupAlerting(ctx, admin); err != nil {
+		return fail("alerting", err)
+	}
+	if err := (&controllers.AlertRuleReconciler{Client: mgr.GetClient(), ConsoleDomain: "console.example.com", NoDefaults: true}).SetupWithManager(mgr); err != nil {
+		return fail("alert rule reconciler", err)
+	}
+	if err := (&controllers.NotificationChannelReconciler{Client: mgr.GetClient(), APIReader: mgr.GetAPIReader()}).SetupWithManager(mgr); err != nil {
+		return fail("notification channel reconciler", err)
 	}
 	go func() { _ = mgr.Start(ctx) }()
 

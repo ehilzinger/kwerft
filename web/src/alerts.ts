@@ -225,7 +225,8 @@ export type ConditionInfo = {
 export const conditions: Record<AlertCondition, ConditionInfo> = {
   CrashLooping: {
     label: "Crash looping", hint: "A container keeps crashing and restarting", scope: "apps", everything: "All apps", severity: "critical",
-    for: { default: "1m", label: "Fires after" },
+    // Fires at once: the 2-minute alert depends on it (server default 0s).
+    for: { default: "0s", label: "Fires after" },
   },
   Restarts: {
     label: "Restarts", hint: "Containers restart often", scope: "apps", everything: "All apps", severity: "warning",
@@ -242,6 +243,7 @@ export const conditions: Record<AlertCondition, ConditionInfo> = {
   VolumeFillingUp: {
     label: "Volume filling up", hint: "A volume is almost full, or will be soon", scope: "projects", everything: "All volumes", severity: "warning",
     threshold: { unit: "percent", default: 85, label: "More than", suffix: "% used" }, window: { default: "7d", label: "Or full within" },
+    for: { default: "10m", label: "For" },
   },
   NodeMemoryPressure: {
     label: "Node memory low", hint: "A server is running out of memory", scope: "none", everything: "All nodes", severity: "critical",
@@ -254,6 +256,7 @@ export const conditions: Record<AlertCondition, ConditionInfo> = {
   CertificateExpiring: {
     label: "Certificate expiring", hint: "A certificate is not renewed in time", scope: "projects", everything: "All certificates", severity: "warning",
     window: { default: "14d", label: "Expires within" },
+    for: { default: "10m", label: "For" },
   },
   ScheduleFailing: {
     label: "Schedule failing", hint: "A scheduled job failed or stopped succeeding", scope: "projects", everything: "All schedules", severity: "warning",
@@ -265,10 +268,12 @@ export const conditions: Record<AlertCondition, ConditionInfo> = {
   HTTPErrorRate: {
     label: "HTTP errors", hint: "Too many requests fail with 5xx", scope: "apps", everything: "All apps", severity: "warning",
     threshold: { unit: "percent", default: 5, label: "More than", suffix: "% of requests fail" }, window: { default: "5m", label: "Over" },
+    for: { default: "5m", label: "For" },
   },
   HTTPLatency: {
     label: "Slow responses", hint: "Requests take too long (95th percentile)", scope: "apps", everything: "All apps", severity: "warning",
     threshold: { unit: "ms", default: 1000, label: "Slower than", suffix: "ms" }, window: { default: "5m", label: "Over" },
+    for: { default: "10m", label: "For" },
   },
   Custom: {
     label: "Custom expression", hint: "A MetricsQL expression; each result is an alert", scope: "none", everything: "What the expression returns", severity: "warning",

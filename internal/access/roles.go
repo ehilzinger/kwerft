@@ -80,6 +80,10 @@ func all(g Grant) map[string]Grant {
 const (
 	ManageMembers = "members"
 	ReadAudit     = "audit"
+	SilenceAlerts = "silence"
+	// AlertRules is enforced by Kubernetes, but the console also checks it
+	// for Custom rules (owners and admins only).
+	AlertRules = "alert-rules"
 )
 
 // Matrix is the source of truth, in the order the Access page shows it.
@@ -147,6 +151,32 @@ var Matrix = []Permission{
 			{Group: "kwerft.dev", Resource: "gitconnections", Verb: "update"},
 			{Group: "kwerft.dev", Resource: "gitconnections", Verb: "delete"},
 		},
+	},
+	{
+		// RBAC lets developers write AlertRules; it cannot see spec.expr, so
+		// the console keeps Custom rules to owners and admins.
+		ID: AlertRules, Label: "Create and change alert rules", Enforced: ByKubernetes,
+		Grants: map[string]Grant{Owner: yes, Admin: yes, Developer: {Level: Partial, Note: "built-in conditions; not Custom expressions"}, Viewer: no},
+		Kube: []Check{
+			{Group: "kwerft.dev", Resource: "alertrules", Verb: "create"},
+			{Group: "kwerft.dev", Resource: "alertrules", Verb: "update"},
+			{Group: "kwerft.dev", Resource: "alertrules", Verb: "delete"},
+		},
+	},
+	{
+		// Like Git credentials: patch on each channel's Secret, never get.
+		ID: "alert-channels", Label: "Manage notification channels and their credentials (write-only)", Enforced: ByKubernetes,
+		Grants: map[string]Grant{Owner: yes, Admin: yes, Developer: no, Viewer: no},
+		Kube: []Check{
+			{Group: "kwerft.dev", Resource: "notificationchannels", Verb: "create"},
+			{Group: "kwerft.dev", Resource: "notificationchannels", Verb: "update"},
+			{Group: "kwerft.dev", Resource: "notificationchannels", Verb: "delete"},
+		},
+	},
+	{
+		// Alertmanager has no users; the console decides.
+		ID: SilenceAlerts, Label: "Silence alerts", Enforced: ByConsole,
+		Grants: map[string]Grant{Owner: yes, Admin: yes, Developer: {Level: Partial, Note: "alerts of projects, not platform alerts"}, Viewer: no},
 	},
 	{
 		ID: "secrets", Label: "Read Kubernetes Secrets (apps reference them by name)", Enforced: ByKubernetes,

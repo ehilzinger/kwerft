@@ -46,6 +46,16 @@ rules:
   - apiGroups: [cert-manager.io]
     resources: [certificates, certificates/status, issuers, clusterissuers]
     verbs: [get, list, watch, create, update, patch, delete]
+  # Alerting (kwerft-observability): the VMRule "kwerft-alerts" and one
+  # VMAlertmanagerConfig per notification channel; VMAlertmanagers are only
+  # read (is the namespace matcher off?). The channels' Secrets are covered
+  # by the core rule above.
+  - apiGroups: [operator.victoriametrics.com]
+    resources: [vmrules, vmalertmanagerconfigs]
+    verbs: [get, list, watch, create, update, patch, delete]
+  - apiGroups: [operator.victoriametrics.com]
+    resources: [vmalertmanagers]
+    verbs: [get, list, watch]
   - apiGroups: [cilium.io]
     resources: [ciliumnetworkpolicies, ciliumclusterwidenetworkpolicies]
     verbs: [get, list, watch, create, update, patch, delete]

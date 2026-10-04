@@ -40,7 +40,7 @@ describe("durations", () => {
 
 describe("describeCondition", () => {
   it.each<[Parameters<typeof describeCondition>[0], string]>([
-    [{ condition: "CrashLooping" }, "Crash looping for 1 minute"],
+    [{ condition: "CrashLooping" }, "Crash looping"],
     [{ condition: "Restarts" }, "More than 5 restarts in 15 minutes"],
     [{ condition: "Restarts", threshold: 3, window: "30m0s" }, "More than 3 restarts in 30 minutes"],
     [{ condition: "MemoryHigh" }, "Memory above 90 % of the limit for 10 minutes"],

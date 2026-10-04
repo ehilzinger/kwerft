@@ -43,8 +43,17 @@ rules:
   - apiGroups: [kwerft.dev]
     resources: [builds]
     verbs: [create, patch]
-  # Everything else Kwerft defines (projects, builds, gitconnections, ...):
-  # read only. Git connections are owners' and admins' (kwerft.dev "*").
+  # Alert rules from Kwerft's built-in conditions. Custom expressions
+  # (spec.expr) are owners' and admins': RBAC cannot see a field, so the
+  # console refuses developers any write that creates, changes or deletes a
+  # Custom rule (internal/server/api_alerts.go). Users reach Kubernetes only
+  # through the console.
+  - apiGroups: [kwerft.dev]
+    resources: [alertrules]
+    verbs: [create, update, patch, delete]
+  # Everything else Kwerft defines (projects, builds, gitconnections,
+  # notificationchannels, ...): read only. Git connections and notification
+  # channels are owners' and admins' (kwerft.dev "*").
   - apiGroups: [kwerft.dev]
     resources: ["*"]
     verbs: [get, list, watch]
@@ -158,6 +167,10 @@ rules:
 # kwerft-builds, granting owners and admins "patch" on exactly the Secrets of
 # existing connections (resourceNames, never empty), and nothing else — no
 # get, list or create. See internal/controllers/gitconnection_controller.go.
+# Notification channel credentials (Secrets notify-<channel> in
+# kwerft-observability) work the same way: the NotificationChannel
+# reconciler keeps the Role and RoleBinding "kwerft:notify-secrets" there
+# (internal/controllers/alerting_channels.go).
 #
 # Settings → apps domain with DNS-01: owners and admins store the DNS API
 # token. "patch" on this one Secret only: no get, so not even they can read it

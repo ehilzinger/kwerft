@@ -704,3 +704,19 @@ JSON
   # The recording rules read it under kube-state-metrics' name for it.
   grep -q 'label_kwerft_dev_app' "$BATS_TEST_DIRNAME/../../charts/kwerft/templates/metrics-rules.yaml"
 }
+
+# Kwerft routes alerts with VMAlertmanagerConfigs in kwerft-observability;
+# the operator's namespace matcher would drop project and node alerts.
+@test "stage_observability: Alertmanager routes alerts from every namespace" {
+  KWERFT_SOURCED=1 source "$SCRIPT"
+  LOG_FILE="$BATS_TEST_TMPDIR/install.log"; : >"$LOG_FILE"
+  VALUES_DIR="$BATS_TEST_TMPDIR/values"   # the stage writes its Helm values there
+  HELM_LOG="$BATS_TEST_TMPDIR/helm.log"; : >"$HELM_LOG"
+  helmk() { printf 'helm %s\n' "$*" >>"$HELM_LOG"; }
+  kc() { :; }
+  run stage_observability
+  [ "$status" -eq 0 ]
+  grep -q "upgrade --install vm vm/victoria-metrics-k8s-stack .*--set alertmanager.enabled=true" "$HELM_LOG"
+  grep -q "upgrade --install vm vm/victoria-metrics-k8s-stack .*--set alertmanager.spec.disableNamespaceMatcher=true" "$HELM_LOG"
+  [[ "$output" == VictoriaMetrics* ]]
+}

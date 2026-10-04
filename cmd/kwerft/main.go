@@ -217,7 +217,7 @@ func cleanSessions(ctx context.Context, log *slog.Logger, st *store.Store) {
 func waitUntilReady(ctx context.Context, log *slog.Logger, mgr ctrl.Manager, ready *atomic.Bool) {
 	types := []client.Object{&kwerftv1.Project{}, &kwerftv1.App{}, &kwerftv1.Domain{},
 		&kwerftv1.Volume{}, &kwerftv1.Task{}, &kwerftv1.Schedule{}, &kwerftv1.ConsoleSettings{},
-		&kwerftv1.GitConnection{}, &kwerftv1.Build{}}
+		&kwerftv1.GitConnection{}, &kwerftv1.Build{}, &kwerftv1.AlertRule{}, &kwerftv1.NotificationChannel{}}
 	for _, obj := range types {
 		for {
 			_, err := mgr.GetCache().GetInformer(ctx, obj, cache.BlockUntilSynced(false))
@@ -300,6 +300,13 @@ func newManager(log *slog.Logger, leaderElect bool, metricsListen string, domain
 	builds.Client = mgr.GetClient()
 	builds.APIReader = mgr.GetAPIReader()
 	if err := builds.SetupWithManager(mgr); err != nil {
+		return nil, err
+	}
+	// Alerting: AlertRules → the VMRule, channels → Alertmanager (Phase 3).
+	if err := (&controllers.AlertRuleReconciler{Client: mgr.GetClient(), ConsoleDomain: domains.ConsoleDomain}).SetupWithManager(mgr); err != nil {
+		return nil, err
+	}
+	if err := (&controllers.NotificationChannelReconciler{Client: mgr.GetClient(), APIReader: mgr.GetAPIReader()}).SetupWithManager(mgr); err != nil {
 		return nil, err
 	}
 	return mgr, nil

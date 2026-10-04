@@ -193,6 +193,11 @@ spec:
               observedGeneration:
                 format: int64
                 type: integer
+              secretSet:
+                description: |-
+                  SecretSet says the channel's Secret holds what its type needs (the
+                  webhook URL, the SMTP password, the ntfy token); never the values.
+                type: boolean
             type: object
         type: object
     served: true
