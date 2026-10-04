@@ -7,7 +7,6 @@ import (
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
-	"k8s.io/apimachinery/pkg/api/resource"
 	"k8s.io/apimachinery/pkg/util/intstr"
 	appsv1ac "k8s.io/client-go/applyconfigurations/apps/v1"
 	corev1ac "k8s.io/client-go/applyconfigurations/core/v1"
@@ -20,10 +19,17 @@ import (
 	kwerftv1 "github.com/ehilzinger/kwerft/api/v1alpha1"
 )
 
-// Storage classes behind AppVolume.Class.
+// Storage classes behind AppVolume.Class and Volume.Class.
 var storageClasses = map[string]string{
 	"local-nvme":    "local-path",     // k3s local-path provisioner
 	"hcloud-volume": "hcloud-volumes", // Hetzner Cloud CSI
+}
+
+func storageClass(class string) string {
+	if sc := storageClasses[class]; sc != "" {
+		return sc
+	}
+	return storageClasses["local-nvme"]
 }
 
 // Size presets offered by the deploy wizard: CPU request, memory request = limit.
@@ -62,61 +68,44 @@ func (a *appRender) replicas() int32 {
 	return 1
 }
 
-// stateful apps (any volume) run as a StatefulSet so each replica keeps its disk.
-func (a *appRender) stateful() bool { return len(a.app.Spec.Volumes) > 0 }
-
-func (a *appRender) resources() *corev1ac.ResourceRequirementsApplyConfiguration {
-	if a.app.Spec.Size == "custom" && a.app.Spec.Resources != nil {
-		return corev1ac.ResourceRequirements().
-			WithRequests(a.app.Spec.Resources.Requests).
-			WithLimits(a.app.Spec.Resources.Limits)
+// stateful apps (any disk of their own) run as a StatefulSet so each replica
+// keeps its disk. Apps that only mount shared Volumes run as a Deployment.
+func (a *appRender) stateful() bool {
+	for _, v := range a.app.Spec.Volumes {
+		if v.Volume == "" {
+			return true
+		}
 	}
-	preset, ok := sizes[a.app.Spec.Size]
-	if !ok {
-		preset = sizes["small"]
-	}
-	mem := resource.MustParse(preset[1])
-	// No CPU limit: throttling hurts latency more than sharing spare CPU does.
-	return corev1ac.ResourceRequirements().
-		WithRequests(corev1.ResourceList{corev1.ResourceCPU: resource.MustParse(preset[0]), corev1.ResourceMemory: mem}).
-		WithLimits(corev1.ResourceList{corev1.ResourceMemory: mem})
+	return false
 }
 
-func (a *appRender) container() *corev1ac.ContainerApplyConfiguration {
-	c := corev1ac.Container().
-		WithName("app").
-		WithImage(a.image).
-		WithResources(a.resources()).
-		WithSecurityContext(corev1ac.SecurityContext().WithAllowPrivilegeEscalation(false))
-	if len(a.app.Spec.Command) > 0 {
-		c.WithCommand(a.app.Spec.Command...)
+// pod fills the pod template builder that Apps and Tasks share.
+func (a *appRender) pod() *podShape {
+	s := a.app.Spec
+	p := &podShape{
+		container:   "app",
+		image:       a.image,
+		command:     s.Command,
+		env:         s.Env,
+		size:        s.Size,
+		resources:   s.Resources,
+		ports:       s.Ports,
+		healthCheck: s.HealthCheck,
+		volumes:     s.Volumes,
+		labels:      a.labels,
 	}
-	for _, e := range a.app.Spec.Env {
-		c.WithEnv(envVar(e))
+	if src := s.Source.Image; src != nil {
+		p.pullSecret = src.PullSecret
 	}
-	for _, p := range a.app.Spec.Ports {
-		c.WithPorts(corev1ac.ContainerPort().WithContainerPort(p.Container).WithProtocol(protocol(p)))
+	// A new value rolls the workload out (a Task's onSuccess.restart).
+	if at := a.app.Annotations[AnnotationRestartRequestedAt]; at != "" {
+		p.annotations = map[string]string{AnnotationRestartRequestedAt: at}
 	}
-	if hc := a.app.Spec.HealthCheck; hc != nil {
-		c.WithReadinessProbe(probe(hc).WithPeriodSeconds(5).WithFailureThreshold(3))
-		c.WithLivenessProbe(probe(hc).WithPeriodSeconds(10).WithFailureThreshold(6))
-	}
-	for i, v := range a.app.Spec.Volumes {
-		c.WithVolumeMounts(corev1ac.VolumeMount().WithName(volumeName(i)).WithMountPath(v.Path))
-	}
-	return c
+	return p
 }
 
 func (a *appRender) podTemplate() *corev1ac.PodTemplateSpecApplyConfiguration {
-	spec := corev1ac.PodSpec().
-		WithContainers(a.container()).
-		WithEnableServiceLinks(false).
-		WithSecurityContext(corev1ac.PodSecurityContext().
-			WithSeccompProfile(corev1ac.SeccompProfile().WithType(corev1.SeccompProfileTypeRuntimeDefault)))
-	if src := a.app.Spec.Source.Image; src != nil && src.PullSecret != "" {
-		spec.WithImagePullSecrets(corev1ac.LocalObjectReference().WithName(src.PullSecret))
-	}
-	return corev1ac.PodTemplateSpec().WithLabels(a.labels).WithSpec(spec)
+	return a.pod().template()
 }
 
 func (a *appRender) deployment() *appsv1ac.DeploymentApplyConfiguration {
@@ -143,14 +132,13 @@ func (a *appRender) statefulSet() *appsv1ac.StatefulSetApplyConfiguration {
 		WithSelector(metav1ac.LabelSelector().WithMatchLabels(a.selector)).
 		WithTemplate(a.podTemplate())
 	for i, v := range a.app.Spec.Volumes {
-		class := storageClasses[v.Class]
-		if class == "" {
-			class = storageClasses["local-nvme"]
+		if v.Volume != "" {
+			continue // shared: a claim reference in the pod template
 		}
 		spec.WithVolumeClaimTemplates(corev1ac.PersistentVolumeClaim(volumeName(i), "").
 			WithSpec(corev1ac.PersistentVolumeClaimSpec().
 				WithAccessModes(corev1.ReadWriteOnce).
-				WithStorageClassName(class).
+				WithStorageClassName(storageClass(v.Class)).
 				WithResources(corev1ac.VolumeResourceRequirements().
 					WithRequests(corev1.ResourceList{corev1.ResourceStorage: v.Size}))))
 	}
@@ -254,38 +242,23 @@ func (a *appRender) networkPolicy() *networkingv1ac.NetworkPolicyApplyConfigurat
 			WithNamespaceSelector(metav1ac.LabelSelector().WithMatchLabels(map[string]string{LabelProject: project})).
 			WithPodSelector(metav1ac.LabelSelector().WithMatchLabels(map[string]string{LabelApp: app})))
 	}
+	// Tasks started from an allowed App (fromApp) may connect too, e.g. the
+	// migration of "api" reaching the database that "api" may reach.
+	for _, ref := range a.app.Spec.AllowFrom {
+		project, app := a.project, ref
+		if before, after, ok := strings.Cut(ref, "/"); ok {
+			project, app = before, after
+		}
+		from = append(from, networkingv1ac.NetworkPolicyPeer().
+			WithNamespaceSelector(metav1ac.LabelSelector().WithMatchLabels(map[string]string{LabelProject: project})).
+			WithPodSelector(metav1ac.LabelSelector().WithMatchLabels(map[string]string{LabelAsApp: app})))
+	}
 
 	spec := networkingv1ac.NetworkPolicySpec().
 		WithPodSelector(metav1ac.LabelSelector().WithMatchLabels(a.selector)).
 		WithPolicyTypes(networkingv1.PolicyTypeIngress).
 		WithIngress(networkingv1ac.NetworkPolicyIngressRule().WithFrom(from...).WithPorts(ports...))
-
-	egress := a.app.Spec.Egress
-	if egress == "" {
-		egress = "https"
-	}
-	if egress != "all" {
-		spec.WithPolicyTypes(networkingv1.PolicyTypeEgress)
-		// DNS, and any pod in the cluster: the target's ingress policy decides.
-		spec.WithEgress(
-			networkingv1ac.NetworkPolicyEgressRule().
-				WithTo(networkingv1ac.NetworkPolicyPeer().
-					WithNamespaceSelector(metav1ac.LabelSelector().WithMatchLabels(map[string]string{"kubernetes.io/metadata.name": "kube-system"})).
-					WithPodSelector(metav1ac.LabelSelector().WithMatchLabels(map[string]string{"k8s-app": "kube-dns"}))).
-				WithPorts(
-					networkingv1ac.NetworkPolicyPort().WithProtocol(corev1.ProtocolUDP).WithPort(intstr.FromInt32(53)),
-					networkingv1ac.NetworkPolicyPort().WithProtocol(corev1.ProtocolTCP).WithPort(intstr.FromInt32(53))),
-			networkingv1ac.NetworkPolicyEgressRule().
-				WithTo(networkingv1ac.NetworkPolicyPeer().WithNamespaceSelector(metav1ac.LabelSelector())),
-		)
-		if egress == "https" {
-			spec.WithEgress(networkingv1ac.NetworkPolicyEgressRule().
-				WithTo(networkingv1ac.NetworkPolicyPeer().WithIPBlock(networkingv1ac.IPBlock().
-					WithCIDR("0.0.0.0/0").
-					WithExcept("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "169.254.0.0/16"))).
-				WithPorts(networkingv1ac.NetworkPolicyPort().WithProtocol(corev1.ProtocolTCP).WithPort(intstr.FromInt32(443))))
-		}
-	}
+	withEgress(spec, a.app.Spec.Egress)
 
 	return networkingv1ac.NetworkPolicy(a.app.Name, a.app.Namespace).
 		WithLabels(a.labels).

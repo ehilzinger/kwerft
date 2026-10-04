@@ -4,6 +4,7 @@ go 1.26.0
 
 require (
 	github.com/go-logr/logr v1.4.3
+	github.com/robfig/cron/v3 v3.0.1
 	golang.org/x/crypto v0.57.0
 	k8s.io/api v0.37.1
 	k8s.io/apimachinery v0.37.1

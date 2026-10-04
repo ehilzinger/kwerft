@@ -3,6 +3,8 @@ package controllers
 import (
 	"context"
 	"fmt"
+	"slices"
+	"strings"
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -14,7 +16,9 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 	gwv1 "sigs.k8s.io/gateway-api/apis/v1"
 
 	kwerftv1 "github.com/ehilzinger/kwerft/api/v1alpha1"
@@ -23,8 +27,9 @@ import (
 const maxHistory = 20
 
 // AppReconciler renders an App into a Deployment (or a StatefulSet when it
-// has volumes), a Service, HTTPRoutes for public ports and a NetworkPolicy,
-// and reports rollout progress and revisions in App.status.
+// has disks of its own; shared Volumes alone keep it a Deployment), a
+// Service, HTTPRoutes for public ports and a NetworkPolicy, and reports
+// rollout progress and revisions in App.status.
 type AppReconciler struct {
 	client.Client
 }
@@ -78,6 +83,14 @@ func (r *AppReconciler) reconcile(ctx context.Context, app *kwerftv1.App) (*read
 	if !ok {
 		return &readiness{metav1.ConditionFalse, "AwaitingBuild",
 			"Waiting for the first successful build of " + app.Spec.Source.Git.Repository}, nil
+	}
+
+	missing, err := missingVolumes(ctx, r.Client, app.Namespace, app.Spec.Volumes)
+	if err != nil {
+		return nil, err
+	}
+	if len(missing) > 0 {
+		return &readiness{metav1.ConditionFalse, "VolumeNotFound", "Waiting for Volume " + strings.Join(missing, ", ")}, nil
 	}
 
 	rd := newAppRender(app, image, project)
@@ -239,12 +252,31 @@ func resolveImage(app *kwerftv1.App) (string, bool) {
 	return "", false
 }
 
+// appsMountingVolume enqueues the Apps that mount a Volume, so an App waiting
+// for it starts once it exists.
+func (r *AppReconciler) appsMountingVolume(ctx context.Context, vol client.Object) []reconcile.Request {
+	var apps kwerftv1.AppList
+	if err := r.List(ctx, &apps, client.InNamespace(vol.GetNamespace())); err != nil {
+		return nil
+	}
+	var reqs []reconcile.Request
+	for _, a := range apps.Items {
+		if slices.ContainsFunc(a.Spec.Volumes, func(v kwerftv1.AppVolume) bool { return v.Volume == vol.GetName() }) {
+			reqs = append(reqs, reconcile.Request{NamespacedName: client.ObjectKeyFromObject(&a)})
+		}
+	}
+	return reqs
+}
+
 // TODO(phase-2): watch Builds and enqueue their App — a finished build changes
 // only App.status, which the generation predicate below ignores.
 func (r *AppReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		// Status writes do not bump the generation, so they do not re-trigger.
-		For(&kwerftv1.App{}, builder.WithPredicates(predicate.GenerationChangedPredicate{})).
+		// Annotations do not either, but a restart request is one.
+		For(&kwerftv1.App{}, builder.WithPredicates(predicate.Or(
+			predicate.GenerationChangedPredicate{}, predicate.AnnotationChangedPredicate{}))).
+		Watches(&kwerftv1.Volume{}, handler.EnqueueRequestsFromMapFunc(r.appsMountingVolume)).
 		Owns(&appsv1.Deployment{}).
 		Owns(&appsv1.StatefulSet{}).
 		Owns(&corev1.Service{}).
