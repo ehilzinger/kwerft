@@ -111,3 +111,44 @@ setup() {
   run "$SCRIPT" --dry-run --platform cloud --image registry.local:5000/kwerft:dev-1 --image-archive "$archive"
   [ "$status" -eq 0 ]
 }
+
+# setup_token_state reads the Secret through kc; these tests stub it.
+setup_state_env() {
+  KWERFT_SOURCED=1 source "$SCRIPT"
+  SETUP_TOKEN_FILE="$BATS_TEST_TMPDIR/setup-token"
+  CONFIG_FILE=""
+}
+secret_expires() { printf '%s' "$1" | base64; }
+
+@test "setup_token_state: first install has no token" {
+  setup_state_env
+  kc() { return 1; }
+  [ "$(setup_token_state)" = "missing" ]
+}
+
+@test "setup_token_state: valid token is pending" {
+  setup_state_env
+  echo kwft_setup_x >"$SETUP_TOKEN_FILE"
+  kc() { secret_expires "2999-01-01T00:00:00Z"; }
+  [ "$(setup_token_state)" = "pending" ]
+}
+
+@test "setup_token_state: expired token is replaced" {
+  setup_state_env
+  echo kwft_setup_x >"$SETUP_TOKEN_FILE"
+  kc() { secret_expires "2000-01-01T00:00:00Z"; }
+  [ "$(setup_token_state)" = "expired" ]
+}
+
+@test "setup_token_state: consumed token means setup is complete" {
+  setup_state_env
+  echo kwft_setup_x >"$SETUP_TOKEN_FILE"
+  kc() { return 1; }
+  [ "$(setup_token_state)" = "complete" ]
+}
+
+@test "setup_token_state: config file skips the token" {
+  setup_state_env
+  CONFIG_FILE=/root/kwerft.yaml
+  [ "$(setup_token_state)" = "config" ]
+}

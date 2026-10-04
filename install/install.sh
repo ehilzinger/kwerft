@@ -40,6 +40,7 @@ readonly EXIT_OK=0 EXIT_USAGE=2 EXIT_PREFLIGHT=10 EXIT_NETWORK=20 EXIT_K8S=30 EX
 
 readonly STATE_DIR="/var/lib/kwerft"
 readonly CONF_DIR="/etc/kwerft"
+SETUP_TOKEN_FILE="$CONF_DIR/setup-token"  # not readonly so tests can point it elsewhere
 readonly LOG_DIR="/var/log/kwerft"
 readonly LOG_FILE="$LOG_DIR/install.log"
 readonly KUBECONFIG_PATH="/etc/rancher/k3s/k3s.yaml"
@@ -666,18 +667,55 @@ stage_handoff() {
   fi
 
   mkdir -p "$CONF_DIR"; chmod 0700 "$CONF_DIR"
-  if [[ ! -s "$CONF_DIR/setup-token" && -z "$CONFIG_FILE" ]]; then
-    local token hash
-    token="kwft_setup_$(head -c 15 /dev/urandom | base32 | tr -d '=' | tr '[:upper:]' '[:lower:]')"
-    (umask 077; printf '%s\n' "$token" >"$CONF_DIR/setup-token")
-    hash=$(printf '%s' "$token" | sha256sum | awk '{print $1}')
-    # Kwerft only ever sees the hash; the token itself never leaves this disk.
-    kc -n kwerft-system create secret generic kwerft-setup-token \
-      --from-literal=sha256="$hash" \
-      --from-literal=expires="$(date -u -d '+24 hours' +%FT%TZ)" \
-      --dry-run=client -o yaml | kc apply -f - >/dev/null
+  local state
+  state=$(setup_token_state)
+  case "$state" in
+    missing|expired)
+      create_setup_token
+      state="token ready" ;;
+    complete)
+      rm -f "$SETUP_TOKEN_FILE"   # used up; nothing left to protect
+      state="setup complete" ;;
+    pending)
+      state="token ready" ;;
+    config)
+      state="owner from config" ;;
+  esac
+  echo "DNS ${resolved:-unresolved} · $state"
+}
+
+# setup_token_state prints where first-run setup stands:
+#   config    owner comes from --config, no token needed
+#   missing   no token yet (first install, or the file was lost)
+#   pending   a valid token is waiting to be used
+#   expired   the token ran out before setup was done
+#   complete  Kwerft consumed the token (it deletes the Secret once the owner exists)
+setup_token_state() {
+  if [[ -n "$CONFIG_FILE" ]]; then echo config; return; fi
+  local expires
+  expires=$(kc -n kwerft-system get secret kwerft-setup-token \
+    -o jsonpath='{.data.expires}' 2>/dev/null | base64 -d 2>/dev/null || true)
+  if [[ -z "$expires" ]]; then
+    # The Secret is written before the file, so file-without-Secret means used.
+    if [[ -s "$SETUP_TOKEN_FILE" ]]; then echo complete; else echo missing; fi
+    return
   fi
-  echo "DNS ${resolved:-unresolved} · setup token ready"
+  [[ -s "$SETUP_TOKEN_FILE" ]] || { echo missing; return; }
+  # Both timestamps are fixed-width UTC (%FT%TZ), so string order is time order.
+  if [[ "$expires" > "$(date -u +%FT%TZ)" ]]; then echo pending; else echo expired; fi
+}
+
+create_setup_token() {
+  local token hash
+  token="kwft_setup_$(head -c 15 /dev/urandom | base32 | tr -d '=' | tr '[:upper:]' '[:lower:]')"
+  hash=$(printf '%s' "$token" | sha256sum | awk '{print $1}')
+  # Kwerft only ever sees the hash; the token itself never leaves this disk.
+  # Secret first, then the file: see setup_token_state.
+  kc -n kwerft-system create secret generic kwerft-setup-token \
+    --from-literal=sha256="$hash" \
+    --from-literal=expires="$(date -u -d '+24 hours' +%FT%TZ)" \
+    --dry-run=client -o yaml | kc apply -f - >/dev/null
+  (umask 077; printf '%s\n' "$token" >"$SETUP_TOKEN_FILE")
 }
 
 print_summary() {
@@ -686,9 +724,11 @@ print_summary() {
   if [[ -n "$CONFIG_FILE" ]]; then
     printf '  Open        %shttps://%s%s\n' "$C_ACC" "$DOMAIN" "$C_0"
     printf '  Sign in with the owner account from %s\n' "$CONFIG_FILE"
-  else
+  elif [[ -s "$SETUP_TOKEN_FILE" ]]; then
     printf '  Open        %shttps://%s/setup%s\n' "$C_ACC" "$DOMAIN" "$C_0"
-    printf '  Setup token stored at %s/setup-token (mode 0600, single use, 24 h)\n' "$CONF_DIR"
+    printf '  Setup token stored at %s (mode 0600, single use, 24 h)\n' "$SETUP_TOKEN_FILE"
+  else
+    printf '  Open        %shttps://%s%s and sign in\n' "$C_ACC" "$DOMAIN" "$C_0"
   fi
   printf '  Log         %s\n\n' "$LOG_FILE"
   if is_temp_domain; then
