@@ -34,6 +34,7 @@ type api struct {
 	setupLim *limiter // token guesses per IP
 	loginIP  *limiter // logins per IP
 	loginAcc *limiter // logins per account
+	mfa      *mfa     // second factors, see api_mfa.go
 
 	mu     sync.Mutex
 	grants map[string]time.Time // setup grant hash → expiry
@@ -57,6 +58,7 @@ func newAPI(cfg Config) *api {
 		loginIP:  newLimiter(30, 15*time.Minute, now),
 		loginAcc: newLimiter(10, 15*time.Minute, now),
 		grants:   map[string]time.Time{},
+		mfa:      newMFA(cfg, now),
 	}
 }
 
@@ -70,6 +72,7 @@ func (a *api) register(mux *http.ServeMux) {
 	mux.HandleFunc("DELETE /api/v1/session", a.sameOrigin(a.requireUser(a.logout)))
 
 	mux.HandleFunc("GET /api/v1/audit", a.requireUser(a.requireRole(a.auditList, store.RoleOwner, store.RoleAdmin)))
+	a.registerMFA(mux)
 }
 
 // ---- setup -----------------------------------------------------------------
@@ -308,6 +311,9 @@ func (a *api) login(w http.ResponseWriter, r *http.Request) {
 	if err != nil || !ok {
 		a.audit(r, "anonymous", "session.login_failed", u.Email, "wrong password")
 		writeError(w, http.StatusUnauthorized, wrong)
+		return
+	}
+	if a.secondFactorRequired(w, r, u) {
 		return
 	}
 	if err := a.startSession(w, r, u); err != nil {

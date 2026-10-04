@@ -32,6 +32,8 @@ spec:
           env:
             - name: POD_NAMESPACE
               valueFrom: { fieldRef: { fieldPath: metadata.namespace } }
+            - name: KWERFT_DATA_KEY
+              valueFrom: { secretKeyRef: { name: {{ include "kwerft.fullname" . }}-data-key, key: key } }
           ports:
             - name: http
               containerPort: 8080

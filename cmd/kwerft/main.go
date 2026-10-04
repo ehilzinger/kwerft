@@ -61,6 +61,11 @@ func main() {
 		log.Error("cannot create data directory", "dir", *dataDir, "err", err)
 		os.Exit(1)
 	}
+	key, err := dataKey(log, *dev, *dataDir)
+	if err != nil {
+		log.Error("cannot start without a data key", "err", err)
+		os.Exit(1)
+	}
 	st, err := store.Open(ctx, filepath.Join(*dataDir, "kwerft.db"))
 	if err != nil {
 		log.Error("cannot open the database", "err", err)
@@ -102,6 +107,14 @@ func main() {
 		log.Warn("development mode: plain-HTTP cookies; setup token for /setup", "token", token)
 	}
 
+	var passkeyOrigins []string
+	if *dev {
+		if *consoleDomain == "" {
+			*consoleDomain = "localhost"
+		}
+		passkeyOrigins = devPasskeyOrigins(*listen)
+	}
+
 	srv := server.New(server.Config{
 		Listen:        *listen,
 		ConsoleDomain: *consoleDomain,
@@ -113,6 +126,8 @@ func main() {
 		Store:           st,
 		SetupTokens:     tokens,
 		InsecureCookies: *dev,
+		DataKey:         key,
+		PasskeyOrigins:  passkeyOrigins,
 	})
 
 	go func() {

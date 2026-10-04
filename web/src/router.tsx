@@ -7,6 +7,7 @@ import { Apps } from "./pages/Apps";
 import { Planned } from "./pages/Planned";
 import { Setup } from "./pages/Setup";
 import { Login } from "./pages/Login";
+import { Account } from "./pages/Account";
 
 type Context = { queryClient: QueryClient };
 
@@ -62,6 +63,7 @@ const routeTree = root.addChildren([
   authed.addChildren([
     createRoute({ getParentRoute: () => authed, path: "/", component: Overview }),
     createRoute({ getParentRoute: () => authed, path: "/apps", component: Apps }),
+    createRoute({ getParentRoute: () => authed, path: "/account", component: Account }),
     planned("/monitoring", "Monitoring", "Phase 3", "Alerts with one-click fixes, top consumers, and alert rules routed to email, Slack, webhooks or ntfy."),
     planned("/clusters", "Clusters & nodes", "Phase 5", "Add Hetzner Cloud servers through the API or join dedicated servers with one command; manage more clusters through an outbound agent."),
     planned("/network", "Network", "Phase 4", "Traffic rules between apps with observed hit and drop counts, the server firewall with lock-out protection, and domains with automatic TLS."),

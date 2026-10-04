@@ -1,0 +1,20 @@
+{{- /*
+The data key encrypts secrets in Kwerft's database, such as TOTP seeds. It is
+generated on the first install and looked up on every upgrade, so it never
+changes; "keep" leaves it behind on uninstall, because without it every user
+would have to set up their authenticator app again. Back it up together with
+the database.
+*/ -}}
+{{- $name := printf "%s-data-key" (include "kwerft.fullname" .) }}
+{{- $existing := lookup "v1" "Secret" .Release.Namespace $name }}
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ $name }}
+  namespace: {{ .Release.Namespace }}
+  labels: {{- include "kwerft.labels" . | nindent 4 }}
+  annotations:
+    helm.sh/resource-policy: keep
+type: Opaque
+data:
+  key: {{ dig "data" "key" (randBytes 32 | b64enc) $existing }}

@@ -20,9 +20,10 @@ const sections: { title?: string; items: NavItem[] }[] = [
   ] },
 ];
 
-const titles: Record<string, string> = Object.fromEntries(
-  sections.flatMap((s) => s.items.map((i) => [i.to, i.label])),
-);
+const titles: Record<string, string> = {
+  ...Object.fromEntries(sections.flatMap((s) => s.items.map((i) => [i.to, i.label]))),
+  "/account": "Account",
+};
 
 export function Shell() {
   const path = useRouterState({ select: (s) => s.location.pathname });
@@ -61,8 +62,10 @@ export function Shell() {
         <div className="side-foot">
           {user.data && (
             <div className="who">
-              <span className="avatar" aria-hidden="true">{initials(user.data.name)}</span>
-              <div><b>{user.data.name}</b><small>{user.data.role}</small></div>
+              <Link to="/account" className="who-link" title="Your account: password, two-factor sign-in, sessions">
+                <span className="avatar" aria-hidden="true">{initials(user.data.name)}</span>
+                <div><b>{user.data.name}</b><small>{user.data.role}</small></div>
+              </Link>
               <button className="btn sm" onClick={signOut}>Sign out</button>
             </div>
           )}

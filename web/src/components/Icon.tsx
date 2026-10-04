@@ -8,6 +8,7 @@ const paths = {
   net: <><circle cx="8" cy="3" r="1.6" /><circle cx="3" cy="13" r="1.6" /><circle cx="13" cy="13" r="1.6" /><path d="M7.2 4.4L3.8 11.6M8.8 4.4l3.4 7.2M4.6 13h6.8" /></>,
   users: <><circle cx="6" cy="5.5" r="2.5" /><path d="M1.5 13.5c.6-2.4 2.3-3.6 4.5-3.6s3.9 1.2 4.5 3.6" /><path d="M10.5 3.2a2.4 2.4 0 010 4.6M12 9.8c1.3.5 2.1 1.6 2.5 3.7" /></>,
   plus: <path d="M8 3v10M3 8h10" />,
+  key: <><circle cx="5.5" cy="10.5" r="3" /><path d="M7.6 8.4L14 2M11.5 4.5l1.8 1.8M10 6l1.5 1.5" /></>,
 } as const;
 
 export type IconName = keyof typeof paths;
