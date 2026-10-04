@@ -187,8 +187,11 @@ Nobody creates real infrastructure; the coordinator does, after asking.
   per user in the browser (`kwerft:cluster-filter:<user id>`); the cluster
   picker in "New project" (unreachable clusters disabled); the Deploy
   wizard names each project's cluster; a cluster picker on Monitoring ›
-  Metrics; a banner on every page while a cluster is unreachable. All of it
-  renders nothing while only `local` exists.
+  Metrics and on Monitoring › Logs (without a project); a banner on every
+  page while a cluster is unreachable. All of it renders nothing while only
+  `local` exists. Not built: a cluster picker on Settings (apps domain) and
+  Network › Firewall — their API takes `?cluster=`; W1 owns those pages
+  this phase.
 - **Tests**: `internal/server/multicluster_test.go` runs a second envtest
   cluster ("edge", same CRDs, RBAC and reconcilers) behind a test Registry
   with the edge's console identity, so remote connections, caches and

@@ -8,12 +8,12 @@ import { MonitoringLayout } from "./Monitoring";
 const route = getRouteApi("/authed/monitoring/logs");
 
 /** The URL's search params for Monitoring › Logs (router.tsx validates them). */
-export type LogsSearch = { query?: string; project?: string; app?: string; level?: string; range?: string; platform?: boolean };
+export type LogsSearch = { query?: string; project?: string; app?: string; level?: string; range?: string; platform?: boolean; cluster?: string };
 
 export function logsSearch(s: Record<string, unknown>): LogsSearch {
   const str = (k: string) => (typeof s[k] === "string" && s[k] ? { [k]: s[k] as string } : {});
   return {
-    ...str("query"), ...str("project"), ...str("app"),
+    ...str("query"), ...str("project"), ...str("app"), ...str("cluster"),
     ...(isLevel(s.level) && s.level ? { level: s.level } : {}),
     ...(isRange(s.range) ? { range: s.range } : {}),
     ...(s.platform === true || s.platform === "1" || s.platform === 1 ? { platform: true } : {}),
@@ -33,11 +33,13 @@ export function MonitoringLogs() {
   const initial: Partial<SearchState> = {
     query: search.query ?? "", project: search.project ?? "", app: search.app ?? "",
     level: isLevel(search.level) ? search.level : "", range: isRange(search.range) ? search.range : "1h", platform: !!search.platform,
+    cluster: search.cluster ?? "",
   };
   const onChange = (s: SearchState) => {
     void navigate({
       to: "/monitoring/logs",
-      search: logsSearch({ query: s.query, project: s.project, app: s.app, level: s.level, range: s.range === "1h" ? undefined : s.range, platform: s.platform }),
+      search: logsSearch({ query: s.query, project: s.project, app: s.app, level: s.level, range: s.range === "1h" ? undefined : s.range, platform: s.platform,
+        cluster: s.project ? undefined : s.cluster }),
       replace: true,
     });
   };
