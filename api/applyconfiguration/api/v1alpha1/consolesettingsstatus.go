@@ -29,7 +29,11 @@ type ConsoleSettingsStatusApplyConfiguration struct {
 	PublicAddresses []string `json:"publicAddresses,omitempty"`
 	// Certificates the console and the wildcard listener use.
 	Certificates []CertificateStateApplyConfiguration `json:"certificates,omitempty"`
-	Conditions   []metav1.ConditionApplyConfiguration `json:"conditions,omitempty"`
+	// DNS is what the DNS reconciler did with spec.dns.manageRecords. It has
+	// a field of its own because another reconciler writes the rest of the
+	// status.
+	DNS        *DNSStatusApplyConfiguration         `json:"dns,omitempty"`
+	Conditions []metav1.ConditionApplyConfiguration `json:"conditions,omitempty"`
 }
 
 // ConsoleSettingsStatusApplyConfiguration constructs a declarative configuration of the ConsoleSettingsStatus type for use with
@@ -98,6 +102,14 @@ func (b *ConsoleSettingsStatusApplyConfiguration) WithCertificates(values ...*Ce
 		}
 		b.Certificates = append(b.Certificates, *values[i])
 	}
+	return b
+}
+
+// WithDNS sets the DNS field in the declarative configuration to the given value
+// and returns the receiver, so that objects can be built by chaining "With" function invocations.
+// If called multiple times, the DNS field is set to the value of the last call.
+func (b *ConsoleSettingsStatusApplyConfiguration) WithDNS(value *DNSStatusApplyConfiguration) *ConsoleSettingsStatusApplyConfiguration {
+	b.DNS = value
 	return b
 }
 

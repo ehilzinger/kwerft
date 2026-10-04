@@ -6,7 +6,7 @@ import { Field } from "../components/Field";
 import { Icon } from "../components/Icon";
 import { HOST_RE } from "../workloads";
 import { shortDate } from "../jobs";
-import { isTemporaryHost, settingsApi, type CertificateState, type DNSCheck, type PasskeyHolder, type Settings as SettingsData } from "../settings";
+import { isTemporaryHost, settingsApi, type CertificateState, type DNSCheck, type DNSRecord, type PasskeyHolder, type Settings as SettingsData } from "../settings";
 import "../styles/workloads.css";
 import "../styles/settings.css";
 
@@ -43,6 +43,7 @@ export function Settings() {
         <>
           <ConsoleCard s={settings.data} canEdit={canEdit} />
           <AppsCard s={settings.data} canEdit={canEdit} />
+          {settings.data.manageRecords && <DNSRecordsCard s={settings.data} />}
           <CertificatesCard s={settings.data} />
           <section className="card">
             <h2>Hetzner Cloud API</h2>
@@ -143,7 +144,9 @@ function ConsoleCard({ s, canEdit }: { s: SettingsData; canEdit: boolean }) {
             <Field id="console-host" label="New console hostname" className="mono" value={host} placeholder="ops.example.com"
               onChange={(e) => { setHost(e.target.value); setCheck(undefined); setError(undefined); }}
               autoComplete="off" spellCheck={false} error={error}
-              hint={s.publicAddresses.length ? `Create an A record for it pointing to ${s.publicAddresses.join(", ")} (this server).` : "Create an A record for it pointing to this server."} />
+              hint={s.manageRecords
+                ? "Kwerft creates its DNS record when the name is in one of your Hetzner zones; otherwise point an A record at this server."
+                : s.publicAddresses.length ? `Create an A record for it pointing to ${s.publicAddresses.join(", ")} (this server).` : "Create an A record for it pointing to this server."} />
             <div className="move-acts">
               <button className="btn" disabled={checking || !target}>{checking ? "Checking…" : "Check DNS"}</button>
               <button type="button" className="btn pri" onClick={() => setConfirming(true)}
@@ -231,6 +234,7 @@ function AppsCard({ s, canEdit }: { s: SettingsData; canEdit: boolean }) {
   const queryClient = useQueryClient();
   const [apps, setApps] = useState(s.appsDomain ?? "");
   const [tls, setTLS] = useState<"http01" | "dns01">(s.tls);
+  const [records, setRecords] = useState(s.manageRecords);
   const [token, setToken] = useState("");
   const [error, setError] = useState<{ field?: string; message: string }>();
   const [done, setDone] = useState<string>();
@@ -239,7 +243,8 @@ function AppsCard({ s, canEdit }: { s: SettingsData; canEdit: boolean }) {
   const [check, setCheck] = useState<DNSCheck>();
   const domain = apps.trim().toLowerCase().replace(/\.$/, "");
   const fieldError = (f: string) => (error?.field === f ? error.message : undefined);
-  const changed = domain !== (s.appsDomain ?? "") || tls !== s.tls || token.trim() !== "";
+  const changed = domain !== (s.appsDomain ?? "") || tls !== s.tls || records !== s.manageRecords || token.trim() !== "";
+  const needsToken = tls === "dns01" || records;
   const ip = s.publicAddresses.join(", ") || "this server";
 
   async function save(e: FormEvent) {
@@ -253,7 +258,7 @@ function AppsCard({ s, canEdit }: { s: SettingsData; canEdit: boolean }) {
     }
     setBusy(true);
     try {
-      const res = await settingsApi.saveApps({ appsDomain: domain, tls, ...(token.trim() ? { token: token.trim() } : {}) });
+      const res = await settingsApi.saveApps({ appsDomain: domain, tls, manageRecords: records, ...(token.trim() ? { token: token.trim() } : {}) });
       queryClient.setQueryData(["settings"], res.settings);
       setToken("");
       setWarning(res.warning);
@@ -285,11 +290,12 @@ function AppsCard({ s, canEdit }: { s: SettingsData; canEdit: boolean }) {
           <div className="stack tight">
             <Field id="apps-domain" label="Base domain for apps" className="mono" value={apps} placeholder="apps.example.com"
               onChange={(e) => { setApps(e.target.value); setCheck(undefined); }} disabled={!canEdit} autoComplete="off" spellCheck={false}
-              error={fieldError("appsDomain")} hint={`Create *.${domain || "apps.example.com"} → ${ip}`} />
+              error={fieldError("appsDomain")}
+              hint={records ? `Kwerft keeps *.${domain || "apps.example.com"} → ${ip}` : `Create *.${domain || "apps.example.com"} → ${ip}`} />
             {canEdit && domain && HOST_RE.test(domain) && (
               <div className="inline-check">
                 <button type="button" className="btn sm" onClick={checkWildcard}>Check wildcard DNS</button>
-                {check && <span className={check.ok ? "ok-text" : "form-error"} role="status">{check.ok ? `✓ *.${domain} points to this server.` : check.message}</span>}
+                {check && <span className={check.ok ? "ok-text" : "form-error"} role="status">{check.ok ? `✓ ${check.managed ? check.message : `*.${domain} points to this server.`}` : check.message}</span>}
               </div>
             )}
           </div>
@@ -306,18 +312,36 @@ function AppsCard({ s, canEdit }: { s: SettingsData; canEdit: boolean }) {
               </button>
             </div>
           </div>
-          {tls === "dns01" && (
+          <div className="field full">
+            <label className="check records">
+              <input type="checkbox" checked={records} disabled={!canEdit} onChange={(e) => setRecords(e.target.checked)} />
+              <span>
+                <b>Let Kwerft create the DNS records</b>
+                <small>
+                  A and AAAA records for <code>{s.pendingConsoleDomain || s.consoleDomain}</code>{domain && <> and <code>*.{domain}</code></>} pointing to {ip}, kept up to date in Hetzner DNS when the server&apos;s address changes.
+                  Records you created yourself are never changed.
+                </small>
+              </span>
+            </label>
+          </div>
+          {needsToken && (
             <div className="full">
               <Field id="dns-token" label="Hetzner API token" className="mono" type="password" value={token} disabled={!canEdit}
                 onChange={(e) => setToken(e.target.value)} autoComplete="off" spellCheck={false}
                 placeholder={s.tokenSet ? "•••••••••••••••• stored — enter a new one to replace it" : "Read & Write token of the project with the DNS zone"}
                 error={fieldError("token")}
-                hint="From the Hetzner Console: your project → Security → API tokens, Read & Write. Kwerft checks it can see the zone, stores it, and never shows it again." />
+                hint="From the Hetzner Console: the project with your DNS zones → Security → API tokens, Read & Write. Kwerft checks it can see the zone, stores it, and never shows it again." />
             </div>
           )}
         </div>
         {tls === "dns01" && s.tls !== "dns01" && (
           <p className="dim note">Apps under the domain move to the wildcard once its certificate is issued, usually within two minutes; until then they keep their own certificates.</p>
+        )}
+        {records && !s.manageRecords && (
+          <p className="dim note">Kwerft creates the records within a minute of saving. Names that already have records it did not create are listed as conflicts, not overwritten.</p>
+        )}
+        {!records && s.manageRecords && (
+          <p className="dim note">The records stay as they are; Kwerft just stops updating them.</p>
         )}
         {tls === "http01" && s.tls === "dns01" && (
           <p className="dim note">Apps under the domain go back to a certificate each. Their HTTPS answers with a default certificate until those are issued.</p>
@@ -333,6 +357,61 @@ function AppsCard({ s, canEdit }: { s: SettingsData; canEdit: boolean }) {
       </form>
     </section>
   );
+}
+
+// ---- DNS records -----------------------------------------------------------------------
+
+const recordPurposes: Record<DNSRecord["purpose"], string> = {
+  console: "Console",
+  "console-next": "New console hostname",
+  "console-previous": "Previous console hostname",
+  apps: "Apps",
+};
+
+function DNSRecordsCard({ s }: { s: SettingsData }) {
+  return (
+    <section className="card">
+      <h2>DNS records</h2>
+      {s.dnsMessage && (
+        <div className="bd"><div className="banner warn" role="status"><Icon name="alert" /><span>{s.dnsMessage}</span></div></div>
+      )}
+      {s.dnsRecords.length === 0 ? (
+        <div className="bd"><p className="dim note">{s.dnsMessage ? "No records yet." : "Kwerft is creating the records…"}</p></div>
+      ) : (
+        <div className="scroll-x">
+          <table className="t">
+            <thead><tr><th>Hostname</th><th>For</th><th>Points to</th><th>State</th></tr></thead>
+            <tbody>
+              {s.dnsRecords.map((r) => (
+                <tr key={r.hostname}>
+                  <td className="nm mono">{r.hostname}{r.zone && <span className="sub">zone {r.zone}</span>}</td>
+                  <td>{recordPurposes[r.purpose] ?? r.purpose}</td>
+                  <td className="mono">{r.values.length ? r.values.join(", ") : "—"}</td>
+                  <td><RecordPill r={r} />{r.message && r.state !== "Managed" && <span className="sub wrap">{r.message}</span>}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+      <div className="bd">
+        <p className="dim note">
+          Kwerft labels the records it creates (<code>kwerft.dev/managed-by</code>) and only changes those{s.dnsSyncedAt ? <>; last checked {shortDate(s.dnsSyncedAt)} {new Date(s.dnsSyncedAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</> : null}.
+        </p>
+      </div>
+    </section>
+  );
+}
+
+function RecordPill({ r }: { r: DNSRecord }) {
+  switch (r.state) {
+    case "Managed": return <span className="pill ok" title={r.message}>Managed</span>;
+    case "External": return <span className="pill ok" title={r.message}>Yours, points here</span>;
+    case "Conflict": return <span className="pill bad" title={r.message}>Conflict</span>;
+    case "TakenOver": return <span className="pill warn" title={r.message}>Another installation</span>;
+    case "NoZone": return <span className="pill mute" title={r.message}>Not in your zones</span>;
+    default: return <span className="pill bad" title={r.message}>Error</span>;
+  }
 }
 
 // ---- certificates ----------------------------------------------------------------------

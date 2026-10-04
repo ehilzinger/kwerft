@@ -13,6 +13,18 @@ export type CertificateState = {
   notAfter?: string;
 };
 
+export type DNSRecordState = "Managed" | "External" | "Conflict" | "TakenOver" | "NoZone" | "Error";
+
+/** A hostname whose A/AAAA records Kwerft keeps (spec.dns.manageRecords). */
+export type DNSRecord = {
+  hostname: string;
+  purpose: "console" | "console-next" | "console-previous" | "apps";
+  zone?: string;
+  state: DNSRecordState;
+  values: string[];
+  message?: string;
+};
+
 export type Settings = {
   /** Where the console is served now. */
   consoleDomain: string;
@@ -24,6 +36,12 @@ export type Settings = {
   tls: "http01" | "dns01";
   dnsProvider?: "hetzner";
   tokenSet: boolean;
+  /** Kwerft keeps the records of the console hostname and *.<appsDomain>. */
+  manageRecords: boolean;
+  dnsRecords: DNSRecord[];
+  /** Why the last sync with the DNS provider could not run. */
+  dnsMessage?: string;
+  dnsSyncedAt?: string;
   /** "*.<appsDomain>" once the wildcard listener serves apps. */
   wildcardDomain?: string;
   publicAddresses: string[];
@@ -31,7 +49,8 @@ export type Settings = {
   ready?: { status: boolean; reason: string; message: string };
 };
 
-export type DNSCheck = { hostname: string; addresses: string[]; expected: string[]; ok: boolean; message: string };
+/** managed: no record yet, but Kwerft creates it. */
+export type DNSCheck = { hostname: string; addresses: string[]; expected: string[]; ok: boolean; managed?: boolean; message: string };
 
 export type PasskeyHolder = { email: string; name: string; passkeys: number; totp: boolean; recoveryCodes: number; stranded: boolean };
 
@@ -44,8 +63,8 @@ export const settingsApi = {
   passkeyHolders: () => request<PasskeyHolder[]>("/settings/passkeys"),
   moveConsole: (hostname: string, confirm: string) =>
     request<Settings>("/settings/console-domain", { method: "PUT", json: { hostname, confirm } }),
-  saveApps: (s: { appsDomain: string; tls: "http01" | "dns01"; token?: string }) =>
-    request<AppsSaved>("/settings/apps", { method: "PUT", json: { ...s, provider: s.tls === "dns01" ? "hetzner" : "" } }),
+  saveApps: (s: { appsDomain: string; tls: "http01" | "dns01"; manageRecords: boolean; token?: string }) =>
+    request<AppsSaved>("/settings/apps", { method: "PUT", json: { ...s, provider: s.tls === "dns01" || s.manageRecords ? "hetzner" : "" } }),
 };
 
 export const isTemporaryHost = (host: string) => host.endsWith(".sslip.io");

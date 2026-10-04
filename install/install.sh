@@ -75,6 +75,7 @@ DOMAIN_EXPLICIT=0       # 1: the console hostname came from --domain, KWERFT_DOM
 APPS_DOMAIN=""          # --config appsDomain
 DNS_SOLVER=""           # --config dns.solver (hetzner)
 DNS_TOKEN_FILE=""       # --config dns.tokenFile
+DNS_RECORDS="true"      # --config dns.records: Kwerft keeps the console's and *.<appsDomain>'s records
 MODE="install"
 DRY_RUN=0
 ASSUME_YES=0
@@ -205,6 +206,8 @@ parse_args() {
     APPS_DOMAIN=$(lower "$(config_get appsDomain)")
     DNS_SOLVER=$(config_get_in dns solver)
     DNS_TOKEN_FILE=$(config_get_in dns tokenFile)
+    DNS_RECORDS=$(lower "$(config_get_in dns records)")
+    DNS_RECORDS=${DNS_RECORDS:-true}
   fi
   # A hostname given now is explicit: it replaces what Settings chose. Without
   # one, resolve_domain keeps the cluster's setting.
@@ -224,6 +227,10 @@ parse_args() {
     [[ -n "$APPS_DOMAIN" ]] || die $EXIT_USAGE "dns in $CONFIG_FILE needs appsDomain: the DNS-01 certificate is the wildcard *.<appsDomain>"
     [[ -n "$DNS_TOKEN_FILE" && -r "$DNS_TOKEN_FILE" ]] || die $EXIT_USAGE "dns.tokenFile not readable: '$DNS_TOKEN_FILE'"
   fi
+  case "$DNS_RECORDS" in
+    true|false) ;;
+    *) die $EXIT_USAGE "dns.records in $CONFIG_FILE must be true or false, got '$DNS_RECORDS'" ;;
+  esac
   return 0
 }
 
@@ -839,14 +846,16 @@ apply_console_settings() {
   fi
   [[ -n "$APPS_DOMAIN" ]] || return 0
 
-  local spec="{\"appsDomain\":\"$APPS_DOMAIN\",\"tls\":\"http01\",\"dns01\":null}"
+  local spec="{\"appsDomain\":\"$APPS_DOMAIN\",\"tls\":\"http01\",\"dns\":null}"
   if [[ "$DNS_SOLVER" == "hetzner" ]]; then
     # The token file stays where it is; the cluster gets a copy in the Secret
     # only owners and admins may write (Settings) and nobody may read.
     kc -n kwerft-system create secret generic kwerft-dns-token --from-file=token="$DNS_TOKEN_FILE" \
       --dry-run=client -o yaml | kc apply -f - >>"$LOG_FILE" 2>&1 \
       || die $EXIT_KWERFT "Could not store the DNS API token from $DNS_TOKEN_FILE"
-    spec="{\"appsDomain\":\"$APPS_DOMAIN\",\"tls\":\"dns01\",\"dns01\":{\"provider\":\"hetzner\"}}"
+    # With dns.records (the default) Kwerft also keeps the A/AAAA records of
+    # the console hostname and *.<appsDomain> in the token's zones.
+    spec="{\"appsDomain\":\"$APPS_DOMAIN\",\"tls\":\"dns01\",\"dns\":{\"provider\":\"hetzner\",\"manageRecords\":$DNS_RECORDS}}"
     # A changed token makes the console retry a failed wildcard certificate.
     local sum
     sum=$(sha256sum "$DNS_TOKEN_FILE" | awk '{print $1}')
@@ -864,9 +873,13 @@ stage_handoff() {
   # DNS must point here before Let's Encrypt can issue the console certificate.
   # getent exits 2 when the name does not resolve yet; that is the warning
   # below, not a stage failure (errexit + pipefail would otherwise exit 2).
-  local resolved
+  local resolved managed
   resolved=$(getent ahostsv4 "$DOMAIN" 2>/dev/null | awk '{print $1; exit}' || true)
-  if [[ "$resolved" != "$PUBLIC_IP" ]]; then
+  managed=$(cluster_setting '{.spec.dns.manageRecords}')
+  if [[ "$resolved" != "$PUBLIC_IP" && "$managed" == "true" && -z "$resolved" ]]; then
+    printf '  DNS         Kwerft creates %s → %s in Hetzner DNS (Settings shows the record); the certificate follows.\n' "$DOMAIN" "$PUBLIC_IP"
+    printf '  Sign in with the owner account from %s\n' "$CONFIG_FILE"
+  elif [[ "$resolved" != "$PUBLIC_IP" ]]; then
     warn "$DOMAIN resolves to '${resolved:-nothing}', expected $PUBLIC_IP. The certificate is issued once DNS is fixed."
   fi
 
@@ -956,11 +969,13 @@ print_summary() {
   fi
   apps=$(cluster_setting '{.spec.appsDomain}')
   tls=$(cluster_setting '{.spec.tls}')
+  local apps_dns="DNS: *.$apps → $PUBLIC_IP"
+  [[ "$managed" == "true" ]] && apps_dns="DNS records kept by Kwerft"
   if [[ -n "$apps" ]]; then
     if [[ "$tls" == "dns01" ]]; then
-      printf '  Apps        *.%s (wildcard certificate via Hetzner DNS) · DNS: *.%s → %s\n' "$apps" "$apps" "$PUBLIC_IP"
+      printf '  Apps        *.%s (wildcard certificate via Hetzner DNS) · %s\n' "$apps" "$apps_dns"
     else
-      printf '  Apps        <app>.%s (a certificate per hostname) · DNS: *.%s → %s\n' "$apps" "$apps" "$PUBLIC_IP"
+      printf '  Apps        <app>.%s (a certificate per hostname) · %s\n' "$apps" "$apps_dns"
     fi
   fi
   printf '  Log         %s\n\n' "$LOG_FILE"

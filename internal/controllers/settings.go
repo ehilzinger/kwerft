@@ -289,7 +289,7 @@ func (r *DomainReconciler) reconcileWildcard(ctx context.Context, s *kwerftv1.Co
 			return w, err
 		}
 	}
-	if s == nil || s.Spec.AppsDomain == "" || s.Spec.TLS != kwerftv1.TLSDNS01 || s.Spec.DNS01 == nil {
+	if s == nil || s.Spec.AppsDomain == "" || s.Spec.TLS != kwerftv1.TLSDNS01 || s.Spec.DNS == nil {
 		return w, r.removeWildcard(ctx)
 	}
 	w.domain = s.Spec.AppsDomain

@@ -23,10 +23,11 @@ type ConsoleSettingsSpecApplyConfiguration struct {
 	AppsDomain *string `json:"appsDomain,omitempty"`
 	// TLS is how app certificates are issued.
 	TLS *apiv1alpha1.TLSMode `json:"tls,omitempty"`
-	// DNS01 configures the solver for tls dns01. Its API token lives in the
-	// Secret kwerft-dns-token (key "token") in kwerft-system, which owners and
-	// admins may write through the console but nobody reads back.
-	DNS01 *DNS01SettingsApplyConfiguration `json:"dns01,omitempty"`
+	// DNS is the provider for tls dns01 and for managed records. Its API
+	// token lives in the Secret kwerft-dns-token (key "token") in
+	// kwerft-system, which owners and admins may write through the console
+	// but nobody reads back.
+	DNS *DNSSettingsApplyConfiguration `json:"dns,omitempty"`
 }
 
 // ConsoleSettingsSpecApplyConfiguration constructs a declarative configuration of the ConsoleSettingsSpec type for use with
@@ -59,10 +60,10 @@ func (b *ConsoleSettingsSpecApplyConfiguration) WithTLS(value apiv1alpha1.TLSMod
 	return b
 }
 
-// WithDNS01 sets the DNS01 field in the declarative configuration to the given value
+// WithDNS sets the DNS field in the declarative configuration to the given value
 // and returns the receiver, so that objects can be built by chaining "With" function invocations.
-// If called multiple times, the DNS01 field is set to the value of the last call.
-func (b *ConsoleSettingsSpecApplyConfiguration) WithDNS01(value *DNS01SettingsApplyConfiguration) *ConsoleSettingsSpecApplyConfiguration {
-	b.DNS01 = value
+// If called multiple times, the DNS field is set to the value of the last call.
+func (b *ConsoleSettingsSpecApplyConfiguration) WithDNS(value *DNSSettingsApplyConfiguration) *ConsoleSettingsSpecApplyConfiguration {
+	b.DNS = value
 	return b
 }

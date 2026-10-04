@@ -22,12 +22,21 @@ const (
 	TLSDNS01 TLSMode = "dns01"
 )
 
-// DNS01Settings configures the DNS-01 solver.
-type DNS01Settings struct {
-	// Provider of the DNS zone that contains appsDomain. Only Hetzner (DNS in
-	// the Hetzner Console, Cloud API) for now.
+// DNSSettings is the DNS provider that hosts the zones of the console
+// hostname and the apps domain.
+type DNSSettings struct {
+	// Provider of the zones. Only Hetzner (DNS in the Hetzner Console, Cloud
+	// API) for now. It solves DNS-01 challenges for tls dns01.
 	// +kubebuilder:validation:Enum=hetzner
 	Provider string `json:"provider"`
+
+	// ManageRecords makes Kwerft keep A and AAAA records for the console
+	// hostname and *.<appsDomain> pointing at the nodes' public addresses
+	// (status.publicAddresses). It labels the records it creates and never
+	// changes records it did not create. Turning it off leaves the records
+	// in place.
+	// +optional
+	ManageRecords bool `json:"manageRecords,omitempty"`
 }
 
 // ConsoleSettingsSpec is what owners and admins choose on the Settings page
@@ -55,11 +64,12 @@ type ConsoleSettingsSpec struct {
 	// +optional
 	TLS TLSMode `json:"tls,omitempty"`
 
-	// DNS01 configures the solver for tls dns01. Its API token lives in the
-	// Secret kwerft-dns-token (key "token") in kwerft-system, which owners and
-	// admins may write through the console but nobody reads back.
+	// DNS is the provider for tls dns01 and for managed records. Its API
+	// token lives in the Secret kwerft-dns-token (key "token") in
+	// kwerft-system, which owners and admins may write through the console
+	// but nobody reads back.
 	// +optional
-	DNS01 *DNS01Settings `json:"dns01,omitempty"`
+	DNS *DNSSettings `json:"dns,omitempty"`
 }
 
 // CertificateState is one certificate the console itself depends on.
@@ -112,8 +122,73 @@ type ConsoleSettingsStatus struct {
 	// +optional
 	Certificates []CertificateState `json:"certificates,omitempty"`
 
+	// DNS is what the DNS reconciler did with spec.dns.manageRecords. It has
+	// a field of its own because another reconciler writes the rest of the
+	// status.
+	// +optional
+	DNS *DNSStatus `json:"dns,omitempty"`
+
 	// +optional
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
+}
+
+// DNSRecordState says where a managed hostname's records stand.
+// +kubebuilder:validation:Enum=Managed;External;Conflict;TakenOver;NoZone;Error
+type DNSRecordState string
+
+const (
+	// DNSManaged: Kwerft's records point at the nodes.
+	DNSManaged DNSRecordState = "Managed"
+	// DNSExternal: records Kwerft did not create already point at the nodes;
+	// Kwerft leaves them alone.
+	DNSExternal DNSRecordState = "External"
+	// DNSConflict: records Kwerft did not create point elsewhere (or a CNAME
+	// exists); Kwerft does not overwrite them.
+	DNSConflict DNSRecordState = "Conflict"
+	// DNSTakenOver: another Kwerft installation took over records this one
+	// created; this one stops updating them.
+	DNSTakenOver DNSRecordState = "TakenOver"
+	// DNSNoZone: no primary zone in the token's project contains the host.
+	DNSNoZone DNSRecordState = "NoZone"
+	// DNSError: the provider's API failed for this host.
+	DNSError DNSRecordState = "Error"
+)
+
+// DNSRecordStatus is one hostname Kwerft keeps records for.
+type DNSRecordStatus struct {
+	// Hostname, e.g. ops.example.com or *.apps.example.com.
+	Hostname string `json:"hostname"`
+	// Purpose: console, console-next, console-previous or apps.
+	Purpose string `json:"purpose"`
+	// Zone that contains the hostname; empty for NoZone.
+	// +optional
+	Zone string `json:"zone,omitempty"`
+	// State of the hostname's records.
+	State DNSRecordState `json:"state"`
+	// Values the hostname's A and AAAA records hold now.
+	// +optional
+	Values []string `json:"values,omitempty"`
+	// +optional
+	Message string `json:"message,omitempty"`
+}
+
+// DNSStatus is the outcome of the last sync with the DNS provider.
+type DNSStatus struct {
+	// Records Kwerft keeps, one entry per hostname.
+	// +optional
+	Records []DNSRecordStatus `json:"records,omitempty"`
+	// Zones are the primary zones in the token's project: hostnames in them
+	// get their records from Kwerft, so the console need not wait for DNS
+	// before using them.
+	// +optional
+	Zones []string `json:"zones,omitempty"`
+	// Message explains a problem that kept the whole sync from running (no
+	// token, token rejected, no public address); empty when it ran.
+	// +optional
+	Message string `json:"message,omitempty"`
+	// SyncedAt is when the provider was last read.
+	// +optional
+	SyncedAt *metav1.Time `json:"syncedAt,omitempty"`
 }
 
 // ConsoleSettings holds the console's own configuration that reconcilers
@@ -124,7 +199,7 @@ type ConsoleSettingsStatus struct {
 // +kubebuilder:subresource:status
 // +kubebuilder:resource:scope=Cluster,shortName=kwset
 // +kubebuilder:validation:XValidation:rule="self.metadata.name == 'kwerft'",message="the console settings object must be named kwerft"
-// +kubebuilder:validation:XValidation:rule="!has(self.spec) || !has(self.spec.tls) || self.spec.tls != 'dns01' || (has(self.spec.appsDomain) && size(self.spec.appsDomain) > 0 && has(self.spec.dns01))",message="tls dns01 needs appsDomain and dns01"
+// +kubebuilder:validation:XValidation:rule="!has(self.spec) || !has(self.spec.tls) || self.spec.tls != 'dns01' || (has(self.spec.appsDomain) && size(self.spec.appsDomain) > 0 && has(self.spec.dns))",message="tls dns01 needs appsDomain and dns"
 // +kubebuilder:printcolumn:name="Console",type=string,JSONPath=`.status.consoleDomain`
 // +kubebuilder:printcolumn:name="Apps",type=string,JSONPath=`.spec.appsDomain`
 // +kubebuilder:printcolumn:name="TLS",type=string,JSONPath=`.spec.tls`

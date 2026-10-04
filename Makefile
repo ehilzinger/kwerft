@@ -42,12 +42,14 @@ release-dry-run: web ## Build release artifacts into dist/release without publis
 .PHONY: generate
 generate: ## Regenerate deepcopy, apply configurations and CRDs from api/v1alpha1
 	$(CONTROLLER_GEN) object paths=./api/...
+	@# controller-gen leaves files of removed types behind; start from scratch.
+	rm -rf api/applyconfiguration
 	$(CONTROLLER_GEN) applyconfiguration paths=./api/...
 	$(CONTROLLER_GEN) crd paths=./api/... output:crd:dir=charts/kwerft/crds
 
 .PHONY: verify-generate
 verify-generate: generate ## Fail if generated files are out of date
-	@git diff --exit-code -- api charts/kwerft/crds || { echo "Run 'make generate' and commit the result."; exit 1; }
+	@git diff --exit-code -- api charts/kwerft/crds && test -z "$$(git status --porcelain -- api charts/kwerft/crds)" || { echo "Run 'make generate' and commit the result."; exit 1; }
 
 ## --- checks ------------------------------------------------------------
 

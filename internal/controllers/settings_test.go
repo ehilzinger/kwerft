@@ -215,7 +215,7 @@ func createClusterIssuer(t *testing.T) {
 }
 
 func dns01Settings(apps string) kwerftv1.ConsoleSettingsSpec {
-	return kwerftv1.ConsoleSettingsSpec{AppsDomain: apps, TLS: kwerftv1.TLSDNS01, DNS01: &kwerftv1.DNS01Settings{Provider: "hetzner"}}
+	return kwerftv1.ConsoleSettingsSpec{AppsDomain: apps, TLS: kwerftv1.TLSDNS01, DNS: &kwerftv1.DNSSettings{Provider: "hetzner"}}
 }
 
 func TestWildcardListenerServesAppsUnderTheAppsDomain(t *testing.T) {
@@ -458,5 +458,5 @@ func TestSettingsValidation(t *testing.T) {
 	expectInvalid(t, k8s.Create(ctx, other), "must be named kwerft")
 	bad := &kwerftv1.ConsoleSettings{ObjectMeta: metav1.ObjectMeta{Name: kwerftv1.ConsoleSettingsName},
 		Spec: kwerftv1.ConsoleSettingsSpec{TLS: kwerftv1.TLSDNS01}}
-	expectInvalid(t, k8s.Create(ctx, bad), "tls dns01 needs appsDomain and dns01")
+	expectInvalid(t, k8s.Create(ctx, bad), "tls dns01 needs appsDomain and dns")
 }

@@ -233,6 +233,10 @@ func newManager(log *slog.Logger, leaderElect bool, domains *controllers.DomainR
 	if err := domains.SetupWithManager(mgr); err != nil {
 		return nil, err
 	}
+	dns := &controllers.DNSReconciler{Client: mgr.GetClient(), APIReader: mgr.GetAPIReader(), ConsoleDomain: domains.ConsoleDomain}
+	if err := dns.SetupWithManager(mgr); err != nil {
+		return nil, err
+	}
 	if err := (&controllers.VolumeReconciler{Client: mgr.GetClient()}).SetupWithManager(mgr); err != nil {
 		return nil, err
 	}

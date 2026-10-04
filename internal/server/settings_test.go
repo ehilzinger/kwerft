@@ -241,7 +241,7 @@ func TestSettingsDNSTokenIsWriteOnly(t *testing.T) {
 		t.Errorf("saved = %+v", saved)
 	}
 	cs := settingsNow(t)
-	if cs.Spec.AppsDomain != "apps.example.com" || cs.Spec.TLS != kwerftv1.TLSDNS01 || cs.Spec.DNS01 == nil || cs.Spec.DNS01.Provider != "hetzner" ||
+	if cs.Spec.AppsDomain != "apps.example.com" || cs.Spec.TLS != kwerftv1.TLSDNS01 || cs.Spec.DNS == nil || cs.Spec.DNS.Provider != "hetzner" || cs.Spec.DNS.ManageRecords ||
 		cs.Annotations[controllers.AnnotationDNSTokenUpdated] == "" {
 		t.Errorf("settings = %+v %v", cs.Spec, cs.Annotations)
 	}
@@ -282,8 +282,80 @@ func TestSettingsDNSTokenIsWriteOnly(t *testing.T) {
 	if code := c.owner.do(t, "PUT", "/api/v1/settings/apps", map[string]string{"appsDomain": "apps.example.com", "tls": "http01"}, nil); code != http.StatusOK {
 		t.Errorf("http01: %d", code)
 	}
-	if cs := settingsNow(t); cs.Spec.TLS != kwerftv1.TLSHTTP01 || cs.Spec.DNS01 != nil {
+	if cs := settingsNow(t); cs.Spec.TLS != kwerftv1.TLSHTTP01 || cs.Spec.DNS != nil {
 		t.Errorf("after http01: %+v", cs.Spec)
+	}
+}
+
+func TestSettingsManagedRecords(t *testing.T) {
+	c := newConsole(t, withSettings(fakeDNS(nil), fakeHetzner(t, "example.org")))
+	settingsFixture(t)
+	ctx := context.Background()
+
+	// Managed records need a token, whatever the certificate method.
+	var bad apiError
+	if code := c.owner.do(t, "PUT", "/api/v1/settings/apps", map[string]any{"appsDomain": "apps.example.org", "tls": "http01", "manageRecords": true}, &bad); code != http.StatusBadRequest || bad.Field != "token" {
+		t.Errorf("records without a token: %d %+v", code, bad)
+	}
+
+	// The console's hostname (console.example.com) is not in the token's
+	// project: saved, with a warning that its record stays manual.
+	var saved struct {
+		Settings settingsJSON `json:"settings"`
+		Zone     string       `json:"zone"`
+		Warning  string       `json:"warning"`
+	}
+	if code := c.owner.do(t, "PUT", "/api/v1/settings/apps", map[string]any{"appsDomain": "apps.example.org", "tls": "http01", "manageRecords": true, "token": testHetznerToken}, &saved); code != http.StatusOK {
+		t.Fatalf("save: %d", code)
+	}
+	if saved.Zone != "example.org" || !strings.Contains(saved.Warning, "console.example.com") || !saved.Settings.ManageRecords || saved.Settings.TLS != "http01" {
+		t.Errorf("saved = %+v", saved)
+	}
+	cs := settingsNow(t)
+	if cs.Spec.DNS == nil || !cs.Spec.DNS.ManageRecords || cs.Spec.DNS.Provider != "hetzner" || cs.Spec.TLS != kwerftv1.TLSHTTP01 {
+		t.Errorf("spec = %+v", cs.Spec)
+	}
+
+	// What the DNS reconciler reports shows up on the Settings page.
+	cs.Status.DNS = &kwerftv1.DNSStatus{Zones: []string{"example.org"}, Records: []kwerftv1.DNSRecordStatus{
+		{Hostname: "*.apps.example.org", Purpose: "apps", Zone: "example.org", State: kwerftv1.DNSManaged, Values: []string{"203.0.113.24"}},
+		{Hostname: "console.example.com", Purpose: "console", State: kwerftv1.DNSNoZone, Message: "create its records by hand"},
+	}}
+	if err := cluster.admin.Status().Update(ctx, cs); err != nil {
+		t.Fatal(err)
+	}
+	var view settingsJSON
+	if code := c.viewer.do(t, "GET", "/api/v1/settings", nil, &view); code != http.StatusOK {
+		t.Fatalf("get: %d", code)
+	}
+	if len(view.DNSRecords) != 2 || view.DNSRecords[0].State != "Managed" || view.DNSRecords[1].Values == nil {
+		t.Errorf("dnsRecords = %+v", view.DNSRecords)
+	}
+
+	// A name without records in a managed zone is fine: Kwerft creates it,
+	// so the console can move there. Elsewhere it is still missing.
+	var dns dnsResult
+	if code := c.owner.do(t, "POST", "/api/v1/settings/dns-check", map[string]string{"hostname": "ops.example.org"}, &dns); code != http.StatusOK || !dns.OK || !dns.Managed {
+		t.Errorf("managed zone: %d %+v", code, dns)
+	}
+	dns = dnsResult{}
+	if code := c.owner.do(t, "POST", "/api/v1/settings/dns-check", map[string]string{"hostname": "ops.example.net"}, &dns); code != http.StatusOK || dns.OK || dns.Managed {
+		t.Errorf("other zone: %d %+v", code, dns)
+	}
+	var moved settingsJSON
+	if code := c.owner.do(t, "PUT", "/api/v1/settings/console-domain", map[string]string{"hostname": "ops.example.org", "confirm": "ops.example.org"}, &moved); code != http.StatusOK || moved.PendingConsoleDomain != "ops.example.org" {
+		t.Errorf("move into a managed zone: %d %+v", code, moved)
+	}
+
+	// Off again, with HTTP-01: no provider left, and no stale report.
+	if code := c.owner.do(t, "PUT", "/api/v1/settings/apps", map[string]any{"appsDomain": "apps.example.org", "tls": "http01", "manageRecords": false}, &saved); code != http.StatusOK {
+		t.Fatalf("off: %d", code)
+	}
+	if saved.Settings.ManageRecords || len(saved.Settings.DNSRecords) != 0 {
+		t.Errorf("after off: %+v", saved.Settings)
+	}
+	if cs := settingsNow(t); cs.Spec.DNS != nil {
+		t.Errorf("spec.dns kept: %+v", cs.Spec.DNS)
 	}
 }
 

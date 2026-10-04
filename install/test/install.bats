@@ -301,6 +301,16 @@ write_config() {
   [[ "$output" == *"dns.solver"*"must be hetzner"* ]]
 }
 
+@test "--config dns.records must be true or false" {
+  write_config 'appsDomain: apps.example.com\ndns: { solver: hetzner, tokenFile: TOKEN, records: maybe }\n'
+  run "$SCRIPT" --dry-run --platform cloud --config "$cfg"
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"dns.records"*"true or false"* ]]
+  write_config 'appsDomain: apps.example.com\ndns: { solver: hetzner, tokenFile: TOKEN, records: False }\n'
+  run "$SCRIPT" --dry-run --platform cloud --config "$cfg"
+  [ "$status" -eq 0 ]
+}
+
 @test "--config dns needs appsDomain" {
   write_config 'dns: { solver: hetzner, tokenFile: TOKEN }\n'
   run "$SCRIPT" --dry-run --platform cloud --config "$cfg"
@@ -393,7 +403,7 @@ settings_env() {
   settings_env
   EXISTING="kwerft"; DOMAIN="ops.example.com"; APPS_DOMAIN="apps.example.com"
   apply_console_settings
-  grep -q '"appsDomain":"apps.example.com","tls":"http01","dns01":null' "$KC_LOG"
+  grep -q '"appsDomain":"apps.example.com","tls":"http01","dns":null' "$KC_LOG"
   absent "kwerft-dns-token" "$KC_LOG"
 }
 
@@ -403,7 +413,7 @@ settings_env() {
   EXISTING="kwerft"; DOMAIN="ops.example.com"; APPS_DOMAIN="apps.example.com"; DNS_SOLVER="hetzner"; DNS_TOKEN_FILE=$token
   apply_console_settings
   grep -q "create secret generic kwerft-dns-token --from-file=token=$token" "$KC_LOG"
-  grep -q '"appsDomain":"apps.example.com","tls":"dns01","dns01":{"provider":"hetzner"}' "$KC_LOG"
+  grep -q '"appsDomain":"apps.example.com","tls":"dns01","dns":{"provider":"hetzner","manageRecords":true}' "$KC_LOG"
   [ "$(grep -c 'kwerft.dev/dns-token-updated-at' "$KC_LOG")" -eq 1 ]
   # The token itself never lands in the install log.
   absent "hz-token" "$LOG_FILE"
@@ -418,4 +428,12 @@ settings_env() {
   printf 'hz-token-2\n' >"$token"
   apply_console_settings
   grep -q 'kwerft.dev/dns-token-updated-at' "$KC_LOG"
+}
+
+@test "apply_console_settings: dns.records false keeps DNS records manual" {
+  settings_env
+  token="$BATS_TEST_TMPDIR/dns.token"; printf 'hz-token\n' >"$token"
+  EXISTING="kwerft"; DOMAIN="ops.example.com"; APPS_DOMAIN="apps.example.com"; DNS_SOLVER="hetzner"; DNS_TOKEN_FILE=$token; DNS_RECORDS=false
+  apply_console_settings
+  grep -q '"dns":{"provider":"hetzner","manageRecords":false}' "$KC_LOG"
 }

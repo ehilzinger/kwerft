@@ -12,6 +12,11 @@
 .settings .inline-check { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .settings .inline-check span { font-size: 12.5px; }
 .settings .warn-text { color: var(--warn); }
+.settings .check { display: flex; align-items: flex-start; gap: 9px; font-size: 13px; cursor: pointer; }
+.settings .check input { margin: 3px 0 0; accent-color: var(--accent); flex: none; }
+.settings .check span { display: grid; gap: 3px; }
+.settings .check small { color: var(--muted); font-size: 12.5px; line-height: 1.45; }
+.settings .sub.wrap { white-space: normal; max-width: 42ch; }
 
 .radio { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
 .radio .opt { grid-template-columns: auto 1fr; column-gap: 10px; }

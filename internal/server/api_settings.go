@@ -21,6 +21,7 @@ import (
 	kwerftv1 "github.com/ehilzinger/kwerft/api/v1alpha1"
 	"github.com/ehilzinger/kwerft/internal/auth"
 	"github.com/ehilzinger/kwerft/internal/controllers"
+	"github.com/ehilzinger/kwerft/internal/hetzner"
 	"github.com/ehilzinger/kwerft/internal/store"
 )
 
@@ -44,7 +45,7 @@ type settingsAPI struct {
 }
 
 func (a *api) registerSettings(mux *http.ServeMux) {
-	s := &settingsAPI{api: a, lookupHost: net.DefaultResolver.LookupHost, hetznerAPI: hetznerCloudAPI,
+	s := &settingsAPI{api: a, lookupHost: net.DefaultResolver.LookupHost, hetznerAPI: hetzner.CloudAPI,
 		http: &http.Client{Timeout: 15 * time.Second}}
 	if a.cfg.settingsHook != nil {
 		a.cfg.settingsHook(s)
@@ -79,10 +80,24 @@ type settingsJSON struct {
 	TLS                   string            `json:"tls"`
 	DNSProvider           string            `json:"dnsProvider,omitempty"`
 	TokenSet              bool              `json:"tokenSet"`
+	ManageRecords         bool              `json:"manageRecords"`
+	DNSRecords            []dnsRecordJSON   `json:"dnsRecords"`
+	DNSMessage            string            `json:"dnsMessage,omitempty"`
+	DNSSyncedAt           *time.Time        `json:"dnsSyncedAt,omitempty"`
 	WildcardDomain        string            `json:"wildcardDomain,omitempty"`
 	PublicAddresses       []string          `json:"publicAddresses"`
 	Certificates          []certificateJSON `json:"certificates"`
 	Ready                 *conditionJSON    `json:"ready,omitempty"`
+}
+
+// dnsRecordJSON is one hostname whose records Kwerft keeps (status.dns).
+type dnsRecordJSON struct {
+	Hostname string   `json:"hostname"`
+	Purpose  string   `json:"purpose"`
+	Zone     string   `json:"zone,omitempty"`
+	State    string   `json:"state"` // Managed | External | Conflict | TakenOver | NoZone | Error
+	Values   []string `json:"values"`
+	Message  string   `json:"message,omitempty"`
 }
 
 type conditionJSON struct {
@@ -106,7 +121,7 @@ func (s *settingsAPI) load(ctx context.Context, c client.Client) (*kwerftv1.Cons
 
 func (s *settingsAPI) view(cs *kwerftv1.ConsoleSettings) settingsJSON {
 	out := settingsJSON{ConsoleDomain: s.consoleDomain(), TLS: string(kwerftv1.TLSHTTP01),
-		PublicAddresses: []string{}, Certificates: []certificateJSON{}}
+		PublicAddresses: []string{}, Certificates: []certificateJSON{}, DNSRecords: []dnsRecordJSON{}}
 	if cs == nil {
 		return out
 	}
@@ -122,8 +137,21 @@ func (s *settingsAPI) view(cs *kwerftv1.ConsoleSettings) settingsJSON {
 	if cs.Spec.TLS != "" {
 		out.TLS = string(cs.Spec.TLS)
 	}
-	if cs.Spec.DNS01 != nil {
-		out.DNSProvider = cs.Spec.DNS01.Provider
+	if cs.Spec.DNS != nil {
+		out.DNSProvider = cs.Spec.DNS.Provider
+		out.ManageRecords = cs.Spec.DNS.ManageRecords
+	}
+	if d := st.DNS; d != nil && out.ManageRecords {
+		for _, rec := range d.Records {
+			values := rec.Values
+			if values == nil {
+				values = []string{}
+			}
+			out.DNSRecords = append(out.DNSRecords, dnsRecordJSON{Hostname: rec.Hostname, Purpose: rec.Purpose, Zone: rec.Zone,
+				State: string(rec.State), Values: values, Message: rec.Message})
+		}
+		out.DNSMessage = d.Message
+		out.DNSSyncedAt = timePtr(d.SyncedAt)
 	}
 	out.TokenSet = cs.Annotations[controllers.AnnotationDNSTokenUpdated] != ""
 	out.WildcardDomain = st.WildcardDomain
@@ -177,6 +205,37 @@ type dnsResult struct {
 	Expected  []string `json:"expected"`
 	OK        bool     `json:"ok"`
 	Message   string   `json:"message"`
+	// Managed: the name has no record yet, but Kwerft creates it (the zone
+	// is one whose records it manages).
+	Managed bool `json:"managed,omitempty"`
+
+	notFound bool
+}
+
+// managedZone is the zone Kwerft keeps records in that contains host, or "".
+func managedZone(cs *kwerftv1.ConsoleSettings, host string) string {
+	if cs == nil || cs.Spec.DNS == nil || !cs.Spec.DNS.ManageRecords || cs.Status.DNS == nil {
+		return ""
+	}
+	best := ""
+	for _, z := range cs.Status.DNS.Zones {
+		if (host == z || strings.HasSuffix(host, "."+z)) && len(z) > len(best) {
+			best = z
+		}
+	}
+	return best
+}
+
+// checkManaged is checkDNS, except that a name without records counts as
+// fine when Kwerft is about to create them.
+func (s *settingsAPI) checkManaged(ctx context.Context, cs *kwerftv1.ConsoleSettings, host string) dnsResult {
+	view := s.view(cs)
+	res := s.checkDNS(ctx, host, view.PublicAddresses)
+	if zone := managedZone(cs, host); !res.OK && len(res.Addresses) == 0 && res.notFound && zone != "" {
+		res.OK, res.Managed = true, true
+		res.Message = "Kwerft creates the record in the Hetzner zone " + zone + "."
+	}
+	return res
 }
 
 // checkDNS resolves host and compares the answer with the server's public
@@ -193,6 +252,7 @@ func (s *settingsAPI) checkDNS(ctx context.Context, host string, expected []stri
 	switch {
 	case errors.As(err, &dnsErr) && dnsErr.IsNotFound:
 		res.Message = host + " has no DNS record yet."
+		res.notFound = true
 		return res
 	case err != nil:
 		res.Message = "Could not look up " + host + ": " + err.Error()
@@ -242,7 +302,7 @@ func (s *settingsAPI) dnsCheck(w http.ResponseWriter, r *http.Request) {
 	if req.Wildcard {
 		host = "kwerft-check-" + strings.ToLower(auth.NewToken()[:8]) + "." + host
 	}
-	writeJSON(w, http.StatusOK, s.checkDNS(ctx, host, s.view(cs).PublicAddresses))
+	writeJSON(w, http.StatusOK, s.checkManaged(ctx, cs, host))
 }
 
 // ---- console hostname ----------------------------------------------------------
@@ -330,7 +390,7 @@ func (s *settingsAPI) setConsoleDomain(w http.ResponseWriter, r *http.Request) {
 	// Back to the current name undoes a pending move: nothing to check.
 	undo := host == view.ConsoleDomain
 	if !undo {
-		if dns := s.checkDNS(ctx, host, view.PublicAddresses); !dns.OK {
+		if dns := s.checkManaged(ctx, cs, host); !dns.OK {
 			writeJSON(w, http.StatusUnprocessableEntity, map[string]any{"error": dns.Message, "field": "hostname", "dns": dns})
 			return
 		}
@@ -409,10 +469,11 @@ func (s *settingsAPI) patchSettings(ctx context.Context, c client.Client, cs *kw
 
 func (s *settingsAPI) setApps(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		AppsDomain string `json:"appsDomain"`
-		TLS        string `json:"tls"`      // http01 | dns01
-		Provider   string `json:"provider"` // dns01: hetzner
-		Token      string `json:"token"`    // optional; write-only
+		AppsDomain    string `json:"appsDomain"`
+		TLS           string `json:"tls"`           // http01 | dns01
+		Provider      string `json:"provider"`      // dns01 or manageRecords: hetzner
+		ManageRecords bool   `json:"manageRecords"` // keep records for the console and *.<appsDomain>
+		Token         string `json:"token"`         // optional; write-only
 	}
 	if !decode(w, r, &req) {
 		return
@@ -432,11 +493,12 @@ func (s *settingsAPI) setApps(w http.ResponseWriter, r *http.Request) {
 		writeFieldError(w, "tls", "Choose HTTP-01 or DNS-01.")
 		return
 	}
-	if tls == kwerftv1.TLSDNS01 {
-		if apps == "" {
-			writeFieldError(w, "appsDomain", "A wildcard certificate needs an apps domain.")
-			return
-		}
+	useDNS := tls == kwerftv1.TLSDNS01 || req.ManageRecords
+	if tls == kwerftv1.TLSDNS01 && apps == "" {
+		writeFieldError(w, "appsDomain", "A wildcard certificate needs an apps domain.")
+		return
+	}
+	if useDNS {
 		if req.Provider == "" {
 			req.Provider = "hetzner"
 		}
@@ -466,26 +528,47 @@ func (s *settingsAPI) setApps(w http.ResponseWriter, r *http.Request) {
 		writeFieldError(w, "appsDomain", apps+" is the console's hostname. Apps need a domain of their own, like apps.example.com.")
 		return
 	}
-	if tls == kwerftv1.TLSDNS01 && token == "" && !view.TokenSet {
+	if useDNS && token == "" && !view.TokenSet {
 		writeFieldError(w, "token", "Enter a Hetzner API token with read and write access to the DNS zone.")
 		return
 	}
 
-	// Check the token can see the zone before storing anything.
-	warning, zoneFound := "", ""
+	// Check the token can see the zones before storing anything: the apps
+	// domain's for a wildcard certificate (required), and for managed
+	// records also the console's (a warning: its record stays manual).
+	var warnings []string
+	zoneFound := ""
 	if token != "" {
-		zone, err := hetznerZoneFor(ctx, s.http, s.hetznerAPI, token, apps)
-		switch {
-		case errors.Is(err, errTokenRejected):
-			writeFieldError(w, "token", "Hetzner rejected this token. Create one in the Hetzner Console under Security → API tokens, with read and write access.")
-			return
-		case errors.Is(err, errNoZone):
-			writeFieldError(w, "appsDomain", "The Hetzner project of this token has no DNS zone for "+apps+". Add the zone in the Hetzner Console (DNS), or use the token of the project that has it.")
-			return
-		case err != nil:
-			warning = "Could not reach the Hetzner API to check the token (" + err.Error() + "). It is saved anyway."
-		default:
-			zoneFound = zone
+		hz := &hetzner.Client{Token: token, Base: s.hetznerAPI, HTTP: s.http}
+		hosts := []string{}
+		if apps != "" {
+			hosts = append(hosts, apps)
+		}
+		if req.ManageRecords {
+			hosts = append(hosts, view.ConsoleDomain)
+			if view.PendingConsoleDomain != "" {
+				hosts = append(hosts, view.PendingConsoleDomain)
+			}
+		}
+		for i, host := range hosts {
+			zone, err := hz.ZoneFor(ctx, host)
+			switch {
+			case errors.Is(err, hetzner.ErrTokenRejected):
+				writeFieldError(w, "token", "Hetzner rejected this token. Create one in the Hetzner Console under Security → API tokens, with read and write access.")
+				return
+			case errors.Is(err, hetzner.ErrNoZone) && i == 0 && host == apps:
+				writeFieldError(w, "appsDomain", "The Hetzner project of this token has no DNS zone for "+apps+". Add the zone in the Hetzner Console (DNS), or use the token of the project that has it.")
+				return
+			case errors.Is(err, hetzner.ErrNoZone):
+				warnings = append(warnings, "The token's project has no zone for "+host+"; create its record by hand.")
+			case err != nil:
+				warnings = append(warnings, "Could not reach the Hetzner API to check the token ("+err.Error()+"). It is saved anyway.")
+			case zoneFound == "":
+				zoneFound = zone
+			}
+			if err != nil && !errors.Is(err, hetzner.ErrNoZone) {
+				break
+			}
 		}
 		if cs == nil {
 			// The reconciler creates the token's Secret once settings exist.
@@ -509,9 +592,9 @@ func (s *settingsAPI) setApps(w http.ResponseWriter, r *http.Request) {
 		s.audit(r, p.user.Email, "settings.dns_token", "hetzner", "token replaced")
 	}
 
-	spec := map[string]any{"appsDomain": nilIfEmpty(apps), "tls": string(tls), "dns01": nil}
-	if tls == kwerftv1.TLSDNS01 {
-		spec["dns01"] = map[string]any{"provider": req.Provider}
+	spec := map[string]any{"appsDomain": nilIfEmpty(apps), "tls": string(tls), "dns": nil}
+	if useDNS {
+		spec["dns"] = map[string]any{"provider": req.Provider, "manageRecords": req.ManageRecords}
 	}
 	patch := map[string]any{"spec": spec}
 	if token != "" {
@@ -522,15 +605,19 @@ func (s *settingsAPI) setApps(w http.ResponseWriter, r *http.Request) {
 		s.kubeError(w, r, p, "settings.apps", apps, "Settings not found.", err)
 		return
 	}
-	s.audit(r, p.user.Email, "settings.apps", orNone(apps), string(tls))
+	detail := string(tls)
+	if req.ManageRecords {
+		detail += ", managed DNS records"
+	}
+	s.audit(r, p.user.Email, "settings.apps", orNone(apps), detail)
 	cs, err = s.load(ctx, c)
 	if err != nil {
 		s.internalError(w, r, err)
 		return
 	}
 	out := map[string]any{"settings": s.view(cs)}
-	if warning != "" {
-		out["warning"] = warning
+	if len(warnings) > 0 {
+		out["warning"] = strings.Join(warnings, " ")
 	}
 	if zoneFound != "" {
 		out["zone"] = zoneFound
