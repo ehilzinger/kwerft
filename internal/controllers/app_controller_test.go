@@ -136,26 +136,12 @@ func TestAppRendersDeploymentServiceRouteAndPolicy(t *testing.T) {
 		t.Errorf("parentRef = %+v, want the hostname's HTTPS listener", pr)
 	}
 
-	// NetworkPolicy: platform namespaces + same-project app + cross-project app
-	var np networkingv1.NetworkPolicy
-	if err := k8s.Get(ctx, client.ObjectKey{Namespace: "shop", Name: "api"}, &np); err != nil {
-		t.Fatal(err)
-	}
-	from := np.Spec.Ingress[0].From
-	if len(from) != 5 {
-		t.Fatalf("ingress peers = %d, want 5 (platform, 2 apps, 2 tasks running as those apps): %+v", len(from), from)
-	}
-	if from[1].NamespaceSelector.MatchLabels[LabelProject] != "shop" || from[1].PodSelector.MatchLabels[LabelApp] != "web-frontend" {
-		t.Errorf("same-project peer = %+v", from[1])
-	}
-	if from[2].NamespaceSelector.MatchLabels[LabelProject] != "internal" || from[2].PodSelector.MatchLabels[LabelApp] != "cron" {
-		t.Errorf("cross-project peer = %+v", from[2])
-	}
-	if from[4].NamespaceSelector.MatchLabels[LabelProject] != "internal" || from[4].PodSelector.MatchLabels[LabelAsApp] != "cron" {
-		t.Errorf("cross-project task peer = %+v", from[4])
-	}
-	if len(np.Spec.Egress) != 3 {
-		t.Errorf("egress rules = %d, want 3 (dns, cluster, https)", len(np.Spec.Egress))
+	// CiliumNetworkPolicy: the ingress (nodes), platform namespaces, a
+	// same-project app and a cross-project app with their Tasks; egress
+	// https (DNS, the cluster, port 443 outside).
+	assertSpec(t, ciliumSpec(t, "shop", "api"), apiPolicy)
+	if err := k8s.Get(ctx, client.ObjectKey{Namespace: "shop", Name: "api"}, &networkingv1.NetworkPolicy{}); !apierrors.IsNotFound(err) {
+		t.Errorf("Kubernetes NetworkPolicy: err = %v, want none", err)
 	}
 
 	// Status

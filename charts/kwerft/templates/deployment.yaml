@@ -30,6 +30,7 @@ spec:
             - --gateway-class={{ .Values.gateway.className }}
             - --cluster-issuer={{ if .Values.acme.enabled }}letsencrypt{{ end }}
             - --metrics-listen={{ if .Values.metrics.enabled }}:{{ .Values.metrics.port }}{{ else }}0{{ end }}
+            - --hubble-relay={{ if .Values.hubble.enabled }}{{ .Values.hubble.relayAddress }}{{ end }}
             {{- with .Values.builds }}
             {{- if .enabled }}
             - --buildkit-image={{ required "builds.buildkitImage is required" .buildkitImage }}

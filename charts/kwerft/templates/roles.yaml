@@ -34,9 +34,10 @@ metadata:
   name: kwerft:developer
   labels: {{- include "kwerft.labels" . | nindent 4 }}
 rules:
-  # Workloads: deploy, change, roll back, restart, scale, delete.
+  # Workloads: deploy, change, roll back, restart, scale, delete; and the
+  # traffic rules between them.
   - apiGroups: [kwerft.dev]
-    resources: [apps, domains, tasks, schedules, volumes]
+    resources: [apps, domains, tasks, schedules, volumes, trafficrules]
     verbs: [get, list, watch, create, update, patch, delete]
   # Builds: start one ("Build now") and cancel it (the cancel annotation is a
   # patch; the spec is immutable). No update, no delete: Kwerft prunes them.

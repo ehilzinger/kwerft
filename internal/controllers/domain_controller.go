@@ -108,8 +108,13 @@ func (r *DomainReconciler) Reconcile(ctx context.Context, _ ctrl.Request) (ctrl.
 			WithName(httpListener).
 			WithProtocol(gwv1.HTTPProtocolType).
 			WithPort(80).
-			// TODO(phase-4): restrict which projects may attach plain-HTTP routes.
-			WithAllowedRoutes(gwv1ac.AllowedRoutes().WithNamespaces(gwv1ac.RouteNamespaces().WithFrom(gwv1.NamespacesFromAll))),
+			// Plain HTTP is the platform's: Kwerft's own redirect to HTTPS
+			// (httpRedirectRoute), the console's, and cert-manager's HTTP-01
+			// challenge routes, which gateway-shim creates next to the
+			// Gateway (its Certificates live in this namespace). No project
+			// may attach a route here, so none can answer a challenge or
+			// serve plain HTTP for a hostname.
+			WithAllowedRoutes(gwv1ac.AllowedRoutes().WithNamespaces(gwv1ac.RouteNamespaces().WithFrom(gwv1.NamespacesFromSame))),
 	}
 	listeners = append(listeners, consoleListeners(console)...)
 	if wildcard.serving {
@@ -169,6 +174,9 @@ func (r *DomainReconciler) Reconcile(ctx context.Context, _ ctrl.Request) (ctrl.
 	}
 	if err := r.reconcileConsoleRoutes(ctx, console); err != nil {
 		return ctrl.Result{}, err
+	}
+	if err := apply(ctx, r.Client, httpRedirectRoute()); err != nil {
+		return ctrl.Result{}, fmt.Errorf("apply HTTP redirect route: %w", err)
 	}
 	cleanup, err := r.cleanupListenerSecrets(ctx, referencedSecrets(listeners))
 	if err != nil {
@@ -321,6 +329,21 @@ func (r *DomainReconciler) certState(ctx context.Context, name string) (*readine
 		return &readiness{metav1.ConditionFalse, "CertificateIssuing", msg}, notAfter
 	}
 	return &readiness{metav1.ConditionFalse, "CertificateIssuing", "Certificate requested"}, notAfter
+}
+
+// HTTPRedirectRoute redirects plain HTTP for every hostname to HTTPS. ACME
+// HTTP-01 challenges still get through: cert-manager's routes match their
+// exact path, which takes precedence over this route's prefix "/".
+const HTTPRedirectRoute = "kwerft-http-redirect"
+
+func httpRedirectRoute() *gwv1ac.HTTPRouteApplyConfiguration {
+	return gwv1ac.HTTPRoute(HTTPRedirectRoute, GatewayNamespace).
+		WithLabels(map[string]string{LabelManagedBy: ManagedByKwerft}).
+		WithSpec(gwv1ac.HTTPRouteSpec().
+			WithParentRefs(gwv1ac.ParentReference().WithName(GatewayName).WithSectionName(httpListener)).
+			WithRules(gwv1ac.HTTPRouteRule().WithFilters(gwv1ac.HTTPRouteFilter().
+				WithType(gwv1.HTTPRouteFilterRequestRedirect).
+				WithRequestRedirect(gwv1ac.HTTPRequestRedirectFilter().WithScheme("https").WithStatusCode(301)))))
 }
 
 func httpsListener(name, host, secret string, ns *gwv1ac.RouteNamespacesApplyConfiguration) *gwv1ac.ListenerApplyConfiguration {

@@ -9,12 +9,13 @@ import (
 	rbacv1 "k8s.io/api/rbac/v1"
 	"k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	corev1ac "k8s.io/client-go/applyconfigurations/core/v1"
-	metav1ac "k8s.io/client-go/applyconfigurations/meta/v1"
-	networkingv1ac "k8s.io/client-go/applyconfigurations/networking/v1"
 	rbacv1ac "k8s.io/client-go/applyconfigurations/rbac/v1"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	kwerftv1 "github.com/ehilzinger/kwerft/api/v1alpha1"
@@ -136,28 +137,39 @@ func (r *ProjectReconciler) reconcile(ctx context.Context, p *kwerftv1.Project) 
 		}
 	}
 
-	if p.Spec.Isolated == nil || *p.Spec.Isolated {
-		deny := networkingv1ac.NetworkPolicy(defaultDenyName, p.Name).
-			WithLabels(map[string]string{LabelManagedBy: ManagedByKwerft}).
-			WithOwnerReferences(owner).
-			WithSpec(networkingv1ac.NetworkPolicySpec().
-				WithPodSelector(metav1ac.LabelSelector()).
-				WithPolicyTypes(networkingv1.PolicyTypeIngress))
-		if err := apply(ctx, r.Client, deny); err != nil {
+	return r.reconcilePolicy(ctx, p)
+}
+
+// reconcilePolicy keeps an isolated project's default-deny
+// CiliumNetworkPolicy (traffic_render.go) and removes the Kubernetes
+// NetworkPolicy Kwerft wrote before Phase 4, after the new one is in place.
+func (r *ProjectReconciler) reconcilePolicy(ctx context.Context, p *kwerftv1.Project) error {
+	deny := &unstructured.Unstructured{}
+	deny.SetGroupVersionKind(CiliumNetworkPolicyGVK)
+	deny.SetName(ProjectPolicyName)
+	deny.SetNamespace(p.Name)
+	if projectIsolated(p) {
+		err := apply(ctx, r.Client, client.ApplyConfigurationFromUnstructured(projectPolicy(p)))
+		if meta.IsNoMatchError(err) {
+			return terminalf("CiliumMissing", "Cilium's CiliumNetworkPolicy is not installed in this cluster; re-run the installer")
+		}
+		if err != nil {
 			return fmt.Errorf("apply default-deny policy: %w", err)
 		}
-	} else if err := deleteIfControlledBy(ctx, r.Client, &networkingv1.NetworkPolicy{ObjectMeta: metav1.ObjectMeta{Name: defaultDenyName, Namespace: p.Name}}, p); err != nil {
+	} else if err := deleteIfControlledBy(ctx, r.Client, deny, p); err != nil {
 		return err
 	}
-	return nil
+	return deleteIfControlledBy(ctx, r.Client, &networkingv1.NetworkPolicy{ObjectMeta: metav1.ObjectMeta{Name: defaultDenyName, Namespace: p.Name}}, p)
 }
 
 func (r *ProjectReconciler) SetupWithManager(mgr ctrl.Manager) error {
+	policy := &metav1.PartialObjectMetadata{}
+	policy.SetGroupVersionKind(CiliumNetworkPolicyGVK)
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&kwerftv1.Project{}).
 		Owns(&corev1.Namespace{}).
 		Owns(&corev1.ResourceQuota{}).
-		Owns(&networkingv1.NetworkPolicy{}).
+		Owns(policy, builder.OnlyMetadata).
 		Owns(&rbacv1.RoleBinding{}).
 		Named("project").
 		Complete(r)

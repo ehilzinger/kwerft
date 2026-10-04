@@ -1,0 +1,24 @@
+{{- if and .Values.hubble.enabled .Values.hubble.relayPolicy }}
+# Hubble's relay has no authentication of its own (its server is plain gRPC)
+# and serves every flow in the cluster. The console confines what users see
+# (internal/server/api_traffic.go), so only the console and the nodes —
+# kubelet probes, `kubectl port-forward` for an operator's `hubble observe` —
+# may reach it; app pods may not. The relay's own connections to the agents
+# are egress and not affected.
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: kwerft-hubble-relay
+  namespace: {{ .Values.hubble.relayNamespace }}
+  labels: {{- include "kwerft.labels" . | nindent 4 }}
+spec:
+  endpointSelector:
+    matchLabels:
+      k8s-app: hubble-relay
+  ingress:
+    - fromEndpoints:
+        - matchLabels:
+            k8s:io.kubernetes.pod.namespace: {{ .Release.Namespace }}
+            {{- include "kwerft.selectorLabels" . | nindent 12 }}
+    - fromEntities: [host, remote-node]
+{{- end }}

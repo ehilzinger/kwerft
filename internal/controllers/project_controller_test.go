@@ -48,13 +48,11 @@ func TestProjectCreatesManagedNamespace(t *testing.T) {
 		t.Error("namespace is not controlled by the Project")
 	}
 
-	var deny networkingv1.NetworkPolicy
-	eventually(t, func() error {
-		return k8s.Get(ctx, client.ObjectKey{Namespace: "storefront", Name: defaultDenyName}, &deny)
-	})
-	if len(deny.Spec.Ingress) != 0 || len(deny.Spec.PodSelector.MatchLabels) != 0 {
-		t.Errorf("default-deny should select all pods with no ingress rules, got %+v", deny.Spec)
-	}
+	// Default deny: every pod, one empty ingress rule (allows nothing).
+	assertSpec(t, ciliumSpec(t, "storefront", ProjectPolicyName), `
+endpointSelector: {}
+ingress: [{}]
+`)
 
 	eventually(t, func() error {
 		if err := k8s.Get(ctx, client.ObjectKeyFromObject(p), p); err != nil {
@@ -113,9 +111,97 @@ func TestProjectWithoutIsolationHasNoDefaultDeny(t *testing.T) {
 		_, err := readyReason(p.Status.Conditions, p.Generation)
 		return err
 	})
-	err := k8s.Get(ctx, client.ObjectKey{Namespace: "open", Name: defaultDenyName}, &networkingv1.NetworkPolicy{})
-	if !apierrors.IsNotFound(err) {
+	if err := k8s.Get(ctx, client.ObjectKey{Namespace: "open", Name: ProjectPolicyName}, newCilium()); !apierrors.IsNotFound(err) {
 		t.Errorf("expected no default-deny policy, got err=%v", err)
+	}
+
+	// Turning isolation on adds it; off again removes it.
+	setIsolated(t, "open", true)
+	ciliumSpec(t, "open", ProjectPolicyName)
+	setIsolated(t, "open", false)
+	eventually(t, func() error {
+		if err := k8s.Get(ctx, client.ObjectKey{Namespace: "open", Name: ProjectPolicyName}, newCilium()); !apierrors.IsNotFound(err) {
+			return fmt.Errorf("default-deny still there (err=%v)", err)
+		}
+		return nil
+	})
+}
+
+// An upgrade from before Phase 4: the Kubernetes NetworkPolicies Kwerft
+// wrote give way to CiliumNetworkPolicies; anyone else's stay.
+func TestProjectAndAppMigrateToCiliumPolicies(t *testing.T) {
+	requireEnvtest(t)
+	ctx := context.Background()
+	p := createProject(t, "legacy-np", kwerftv1.ProjectSpec{})
+	eventually(t, func() error {
+		if err := k8s.Get(ctx, client.ObjectKeyFromObject(p), p); err != nil {
+			return err
+		}
+		return k8s.Get(ctx, client.ObjectKey{Name: "legacy-np"}, &corev1.Namespace{})
+	})
+	app := createApp(t, "legacy-np", "web", kwerftv1.AppSpec{
+		Source: kwerftv1.AppSource{Image: &kwerftv1.ImageSource{Ref: "nginx:1.29"}},
+		Ports:  []kwerftv1.AppPort{{Container: 80}},
+	})
+	waitForApp(t, app, "Progressing")
+
+	old := func(name string, owner metav1.Object, kind string) *networkingv1.NetworkPolicy {
+		np := &networkingv1.NetworkPolicy{
+			ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "legacy-np"},
+			Spec:       networkingv1.NetworkPolicySpec{PolicyTypes: []networkingv1.PolicyType{networkingv1.PolicyTypeIngress}},
+		}
+		if owner != nil {
+			np.OwnerReferences = []metav1.OwnerReference{*metav1.NewControllerRef(owner, kwerftv1.GroupVersion.WithKind(kind))}
+		}
+		if err := k8s.Create(ctx, np); err != nil {
+			t.Fatal(err)
+		}
+		return np
+	}
+	old(defaultDenyName, p, "Project")
+	old("web", app, "App")
+	old("hand-made", nil, "")
+
+	// Any change makes both reconcile (an upgrade restarts them all).
+	if err := k8s.Get(ctx, client.ObjectKeyFromObject(p), p); err != nil {
+		t.Fatal(err)
+	}
+	p.Spec.DisplayName = "Legacy"
+	if err := k8s.Update(ctx, p); err != nil {
+		t.Fatal(err)
+	}
+	if err := k8s.Get(ctx, client.ObjectKeyFromObject(app), app); err != nil {
+		t.Fatal(err)
+	}
+	app.Spec.Replicas = ptr.To[int32](2)
+	if err := k8s.Update(ctx, app); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{defaultDenyName, "web"} {
+		eventually(t, func() error {
+			if err := k8s.Get(ctx, client.ObjectKey{Namespace: "legacy-np", Name: name}, &networkingv1.NetworkPolicy{}); !apierrors.IsNotFound(err) {
+				return fmt.Errorf("NetworkPolicy %s still there (err=%v)", name, err)
+			}
+			return nil
+		})
+	}
+	if err := k8s.Get(ctx, client.ObjectKey{Namespace: "legacy-np", Name: "hand-made"}, &networkingv1.NetworkPolicy{}); err != nil {
+		t.Errorf("a NetworkPolicy Kwerft does not own must stay: %v", err)
+	}
+	ciliumSpec(t, "legacy-np", ProjectPolicyName)
+	ciliumSpec(t, "legacy-np", "web")
+}
+
+func setIsolated(t *testing.T, project string, isolated bool) {
+	t.Helper()
+	ctx := context.Background()
+	var p kwerftv1.Project
+	if err := k8s.Get(ctx, client.ObjectKey{Name: project}, &p); err != nil {
+		t.Fatal(err)
+	}
+	p.Spec.Isolated = ptr.To(isolated)
+	if err := k8s.Update(ctx, &p); err != nil {
+		t.Fatal(err)
 	}
 }
 

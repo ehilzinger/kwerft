@@ -1,0 +1,21 @@
+/* Network › Traffic rules (docs/blueprint.html, Network view). */
+.t tr.off td { color: var(--muted); }
+.tr-table .nm, .tr-table td.mono { white-space: nowrap; }
+.tr-table .sub { white-space: normal; max-width: 34ch; }
+.tr-table .btn.icon svg { width: 14px; height: 14px; }
+.tr-table .tags { display: flex; flex-wrap: wrap; gap: 4px; max-width: 32ch; }
+.t caption.cap-left { caption-side: top; text-align: left; padding: 10px 14px 4px; font-size: 12.5px; font-weight: 600; color: var(--ink-2); }
+
+.tr-peers { border: 0; margin: 0; padding: 0; min-width: 0; }
+.tr-peers legend { font-size: 12.5px; font-weight: 500; color: var(--ink-2); padding: 0; margin-bottom: 5px; }
+.tr-peer { display: grid; grid-template-columns: 140px 1fr auto; gap: 8px; align-items: center; margin-bottom: 6px; }
+.tr-peer .btn svg { width: 14px; height: 14px; }
+.tr-peers .add { justify-self: start; }
+.tr-ports { display: grid; grid-template-columns: 1fr 120px; gap: 10px; align-items: start; }
+.dlg .inline-check { display: flex; align-items: center; gap: 8px; font-size: 13px; }
+
+@media (max-width: 560px) {
+  .tr-peer { grid-template-columns: 1fr auto; }
+  .tr-peer > :nth-child(2) { grid-column: 1 / -1; grid-row: 2; }
+  .tr-ports { grid-template-columns: 1fr; }
+}

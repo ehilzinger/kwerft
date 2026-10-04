@@ -89,6 +89,7 @@ func (a *api) register(mux *http.ServeMux) {
 	a.registerLogSearch(mux)
 	a.registerMetrics(mux) // charts and the explorer (api_metrics.go)
 	a.registerAlerts(mux)  // alerts, silences, alert rules, notification channels
+	a.registerTraffic(mux) // traffic rules, dropped connections, isolation
 }
 
 // ---- setup -----------------------------------------------------------------

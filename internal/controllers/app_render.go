@@ -6,12 +6,10 @@ import (
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
-	networkingv1 "k8s.io/api/networking/v1"
 	"k8s.io/apimachinery/pkg/util/intstr"
 	appsv1ac "k8s.io/client-go/applyconfigurations/apps/v1"
 	corev1ac "k8s.io/client-go/applyconfigurations/core/v1"
 	metav1ac "k8s.io/client-go/applyconfigurations/meta/v1"
-	networkingv1ac "k8s.io/client-go/applyconfigurations/networking/v1"
 	gwv1 "sigs.k8s.io/gateway-api/apis/v1"
 	gwv1ac "sigs.k8s.io/gateway-api/applyconfiguration/apis/v1"
 
@@ -180,7 +178,7 @@ func (a *appRender) domains() map[string]*kwerftv1ac.DomainApplyConfiguration {
 }
 
 // routes returns, per public port, an HTTPS route on the listener serving the
-// hostname and a plain-HTTP route that redirects to HTTPS. Keyed by name.
+// hostname. Keyed by name.
 //
 // listeners maps the hostnames this App's project holds (see wonHostnames) to
 // their listener. A hostname the project does not hold gets no route at all:
@@ -198,12 +196,11 @@ func (a *appRender) routes(listeners map[string]string) map[string]*gwv1ac.HTTPR
 			WithBackendRefs(gwv1ac.HTTPBackendRef().
 				WithName(gwv1.ObjectName(a.app.Name)).
 				WithPort(gwv1.PortNumber(p.Container))))
-		// ACME HTTP-01 challenges still get through: cert-manager's routes
-		// match their exact path, which takes precedence over this one.
-		out[name+"-redirect"] = a.route(name+"-redirect", httpListener, p.Public, gwv1ac.HTTPRouteRule().
-			WithFilters(gwv1ac.HTTPRouteFilter().
-				WithType(gwv1.HTTPRouteFilterRequestRedirect).
-				WithRequestRedirect(gwv1ac.HTTPRequestRedirectFilter().WithScheme("https").WithStatusCode(301))))
+		// Plain HTTP is not the App's: the Gateway's own route in
+		// kwerft-system redirects every hostname to HTTPS (see
+		// DomainReconciler), and routes from projects cannot attach to the
+		// HTTP listener at all. Routes named "<name>-redirect" from before
+		// are removed as no longer desired (reconcileRoutes).
 	}
 	return out
 }
@@ -220,56 +217,6 @@ func (a *appRender) route(name, listener, host string, rule *gwv1ac.HTTPRouteRul
 				WithSectionName(gwv1.SectionName(listener))).
 			WithHostnames(gwv1.Hostname(host)).
 			WithRules(rule))
-}
-
-// networkPolicy opens the project's default-deny for this app: listed apps and
-// platform namespaces may connect in; outbound follows Spec.Egress.
-//
-// TODO(phase-4): switch to CiliumNetworkPolicy so traffic from Traefik on
-// other nodes (host network, entity remote-node) is matched precisely.
-func (a *appRender) networkPolicy() *networkingv1ac.NetworkPolicyApplyConfiguration {
-	var ports []*networkingv1ac.NetworkPolicyPortApplyConfiguration
-	for _, p := range a.app.Spec.Ports {
-		ports = append(ports, networkingv1ac.NetworkPolicyPort().
-			WithProtocol(protocol(p)).
-			WithPort(intstr.FromInt32(p.Container)))
-	}
-
-	from := []*networkingv1ac.NetworkPolicyPeerApplyConfiguration{
-		networkingv1ac.NetworkPolicyPeer().WithNamespaceSelector(
-			metav1ac.LabelSelector().WithMatchLabels(map[string]string{LabelSystem: "true"})),
-	}
-	for _, ref := range a.app.Spec.AllowFrom {
-		project, app := a.project, ref
-		if before, after, ok := strings.Cut(ref, "/"); ok {
-			project, app = before, after
-		}
-		from = append(from, networkingv1ac.NetworkPolicyPeer().
-			WithNamespaceSelector(metav1ac.LabelSelector().WithMatchLabels(map[string]string{LabelProject: project})).
-			WithPodSelector(metav1ac.LabelSelector().WithMatchLabels(map[string]string{LabelApp: app})))
-	}
-	// Tasks started from an allowed App (fromApp) may connect too, e.g. the
-	// migration of "api" reaching the database that "api" may reach.
-	for _, ref := range a.app.Spec.AllowFrom {
-		project, app := a.project, ref
-		if before, after, ok := strings.Cut(ref, "/"); ok {
-			project, app = before, after
-		}
-		from = append(from, networkingv1ac.NetworkPolicyPeer().
-			WithNamespaceSelector(metav1ac.LabelSelector().WithMatchLabels(map[string]string{LabelProject: project})).
-			WithPodSelector(metav1ac.LabelSelector().WithMatchLabels(map[string]string{LabelAsApp: app})))
-	}
-
-	spec := networkingv1ac.NetworkPolicySpec().
-		WithPodSelector(metav1ac.LabelSelector().WithMatchLabels(a.selector)).
-		WithPolicyTypes(networkingv1.PolicyTypeIngress).
-		WithIngress(networkingv1ac.NetworkPolicyIngressRule().WithFrom(from...).WithPorts(ports...))
-	withEgress(spec, a.app.Spec.Egress)
-
-	return networkingv1ac.NetworkPolicy(a.app.Name, a.app.Namespace).
-		WithLabels(a.labels).
-		WithOwnerReferences(a.owner).
-		WithSpec(spec)
 }
 
 func (a *appRender) urls() []string {

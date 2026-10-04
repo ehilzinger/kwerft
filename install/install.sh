@@ -709,9 +709,12 @@ stage_helm() {
 # Stage: networking (Cilium)
 # ---------------------------------------------------------------------------
 stage_network() {
-  local api_ip=${PRIVATE_IP:-$PUBLIC_IP} hubble=true
-  (( LITE )) && hubble=false
+  local api_ip=${PRIVATE_IP:-$PUBLIC_IP} hubble
+  hubble=$(hubble_enabled)
   helmk repo add cilium https://helm.cilium.io --force-update >>"$LOG_FILE" 2>&1
+  # The console reads flows from the relay over plain gRPC (Cilium's default
+  # for the relay's own server, pinned here; relay ↔ agents stay mTLS). The
+  # Kwerft chart admits only the console and the nodes to the relay.
   helmk upgrade --install cilium cilium/cilium --version "$CILIUM_VERSION" \
     --namespace kube-system --wait --timeout 10m \
     --set kubeProxyReplacement=true \
@@ -721,6 +724,7 @@ stage_network() {
     --set encryption.enabled=true --set encryption.type=wireguard \
     --set encryption.wireguard.persistentKeepalive=25s \
     --set hubble.enabled="$hubble" --set hubble.relay.enabled="$hubble" \
+    --set hubble.relay.tls.server.enabled=false \
     --set bpf.masquerade=true \
     >>"$LOG_FILE" 2>&1 || die $EXIT_PLATFORM "Cilium installation failed"
   retry 90 2 kc wait --for=condition=Ready nodes --all --timeout=5s >/dev/null 2>&1 \
@@ -728,8 +732,14 @@ stage_network() {
   echo "Cilium $CILIUM_VERSION · kube-proxy replacement · WireGuard$([[ $hubble == true ]] && echo ' · Hubble')"
 }
 
+# hubble_enabled prints whether Hubble (flows, relay) runs: not with --lite.
+# Cilium and the Kwerft chart (traffic counts, dropped connections) follow it.
+hubble_enabled() {
+  if (( LITE )); then echo false; else echo true; fi
+}
+
 # Pods in namespaces labelled kwerft.dev/system may reach every app (each App's
-# NetworkPolicy allows them): ingress, monitoring and the console itself.
+# CiliumNetworkPolicy allows them): ingress, monitoring and the console itself.
 mark_system_namespace() {
   kc label namespace "$1" kwerft.dev/system=true --overwrite >/dev/null
 }
@@ -1139,6 +1149,7 @@ stage_kwerft() {
     --set console.domain="$DOMAIN" \
     --set acme.email="$ACME_EMAIL" \
     --set platform="$PLATFORM" \
+    --set hubble.enabled="$(hubble_enabled)" \
     "${image_args[@]}" \
     --set registry.image.tag="$ZOT_VERSION" \
     --set registry.clusterIP="$REGISTRY_CLUSTER_IP" \

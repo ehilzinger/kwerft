@@ -147,8 +147,8 @@ func (r *AppReconciler) reconcile(ctx context.Context, app *kwerftv1.App) (*read
 		return nil, err
 	}
 
-	if err := apply(ctx, r.Client, rd.networkPolicy()); err != nil {
-		return nil, fmt.Errorf("apply network policy: %w", err)
+	if err := r.reconcilePolicy(ctx, app, rd); err != nil {
+		return nil, err
 	}
 
 	// Revisions: a new one whenever the spec or the resolved image changes.
@@ -408,7 +408,45 @@ func (r *AppReconciler) appsMountingVolume(ctx context.Context, vol client.Objec
 	return reqs
 }
 
+// reconcilePolicy applies the App's CiliumNetworkPolicy, then removes the
+// Kubernetes NetworkPolicy of the same name that Kwerft wrote before Phase 4
+// (in that order, so the App is never without one).
+func (r *AppReconciler) reconcilePolicy(ctx context.Context, app *kwerftv1.App, rd *appRender) error {
+	var project kwerftv1.Project
+	switch err := r.Get(ctx, client.ObjectKey{Name: rd.project}, &project); {
+	case apierrors.IsNotFound(err):
+		// The namespace outlives its Project briefly while it is deleted;
+		// stay isolated.
+	case err != nil:
+		return err
+	}
+	err := apply(ctx, r.Client, client.ApplyConfigurationFromUnstructured(rd.ciliumPolicy(projectIsolated(&project))))
+	if meta.IsNoMatchError(err) {
+		return terminalf("CiliumMissing", "Cilium's CiliumNetworkPolicy is not installed in this cluster; re-run the installer")
+	}
+	if err != nil {
+		return fmt.Errorf("apply network policy: %w", err)
+	}
+	return deleteIfControlledBy(ctx, r.Client, &networkingv1.NetworkPolicy{ObjectMeta: metav1.ObjectMeta{Name: app.Name, Namespace: app.Namespace}}, app)
+}
+
+// appsInProject enqueues every App of a Project, whose isolation is part of
+// their policies.
+func (r *AppReconciler) appsInProject(ctx context.Context, p client.Object) []reconcile.Request {
+	var apps kwerftv1.AppList
+	if err := r.List(ctx, &apps, client.InNamespace(p.GetName())); err != nil {
+		return nil
+	}
+	reqs := make([]reconcile.Request, 0, len(apps.Items))
+	for _, a := range apps.Items {
+		reqs = append(reqs, reconcile.Request{NamespacedName: client.ObjectKeyFromObject(&a)})
+	}
+	return reqs
+}
+
 func (r *AppReconciler) SetupWithManager(mgr ctrl.Manager) error {
+	policy := &metav1.PartialObjectMetadata{}
+	policy.SetGroupVersionKind(CiliumNetworkPolicyGVK)
 	return ctrl.NewControllerManagedBy(mgr).
 		// Status writes do not bump the generation, so they do not re-trigger.
 		// Annotations do not either, but a restart request is one.
@@ -420,8 +458,11 @@ func (r *AppReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Owns(&appsv1.Deployment{}).
 		Owns(&appsv1.StatefulSet{}).
 		Owns(&corev1.Service{}).
-		Owns(&networkingv1.NetworkPolicy{}).
+		Owns(policy, builder.OnlyMetadata).
 		Owns(&gwv1.HTTPRoute{}).
+		// Isolation is the Project's.
+		Watches(&kwerftv1.Project{}, handler.EnqueueRequestsFromMapFunc(r.appsInProject),
+			builder.WithPredicates(predicate.GenerationChangedPredicate{})).
 		// Owned or hand-made: a Domain's claim decides whether routes attach.
 		Watches(&kwerftv1.Domain{}, handler.EnqueueRequestsFromMapFunc(r.appsForDomain)).
 		Named("app").

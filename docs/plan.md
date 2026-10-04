@@ -113,8 +113,8 @@ Exit codes: 0 ok · 2 usage · 10 preflight · 20 network/DNS · 30 Kubernetes �
 
 | Resource | Becomes | Status |
 |---|---|---|
-| `Project` (cluster-scoped) | Namespace, quota, Pod Security level, default-deny policy; RoleBindings in Phase 4 | reconciler ✔ |
-| `App` | Deployment, or StatefulSet when it has disks of its own (shared Volumes keep it a Deployment); Service, HTTPRoute per public port, NetworkPolicy; source = image **or** Git. Rollback runs an earlier revision's image again as a new revision (`GitSource.pinnedImage` for Git apps); restart via the `kwerft.dev/restarted-at` annotation, no new revision | reconciler ✔, API ✔ (HPA later) |
+| `Project` (cluster-scoped) | Namespace, quota, Pod Security level, default-deny CiliumNetworkPolicy when isolated (`spec.isolated`, default; off: every project's pods reach its apps); RoleBindings in Phase 4 | reconciler ✔ |
+| `App` | Deployment, or StatefulSet when it has disks of its own (shared Volumes keep it a Deployment); Service, HTTPRoute per public port, CiliumNetworkPolicy (the ingress via host/remote-node, platform namespaces, `allowFrom`; egress none, https or all); source = image **or** Git. Rollback runs an earlier revision's image again as a new revision (`GitSource.pinnedImage` for Git apps); restart via the `kwerft.dev/restarted-at` annotation, no new revision | reconciler ✔, API ✔ (HPA later) |
 | `Volume` | PVC (local-path / hcloud-volumes) that Apps and Tasks of a project mount by name; deletion waits while mounted | reconciler ✔ |
 | `Task` | Job (kwerft-batch priority, deny-ingress policy): a one-off run with App's shape, or `fromApp`; "run now" with `envOverrides` | reconciler ✔ |
 | `Schedule` | Tasks on a cron schedule, scheduled by the reconciler (a CronJob could not create Tasks without RBAC in pods) | reconciler ✔ |
@@ -122,7 +122,7 @@ Exit codes: 0 ok · 2 usage · 10 preflight · 20 network/DNS · 30 Kubernetes �
 | `GitConnection` (cluster-scoped) | GitHub App / GitLab / Gitea / deploy key credentials and webhooks | types ✔, Phase 2 |
 | `Domain` | Gateway listener + certificate via cert-manager, or the shared apps wildcard listener for names one level below the apps domain; Apps create one per public port; the older claim wins; hostname fixed after creation; max 59 per-host listeners | reconciler ✔ (records: the apps wildcard record covers Domains under the apps domain; others stay manual) |
 | `ConsoleSettings` (singleton `kwerft`) | Console hostname (with a staged move), apps domain, certificate method (HTTP-01 per host or DNS-01 wildcard via Hetzner), managed DNS records (`spec.dns.manageRecords`, written by the DNS reconciler into `status.dns`); the DNS token lives in the write-only Secret `kwerft-dns-token` | reconciler, API, UI ✔ |
-| `TrafficRule` | CiliumNetworkPolicy, with Hubble hit/drop counts | types ✔, Phase 4 |
+| `TrafficRule` | CiliumNetworkPolicies `<rule>.traffic-in` (this project's apps receive) and `<rule>.traffic-out` (they send out), additive only; crossing projects needs a rule on the receiving side; Hubble allowed/dropped counts in status | reconciler ✔, API ✔, UI ✔ |
 | `FirewallRule` (cluster-scoped) | Host rules through a node agent (Phase 4); Hetzner Cloud Firewall sync (Phase 5) | types ✔ |
 | `NodePool`, `Cluster` | Hetzner Cloud servers + cloud-init join; agent for remote clusters | Phase 5 |
 | `AlertRule`, `NotificationChannel` (cluster-scoped) | VMRule + Alertmanager route and receivers | types ✔, Phase 3 |
@@ -227,7 +227,7 @@ Work split and contracts: `docs/phase4.md`.
 
 - [x] Types: `Project.spec.access`/`members`, `TrafficRule`, `FirewallRule`
 - [ ] W1 Project access: per-project RoleBindings (Team | Members), project scope in every list and search, members UI, isolation test suite, admin 2FA reset, "require 2FA"
-- [ ] W2 Traffic rules: TrafficRule → CiliumNetworkPolicy, App/Project policies on Cilium, Hubble counts and drops, "create allow rule"
+- [x] W2 Traffic rules: TrafficRule → CiliumNetworkPolicy, App/Project policies on Cilium (old NetworkPolicies removed on upgrade), Hubble counts and drops from the relay, "create allow rule", project isolation toggle, plain HTTP only from the Gateway's namespace
 - [ ] W3 Server firewall: FirewallRules through a node agent with lock-out protection and auto-rollback
 - [ ] W4 Identity: OIDC SSO, API tokens, scoped kubeconfig (API proxy), X-Real-IP only from Traefik, data-key rotation
 - [ ] Exit criterion: the isolation suite proves a developer in one project cannot read another project's pods, logs, secrets, metrics, alerts, builds or traffic

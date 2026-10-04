@@ -132,6 +132,10 @@ func runWithCluster(m *testing.M) int {
 	if err := (&controllers.AppReconciler{Client: mgr.GetClient()}).SetupWithManager(mgr); err != nil {
 		return fail("app reconciler", err)
 	}
+	// Traffic rules (traffic_test.go).
+	if err := (&controllers.TrafficRuleReconciler{Client: mgr.GetClient()}).SetupWithManager(mgr); err != nil {
+		return fail("traffic rule reconciler", err)
+	}
 	// Jobs (jobs_test.go). Nothing runs pods here, so Tasks stay Pending.
 	if err := (&controllers.VolumeReconciler{Client: mgr.GetClient()}).SetupWithManager(mgr); err != nil {
 		return fail("volume reconciler", err)
