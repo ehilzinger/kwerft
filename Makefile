@@ -52,7 +52,7 @@ test: dist-stub ## Run Go tests, incl. controller tests against a real API serve
 
 .PHONY: lint
 lint: dist-stub ## gofmt, go vet, web typecheck
-	@test -z "$$(gofmt -l . | grep -v '^web/node_modules/')" || { gofmt -l .; exit 1; }
+	@files=$$(gofmt -l . | grep -vE '^(web/node_modules|\.claude/worktrees|dist)/'); test -z "$$files" || { echo "$$files"; exit 1; }
 	$(GO) vet ./...
 	cd web && npm run typecheck
 
