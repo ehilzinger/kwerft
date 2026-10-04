@@ -327,7 +327,9 @@ func (s *settingsAPI) setConsoleDomain(w http.ResponseWriter, r *http.Request) {
 		writeFieldError(w, "hostname", host+" is already used by "+taken+".")
 		return
 	}
-	if host != view.ConsoleDomain {
+	// Back to the current name undoes a pending move: nothing to check.
+	undo := host == view.ConsoleDomain
+	if !undo {
 		if dns := s.checkDNS(ctx, host, view.PublicAddresses); !dns.OK {
 			writeJSON(w, http.StatusUnprocessableEntity, map[string]any{"error": dns.Message, "field": "hostname", "dns": dns})
 			return
@@ -347,7 +349,7 @@ func (s *settingsAPI) setConsoleDomain(w http.ResponseWriter, r *http.Request) {
 			stranded = append(stranded, h.Email)
 		}
 	}
-	if len(stranded) > 0 {
+	if len(stranded) > 0 && !undo {
 		writeJSON(w, http.StatusConflict, map[string]any{
 			"error": "These members could not sign in after the move, because their passkeys only work on the current hostname and they have " +
 				"no authenticator app or recovery codes: " + strings.Join(stranded, ", ") + ". They need to add an authenticator app or new recovery codes first.",
@@ -361,7 +363,11 @@ func (s *settingsAPI) setConsoleDomain(w http.ResponseWriter, r *http.Request) {
 		s.kubeError(w, r, p, "settings.console_domain", host, "Settings not found.", err)
 		return
 	}
-	s.audit(r, p.user.Email, "settings.console_domain", host, "from "+view.ConsoleDomain)
+	detail := "from " + view.ConsoleDomain
+	if undo {
+		detail = "cancelled the move to " + view.PendingConsoleDomain
+	}
+	s.audit(r, p.user.Email, "settings.console_domain", host, detail)
 	cs, err = s.load(ctx, c)
 	if err != nil {
 		s.internalError(w, r, err)

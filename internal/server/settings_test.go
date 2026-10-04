@@ -359,6 +359,20 @@ func TestSettingsConsoleDomainMove(t *testing.T) {
 	if len(entries) == 0 || entries[0].Action != "settings.console_domain" || entries[0].Target != "ops.example.net" || entries[0].Detail != "from console.example.com" {
 		t.Errorf("audit = %+v", entries[:min(len(entries), 1)])
 	}
+
+	// Moving back to the current name cancels, even with someone stranded.
+	if err := c.store.DeleteRecoveryCodes(ctx, mara.ID); err != nil {
+		t.Fatal(err)
+	}
+	if code := move("console.example.com", "console.example.com"); code != http.StatusOK {
+		t.Errorf("cancel: %d %+v", code, bad)
+	}
+	if got := settingsNow(t).Spec.ConsoleDomain; got != "console.example.com" {
+		t.Errorf("after cancel spec.consoleDomain = %q", got)
+	}
+	if entries, _ = c.store.RecentAudit(ctx, 1); entries[0].Detail != "cancelled the move to ops.example.net" {
+		t.Errorf("cancel audit = %+v", entries[0])
+	}
 }
 
 type rawResponse struct {

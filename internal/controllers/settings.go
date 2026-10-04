@@ -207,8 +207,13 @@ func (r *DomainReconciler) reconcileConsoleRoutes(ctx context.Context, p console
 	if err := apply(ctx, r.Client, route(consoleRoute).WithSpec(https)); err != nil {
 		return fmt.Errorf("apply console route: %w", err)
 	}
+	// Plain HTTP goes to HTTPS on the same name, the previous one included.
 	// ACME HTTP-01 challenges use cert-manager's own, more specific routes.
-	redirect := gwv1ac.HTTPRouteSpec().WithParentRefs(parent(httpListener)).WithHostnames(hostnames(hosts...)...).
+	plain := hosts
+	if p.previous != "" {
+		plain = append(plain, p.previous)
+	}
+	redirect := gwv1ac.HTTPRouteSpec().WithParentRefs(parent(httpListener)).WithHostnames(hostnames(plain...)...).
 		WithRules(gwv1ac.HTTPRouteRule().WithFilters(gwv1ac.HTTPRouteFilter().
 			WithType(gwv1.HTTPRouteFilterRequestRedirect).
 			WithRequestRedirect(gwv1ac.HTTPRequestRedirectFilter().WithScheme("https").WithStatusCode(301))))
@@ -219,14 +224,22 @@ func (r *DomainReconciler) reconcileConsoleRoutes(ctx context.Context, p console
 	if p.previous == "" {
 		return r.deleteManagedRoute(ctx, consolePreviousRoute)
 	}
-	// 302, not 301: a switch can be undone, and browsers cache 301s forever.
+	// Pages redirect (302, not 301: a move can be undone, and browsers cache
+	// 301s for good). The API keeps answering on the old name, so pages open
+	// there learn of the move by polling instead of failing on a cross-origin
+	// redirect, and can send the browser over.
 	moved := gwv1ac.HTTPRouteSpec().
-		WithParentRefs(parent(ConsoleListenerName(p.previous)), parent(httpListener)).
+		WithParentRefs(parent(ConsoleListenerName(p.previous))).
 		WithHostnames(gwv1.Hostname(p.previous)).
-		WithRules(gwv1ac.HTTPRouteRule().WithFilters(gwv1ac.HTTPRouteFilter().
-			WithType(gwv1.HTTPRouteFilterRequestRedirect).
-			WithRequestRedirect(gwv1ac.HTTPRequestRedirectFilter().
-				WithScheme("https").WithHostname(gwv1.PreciseHostname(p.active)).WithStatusCode(302))))
+		WithRules(
+			gwv1ac.HTTPRouteRule().
+				WithMatches(gwv1ac.HTTPRouteMatch().WithPath(gwv1ac.HTTPPathMatch().
+					WithType(gwv1.PathMatchPathPrefix).WithValue("/api/"))).
+				WithBackendRefs(gwv1ac.HTTPBackendRef().WithName(ConsoleService).WithPort(consoleServicePort)),
+			gwv1ac.HTTPRouteRule().WithFilters(gwv1ac.HTTPRouteFilter().
+				WithType(gwv1.HTTPRouteFilterRequestRedirect).
+				WithRequestRedirect(gwv1ac.HTTPRequestRedirectFilter().
+					WithScheme("https").WithHostname(gwv1.PreciseHostname(p.active)).WithStatusCode(302))))
 	if err := apply(ctx, r.Client, route(consolePreviousRoute).WithSpec(moved)); err != nil {
 		return fmt.Errorf("apply previous console route: %w", err)
 	}

@@ -154,9 +154,19 @@ func TestSettingsMoveConsoleOnceCertificateIsIssued(t *testing.T) {
 		return nil
 	})
 	moved := getRoute(t, GatewayNamespace, consolePreviousRoute)
-	rr := moved.Spec.Rules[0].Filters[0].RequestRedirect
+	// Pages redirect; the API keeps answering, so open pages learn of the move.
+	if len(moved.Spec.Rules) != 2 || len(moved.Spec.Rules[1].Filters) != 1 {
+		t.Fatalf("previous route rules = %+v", moved.Spec.Rules)
+	}
+	api, rr := moved.Spec.Rules[0], moved.Spec.Rules[1].Filters[0].RequestRedirect
 	if hostnamesOf(moved)[0] != testConsoleDomain || rr == nil || rr.Hostname == nil || string(*rr.Hostname) != next {
 		t.Errorf("previous route = %+v", moved.Spec)
+	}
+	if *api.Matches[0].Path.Value != "/api/" || string(api.BackendRefs[0].Name) != ConsoleService {
+		t.Errorf("previous route API rule = %+v", api)
+	}
+	if got := hostnamesOf(getRoute(t, GatewayNamespace, consoleRedirectRoute)); !slices.Equal(got, []string{testConsoleDomain, next}) {
+		t.Errorf("plain-HTTP redirect hostnames %v, want both names", got)
 	}
 
 	// A day later the old name is released.
