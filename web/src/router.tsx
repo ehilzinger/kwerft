@@ -15,6 +15,7 @@ import { NewSchedule, ScheduleDetail } from "./pages/ScheduleForm";
 import { TaskDetail } from "./pages/TaskDetail";
 import { Volumes } from "./pages/Volumes";
 import { Network } from "./pages/Network";
+import { AccessRecordings, recordingsSearch } from "./pages/AccessRecordings";
 
 type Context = { queryClient: QueryClient };
 
@@ -89,6 +90,8 @@ const routeTree = root.addChildren([
     createRoute({ getParentRoute: () => authed, path: "/jobs/$project/schedules/$name", component: ScheduleDetail }),
     createRoute({ getParentRoute: () => authed, path: "/jobs/$project/tasks/$name", component: TaskDetail }),
     createRoute({ getParentRoute: () => authed, path: "/network", component: Network }),
+    // Access › Shell recordings (owners and admins); /access itself is Members.
+    createRoute({ getParentRoute: () => authed, path: "/access/recordings", component: AccessRecordings, validateSearch: recordingsSearch }),
     planned("/monitoring", "Monitoring", "Phase 3", "Alerts with one-click fixes, top consumers, and alert rules routed to email, Slack, webhooks or ntfy."),
     planned("/clusters", "Clusters & nodes", "Phase 5", "Add Hetzner Cloud servers through the API or join dedicated servers with one command; manage more clusters through an outbound agent."),
     planned("/access", "Access", "Phase 4", "Members and roles mapped to Kubernetes RBAC, SSO, API tokens and an append-only audit log."),
