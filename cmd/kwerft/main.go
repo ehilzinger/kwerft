@@ -26,6 +26,8 @@ import (
 	"github.com/ehilzinger/kwerft/internal/auth"
 	"github.com/ehilzinger/kwerft/internal/controllers"
 	"github.com/ehilzinger/kwerft/internal/git"
+	"github.com/ehilzinger/kwerft/internal/metrics"
+	"github.com/ehilzinger/kwerft/internal/observability"
 	"github.com/ehilzinger/kwerft/internal/server"
 	"github.com/ehilzinger/kwerft/internal/setup"
 	"github.com/ehilzinger/kwerft/internal/store"
@@ -40,6 +42,7 @@ func main() {
 		consoleDomain  = flag.String("console-domain", "", "public hostname of the console")
 		platform       = flag.String("platform", "dedicated", "hosting platform: cloud or dedicated")
 		runControllers = flag.Bool("controllers", true, "run the reconcilers (needs cluster access)")
+		metricsListen  = flag.String("metrics-listen", ":8081", "address of Kwerft's own Prometheus metrics (with the reconcilers only; scraped by vmagent inside the cluster, never routed through the Gateway); \"0\" disables")
 		leaderElect    = flag.Bool("leader-elect", true, "use leader election so only one replica reconciles")
 		gatewayClass   = flag.String("gateway-class", "traefik", "GatewayClass of the shared Gateway")
 		clusterIssuer  = flag.String("cluster-issuer", "letsencrypt", "cert-manager ClusterIssuer for HTTPS listeners; empty disables certificates")
@@ -90,7 +93,7 @@ func main() {
 	var ready atomic.Bool
 	var mgr ctrl.Manager
 	if *runControllers {
-		mgr, err = newManager(log, *leaderElect, &controllers.DomainReconciler{
+		mgr, err = newManager(log, *leaderElect, *metricsListen, &controllers.DomainReconciler{
 			ConsoleDomain: *consoleDomain,
 			GatewayClass:  *gatewayClass,
 			ClusterIssuer: *clusterIssuer,
@@ -138,8 +141,10 @@ func main() {
 	// (see internal/server/api_git.go); only with the controller manager.
 	var system client.Client
 	var systemReader client.Reader
+	var metricsClient *metrics.Client
 	if mgr != nil {
 		system, systemReader = mgr.GetClient(), mgr.GetAPIReader()
+		metricsClient = metrics.New(observability.MetricsURL) // in-cluster only
 	}
 
 	srv := server.New(server.Config{
@@ -164,6 +169,7 @@ func main() {
 		System:       system,
 		SystemReader: systemReader,
 		Git:          gitFactory,
+		Metrics:      metricsClient,
 
 		ActiveConsoleDomain: activeConsoleDomain(mgr, *dev),
 	})
@@ -231,16 +237,18 @@ func waitUntilReady(ctx context.Context, log *slog.Logger, mgr ctrl.Manager, rea
 	}
 }
 
-func newManager(log *slog.Logger, leaderElect bool, domains *controllers.DomainReconciler, builds *controllers.BuildReconciler) (ctrl.Manager, error) {
+func newManager(log *slog.Logger, leaderElect bool, metricsListen string, domains *controllers.DomainReconciler, builds *controllers.BuildReconciler) (ctrl.Manager, error) {
 	ctrl.SetLogger(logr.FromSlogHandler(log.Handler()))
 	cfg, err := ctrl.GetConfig()
 	if err != nil {
 		return nil, err
 	}
 	mgr, err := ctrl.NewManager(cfg, ctrl.Options{
-		Scheme:                  controllers.NewScheme(),
-		Metrics:                 metricsserver.Options{BindAddress: "0"}, // TODO(phase-3): expose for vmagent
-		HealthProbeBindAddress:  "0",                                     // the console server answers /healthz and /readyz
+		Scheme: controllers.NewScheme(),
+		// Kwerft's own metrics and controller-runtime's (internal/controllers/metrics.go),
+		// on a port of their own: the console port is what the Gateway routes to.
+		Metrics:                 metricsserver.Options{BindAddress: metricsListen},
+		HealthProbeBindAddress:  "0", // the console server answers /healthz and /readyz
 		LeaderElection:          leaderElect,
 		LeaderElectionID:        "kwerft-controllers",
 		LeaderElectionNamespace: os.Getenv("POD_NAMESPACE"),
@@ -249,6 +257,9 @@ func newManager(log *slog.Logger, leaderElect bool, domains *controllers.DomainR
 		LeaderElectionReleaseOnCancel: true,
 	})
 	if err != nil {
+		return nil, err
+	}
+	if err := controllers.RegisterMetrics(mgr); err != nil {
 		return nil, err
 	}
 	if err := (&controllers.ProjectReconciler{Client: mgr.GetClient()}).SetupWithManager(mgr); err != nil {

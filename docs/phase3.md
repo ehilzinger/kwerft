@@ -55,7 +55,16 @@ kwerft_app_latest_build_failed{namespace, app}                 0 | 1
 kwerft_build_duration_seconds_bucket{namespace, app, result}   histogram
 kwerft_domain_certificate_expiry_timestamp_seconds{namespace, domain, hostname}
 kwerft_console_certificate_expiry_timestamp_seconds{hostname, purpose}
+kwerft_http_route_info{namespace, app, route}                  1, see below (W1's own, for the recording rules)
+kwerft_metrics_collect_errors{kind}                            1 when a kind could not be read for a scrape
 ```
+
+As built (W1): gauges are read from the informer cache at scrape time; the
+histogram is observed when a Build turns Succeeded or Failed (`result` is
+`succeeded` | `failed`; buckets 15 s … 1 h). `latest_build_failed` looks at
+the latest *finished* build by number, pull-request builds and cancelled
+ones left out. The scrape uses `honorLabels: true`, so `namespace` is the
+project's; series without one (console certificates) get `kwerft-system`.
 
 Recording rules (a `VMRule` in the chart), so alerts and charts use app
 labels instead of Traefik's or the kubelet's:
@@ -70,6 +79,20 @@ kwerft:container_cpu_usage_cores:rate5m{namespace, app, pod}
 `app` comes from the pod label `kwerft.dev/app` (kube-state-metrics must
 export it: `metricLabelsAllowlist` for pods) or, for Traefik, from the
 HTTPRoute/Service name Kwerft renders.
+
+As built (W1): the rules live in `charts/kwerft/templates/metrics-rules.yaml`
+(VMRule `kwerft-recording`, 30 s). kube-state-metrics exports
+`label_kwerft_dev_app` / `label_kwerft_dev_project` on `kube_pod_labels`
+(and the project label on `kube_namespace_labels`). Traefik v3.7's Gateway
+API provider names routers
+`httproute-<ns>-<route>-gw-kwerft-system-kwerft-ep-<entrypoint>-<rule>-<hash>@kubernetesgateway`;
+namespace and route cannot be split by a regex (both contain dashes), so the
+rules cut the `route` label `httproute-<ns>-<route>` from it and join on
+`kwerft_http_route_info`, which Kwerft exports for every HTTPRoute it
+renders with a backend (HTTP→HTTPS redirect routes and the console's own
+route drop out). `code_class` is `1xx`…`5xx`. Traefik exports router labels
+only (`addRoutersLabels`, services off), buckets 10 ms … 10 s, on :9101,
+scraped by a `VMPodScrape` in `traefik`.
 
 ## Alerting (W3)
 
@@ -105,6 +128,28 @@ GET /api/v1/projects/{p}/apps/{a}/metrics?range=1h&step=…
     → {cpu, memory, restarts, requests, errors, latencyP95}: each [{t, v}] (null when unavailable)
 GET /api/v1/metrics/query?query=…&range=…  (owners/admins: explore; others: confined to projects)
 ```
+
+As built (W1): every response carries `range`, `step` (seconds), `start`,
+`end` (unix seconds); points are `{t, v}` with `t` in unix seconds, NaN
+samples left out. `range` is `<n>(m|h|d|w)`, 5 minutes to 30 days; `step`
+defaults to about 240 points and is raised to keep at most 500.
+
+```
+overview → {scope: "all"|"projects", nodes: [{name, cpu, cpuCapacity, memory, memoryCapacity, disk, diskCapacity}],
+            platform: {cpu, memory, namespaces: [{namespace, cpu, memory}]} | null,
+            topApps: [{project, app, cpu, memory}] (heaviest memory first, ≤ 50),
+            series: {cpu, memory}}   (cluster totals for "all", the user's apps otherwise)
+app      → {cpu, memory, memoryLimit, restarts, requests, errors, latencyP95}   (memoryLimit added)
+query    → {query, scope, series: [{labels, points}] (≤ 100), truncated}
+```
+
+Confinement: owners and admins are unconfined; everyone else gets
+`extra_filters[]={namespace=~"<their projects>"}` in the URL (never the form
+body, which VictoriaMetrics reads after the URL), platform namespaces
+removed; no projects means no request at all. Per-app charts are confined
+to the App's namespace for every role, after reading the App as the user.
+Unreachable VictoriaMetrics is a 503 with a message; a rejected explorer
+query is a 400 with VictoriaMetrics' message.
 
 W2 (logs):
 

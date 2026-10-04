@@ -773,11 +773,28 @@ stage_ingress_tls() {
     >>"$LOG_FILE" 2>&1 || die $EXIT_PLATFORM "cert-manager installation failed"
   install_dns_webhook
 
-  # Traefik binds 80/443 directly on every node (hostNetwork DaemonSet). This
-  # works identically on cloud and dedicated servers; a Hetzner Load Balancer
-  # can target the nodes later without changing anything here.
   mkdir -p "$STATE_DIR/values"
-  cat >"$STATE_DIR/values/traefik.yaml" <<'EOF'
+  traefik_values >"$STATE_DIR/values/traefik.yaml"
+  helmk repo add traefik https://traefik.github.io/charts --force-update >>"$LOG_FILE" 2>&1
+  helmk upgrade --install traefik traefik/traefik --version "$TRAEFIK_CHART_VERSION" \
+    --namespace traefik --create-namespace --wait --timeout 10m \
+    -f "$STATE_DIR/values/traefik.yaml" \
+    >>"$LOG_FILE" 2>&1 || die $EXIT_PLATFORM "Traefik installation failed"
+  mark_system_namespace traefik
+  echo "Traefik · cert-manager · Hetzner DNS-01 · Gateway API $gateway_api"
+}
+
+# Traefik binds 80/443 directly on every node (hostNetwork DaemonSet). This
+# works identically on cloud and dedicated servers; a Hetzner Load Balancer
+# can target the nodes later without changing anything here.
+#
+# Prometheus metrics on :9101 (the host network; the firewall keeps it
+# inside the cluster) are scraped by vmagent through the Kwerft chart's
+# VMPodScrape. Router labels are what the console's request, error and
+# latency charts are built from (recording rules in the chart's
+# metrics-rules.yaml); per-service series would only duplicate them.
+traefik_values() {
+  cat <<'EOF'
 deployment:
   kind: DaemonSet
 hostNetwork: true
@@ -814,14 +831,14 @@ securityContext:
   runAsNonRoot: false
   runAsUser: 0
   runAsGroup: 0
+metrics:
+  prometheus:
+    entryPoint: metrics
+    addEntryPointsLabels: true
+    addRoutersLabels: true
+    addServicesLabels: false
+    buckets: "0.01,0.025,0.05,0.1,0.25,0.5,1,2.5,5,10"
 EOF
-  helmk repo add traefik https://traefik.github.io/charts --force-update >>"$LOG_FILE" 2>&1
-  helmk upgrade --install traefik traefik/traefik --version "$TRAEFIK_CHART_VERSION" \
-    --namespace traefik --create-namespace --wait --timeout 10m \
-    -f "$STATE_DIR/values/traefik.yaml" \
-    >>"$LOG_FILE" 2>&1 || die $EXIT_PLATFORM "Traefik installation failed"
-  mark_system_namespace traefik
-  echo "Traefik · cert-manager · Hetzner DNS-01 · Gateway API $gateway_api"
 }
 
 # Hetzner's cert-manager webhook solves DNS-01 through Hetzner DNS (Cloud API),
@@ -980,13 +997,15 @@ stage_observability() {
   local retention=30d log_retention=14d
   (( LITE )) && { retention=7d; log_retention=3d; }
   helmk repo add vm https://victoriametrics.github.io/helm-charts/ --force-update >>"$LOG_FILE" 2>&1
+  mkdir -p "$STATE_DIR/values"
+  vm_stack_values >"$STATE_DIR/values/vm-stack.yaml"
   helmk upgrade --install vm vm/victoria-metrics-k8s-stack --version "$VM_STACK_CHART_VERSION" \
     --namespace kwerft-observability --create-namespace --wait --timeout 15m \
+    -f "$STATE_DIR/values/vm-stack.yaml" \
     --set grafana.enabled=false \
     --set vmsingle.spec.retentionPeriod="$retention" \
     --set alertmanager.enabled=true \
     >>"$LOG_FILE" 2>&1 || die $EXIT_PLATFORM "VictoriaMetrics installation failed"
-  mkdir -p "$STATE_DIR/values"
   write_vlogs_values >"$STATE_DIR/values/vlogs.yaml"
   helmk upgrade --install vlogs vm/victoria-logs-single --version "$VLOGS_CHART_VERSION" \
     --namespace kwerft-observability --wait --timeout 10m \
@@ -995,6 +1014,20 @@ stage_observability() {
     >>"$LOG_FILE" 2>&1 || die $EXIT_PLATFORM "VictoriaLogs installation failed"
   mark_system_namespace kwerft-observability
   echo "VictoriaMetrics ($retention) · VictoriaLogs ($log_retention) · kube-state-metrics · node-exporter"
+}
+
+# Values for victoria-metrics-k8s-stack beyond the --set flags above.
+# kube-state-metrics exports the pod labels Kwerft puts on every App's pods
+# (kube_pod_labels{label_kwerft_dev_app, label_kwerft_dev_project}), which
+# the chart's recording rules join container metrics on. Namespaces carry
+# the project label too, for alert rules scoped to projects.
+vm_stack_values() {
+  cat <<'EOF'
+kube-state-metrics:
+  metricLabelsAllowlist:
+    - pods=[kwerft.dev/app,kwerft.dev/project]
+    - namespaces=[kwerft.dev/project]
+EOF
 }
 
 # ---------------------------------------------------------------------------

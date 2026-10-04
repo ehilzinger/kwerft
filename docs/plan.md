@@ -226,7 +226,7 @@ Exit codes: 0 ok · 2 usage · 10 preflight · 20 network/DNS · 30 Kubernetes �
 Work split and contracts: `docs/phase3.md`.
 
 - [x] Types: `AlertRule`, `NotificationChannel`; `internal/observability`; Monitoring page skeleton
-- [ ] W1 Metrics: Kwerft's own metrics, recording rules, Traefik metrics, metrics API confined to projects, overview and per-app charts
+- [x] W1 Metrics: Kwerft's own metrics, recording rules, Traefik metrics, metrics API confined to projects, overview and per-app charts (recording rules and confinement checked against VictoriaMetrics v1.153 locally; on a server: with the exit criterion)
 - [x] W2 Logs: log search over VictoriaLogs confined to projects, history in the App Logs tab, Task/Build logs after their pod is gone
 - [ ] W3 Alerting: AlertRule → VMRule, channels (Slack, email, webhook, ntfy) → Alertmanager, default rules, alerts and silences API
 - [ ] W4 Alerting UI: alerts, rules, channels; "needs attention" on Overview

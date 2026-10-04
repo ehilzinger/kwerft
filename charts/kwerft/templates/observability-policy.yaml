@@ -1,0 +1,24 @@
+{{- if .Values.observability.networkPolicy }}
+# VictoriaMetrics, vmalert, Alertmanager and VictoriaLogs have no
+# authentication of their own, and the console confines what users see by
+# adding filters to its own queries. So nothing but the stack itself, the
+# console and the nodes (kubelet probes) and API server (the operator's
+# webhook) may reach kwerft-observability; app pods may not. The stack's own
+# egress (scraping, notifications) is not affected.
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: kwerft-observability
+  namespace: {{ .Values.observability.namespace }}
+  labels: {{- include "kwerft.labels" . | nindent 4 }}
+spec:
+  endpointSelector: {}
+  ingress:
+    - fromEndpoints:
+        - matchLabels:
+            k8s:io.kubernetes.pod.namespace: {{ .Values.observability.namespace }}
+        - matchLabels:
+            k8s:io.kubernetes.pod.namespace: {{ .Release.Namespace }}
+            {{- include "kwerft.selectorLabels" . | nindent 12 }}
+    - fromEntities: [host, remote-node, kube-apiserver]
+{{- end }}

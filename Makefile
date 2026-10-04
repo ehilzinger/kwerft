@@ -72,6 +72,8 @@ test-install: ## shellcheck + bats for the installer
 helm-lint: ## Lint and render the Helm chart
 	helm lint charts/kwerft --set console.domain=ops.example.com --set acme.email=ops@example.com
 	helm template kwerft charts/kwerft --set console.domain=ops.example.com >/dev/null
+	@# With the VictoriaMetrics operator's CRDs, as install.sh installs them (metrics-*.yaml).
+	helm template kwerft charts/kwerft --set console.domain=ops.example.com --api-versions operator.victoriametrics.com/v1beta1 | grep -q 'kind: VMRule'
 
 .PHONY: check
 check: lint test test-install helm-lint ## Everything CI runs

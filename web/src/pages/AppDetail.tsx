@@ -12,6 +12,7 @@ import { repoLabel, shortSha } from "../builds";
 import { BuildStatus } from "../components/BuildStatus";
 import { AppBuilds, buildName, buildsKey, useBuilds } from "./AppBuilds";
 import { AppLogs } from "./AppLogs";
+import { AppMetrics } from "./AppMetrics";
 import { AppSettings } from "./AppSettings";
 import { errorText } from "./Apps";
 import { RunNowDialog } from "./RunNowDialog";
@@ -19,7 +20,7 @@ import "../styles/workloads.css";
 
 const route = getRouteApi("/authed/apps/$project/$name");
 
-const tabs = ["overview", "logs", "builds", "settings"] as const;
+const tabs = ["overview", "metrics", "logs", "builds", "settings"] as const;
 type Tab = (typeof tabs)[number];
 
 // phaseOf mirrors the server's summary (api_workloads.go appPhase) for the
@@ -158,6 +159,7 @@ export function AppDetail() {
       <div className="tabpanel" role="tabpanel" id={`panel-${tab}`} aria-labelledby={`tab-${tab}`}>
         {tab === "overview" && <Overview app={app} canDeploy={can.deploy} onRollback={(rev) => setDialog({ rollback: rev })} />}
         {tab === "overview" && <Replicas app={app} onLogs={(pod) => { setLogPod(pod); showTab("logs"); }} />}
+        {tab === "metrics" && <AppMetrics app={app} />}
         {tab === "logs" && <AppLogs app={app} pod={logPod} />}
         {tab === "builds" && <AppBuilds app={app} canDeploy={can.deploy} selected={build} />}
         {tab === "settings" && (

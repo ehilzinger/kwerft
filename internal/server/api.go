@@ -87,6 +87,7 @@ func (a *api) register(mux *http.ServeMux) {
 	a.registerBuilds(mux) // Git builds: list, logs, cancel (api_builds.go)
 	a.registerGit(mux)    // Git connections, checks, "Build now", webhooks
 	a.registerLogSearch(mux)
+	a.registerMetrics(mux) // charts and the explorer (api_metrics.go)
 }
 
 // ---- setup -----------------------------------------------------------------

@@ -101,3 +101,22 @@ builds:
     requests.cpu: "6"
     requests.memory: 8Gi
     limits.memory: 16Gi
+
+# Kwerft's own metrics (the controller manager's :8081, a port of its own
+# inside the cluster, never routed through the Gateway), the recording rules
+# the console's charts and alert rules read, and the scrape of Traefik's
+# router metrics. The VictoriaMetrics objects need the operator's CRDs
+# (install.sh stage "Observability"); without them they are left out.
+metrics:
+  enabled: true
+  port: 8081
+  # Where vmagent runs: only its pods may reach the metrics port.
+  vmagentNamespace: kwerft-observability
+  traefik:
+    namespace: traefik         # the Traefik DaemonSet (install.sh); its metrics port is named "metrics" (9101)
+
+# The metrics, logs and alerting stack install.sh runs.
+observability:
+  namespace: kwerft-observability
+  # Admit only the stack itself, the console and the nodes to it (Cilium).
+  networkPolicy: true

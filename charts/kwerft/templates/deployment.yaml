@@ -29,6 +29,7 @@ spec:
             - --platform={{ .Values.platform }}
             - --gateway-class={{ .Values.gateway.className }}
             - --cluster-issuer={{ if .Values.acme.enabled }}letsencrypt{{ end }}
+            - --metrics-listen={{ if .Values.metrics.enabled }}:{{ .Values.metrics.port }}{{ else }}0{{ end }}
             {{- with .Values.builds }}
             {{- if .enabled }}
             - --buildkit-image={{ required "builds.buildkitImage is required" .buildkitImage }}
@@ -46,6 +47,10 @@ spec:
           ports:
             - name: http
               containerPort: 8080
+            {{- if .Values.metrics.enabled }}
+            - name: metrics
+              containerPort: {{ .Values.metrics.port }}
+            {{- end }}
           readinessProbe:
             httpGet: { path: /readyz, port: http }
             periodSeconds: 5
