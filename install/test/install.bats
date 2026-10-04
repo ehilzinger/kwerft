@@ -628,3 +628,27 @@ mirror_env() {
   [ "$status" -eq 0 ]
   [ -z "$output" ]
 }
+
+@test "traefik_values: Prometheus metrics with router labels on the metrics port" {
+  KWERFT_SOURCED=1 source "$SCRIPT"
+  out=$(traefik_values)
+  grep -qx '  metrics:' <<<"$out"
+  grep -qx '    port: 9101          # node-exporter owns 9100 on the host network' <<<"$out"
+  grep -qx '    entryPoint: metrics' <<<"$out"
+  grep -qx '    addRoutersLabels: true' <<<"$out"
+  grep -qx '    addServicesLabels: false' <<<"$out"
+  grep -q '^    buckets: "0.01,.*,10"$' <<<"$out"
+  # The chart scrapes the port by that name, in Traefik's namespace.
+  chart="$BATS_TEST_DIRNAME/../../charts/kwerft"
+  grep -q '^    - port: metrics$' "$chart/templates/metrics-scrape.yaml"
+  grep -q '^    namespace: traefik ' "$chart/values.yaml"
+}
+
+@test "vm_stack_values: kube-state-metrics exports Kwerft's pod labels" {
+  KWERFT_SOURCED=1 source "$SCRIPT"
+  out=$(vm_stack_values)
+  grep -qx '  metricLabelsAllowlist:' <<<"$out"
+  grep -qx '    - pods=\[kwerft.dev/app,kwerft.dev/project\]' <<<"$out"
+  # The recording rules read it under kube-state-metrics' name for it.
+  grep -q 'label_kwerft_dev_app' "$BATS_TEST_DIRNAME/../../charts/kwerft/templates/metrics-rules.yaml"
+}

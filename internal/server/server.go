@@ -15,6 +15,7 @@ import (
 
 	"github.com/ehilzinger/kwerft/internal/git"
 	"github.com/ehilzinger/kwerft/internal/kube"
+	"github.com/ehilzinger/kwerft/internal/metrics"
 	"github.com/ehilzinger/kwerft/internal/setup"
 	"github.com/ehilzinger/kwerft/internal/store"
 	"github.com/ehilzinger/kwerft/internal/version"
@@ -71,6 +72,10 @@ type Config struct {
 	SystemReader client.Reader
 	// Git talks to Git hosts; nil means a default git.Factory.
 	Git *git.Factory
+
+	// Metrics reads VictoriaMetrics for charts and the explorer (see
+	// api_metrics.go); nil turns the metrics endpoints off.
+	Metrics *metrics.Client
 
 	// ActiveConsoleDomain returns the hostname the console is served on now
 	// (ConsoleSettings.status, which Settings can change); nil or "" means

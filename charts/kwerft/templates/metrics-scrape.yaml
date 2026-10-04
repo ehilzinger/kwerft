@@ -1,0 +1,80 @@
+{{- if .Values.metrics.enabled }}
+# The controller manager's metrics: Kwerft's own (internal/controllers/
+# metrics.go) and controller-runtime's. A Service of its own, so the
+# console's Service (the Gateway's backend) never carries the port.
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "kwerft.fullname" . }}-metrics
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "kwerft.labels" . | nindent 4 }}
+    app.kubernetes.io/component: metrics
+spec:
+  selector: {{- include "kwerft.selectorLabels" . | nindent 4 }}
+  ports:
+    - name: metrics
+      port: {{ .Values.metrics.port }}
+      targetPort: metrics
+---
+# Only vmagent reaches the metrics port. The console port stays open to
+# everything, as without a policy (Traefik on the host network, probes,
+# webhooks); a NetworkPolicy cannot name the host, hence Cilium's kind.
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: {{ include "kwerft.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels: {{- include "kwerft.labels" . | nindent 4 }}
+spec:
+  endpointSelector:
+    matchLabels: {{- include "kwerft.selectorLabels" . | nindent 6 }}
+  ingress:
+    - fromEntities: [all]
+      toPorts:
+        - ports: [{ port: "8080", protocol: TCP }]
+    - fromEndpoints:
+        - matchLabels:
+            k8s:io.kubernetes.pod.namespace: {{ .Values.metrics.vmagentNamespace }}
+            app.kubernetes.io/name: vmagent
+      toPorts:
+        - ports: [{ port: {{ .Values.metrics.port | quote }}, protocol: TCP }]
+{{- if .Capabilities.APIVersions.Has "operator.victoriametrics.com/v1beta1" }}
+---
+# honorLabels: Kwerft's series carry the namespace of the object they are
+# about (a project), which must win over the scrape target's (kwerft-system).
+apiVersion: operator.victoriametrics.com/v1beta1
+kind: VMServiceScrape
+metadata:
+  name: {{ include "kwerft.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels: {{- include "kwerft.labels" . | nindent 4 }}
+spec:
+  selector:
+    matchLabels:
+      {{- include "kwerft.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: metrics
+  endpoints:
+    - port: metrics
+      path: /metrics
+      interval: 30s
+      honorLabels: true
+---
+# Traefik runs on the host network without a Service (install.sh turns it
+# off), so its pods are scraped directly.
+apiVersion: operator.victoriametrics.com/v1beta1
+kind: VMPodScrape
+metadata:
+  name: traefik
+  namespace: {{ .Values.metrics.traefik.namespace }}
+  labels: {{- include "kwerft.labels" . | nindent 4 }}
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: traefik
+  podMetricsEndpoints:
+    - port: metrics
+      path: /metrics
+      interval: 30s
+{{- end }}
+{{- end }}

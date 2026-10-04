@@ -1,0 +1,69 @@
+{{- if and .Values.metrics.enabled (.Capabilities.APIVersions.Has "operator.victoriametrics.com/v1beta1") }}
+# Recording rules for the console's charts and the alert rules: series with
+# Kwerft's labels (namespace, app, pod) instead of the kubelet's or Traefik's.
+# internal/metrics (catalog.go) and internal/alerting read these names;
+# docs/phase3.md lists them.
+#
+# - app: the pod label kwerft.dev/app, exported by kube-state-metrics as
+#   label_kwerft_dev_app (metricLabelsAllowlist in install.sh).
+# - Traefik: routers of the Gateway API provider are named
+#   httproute-<namespace>-<route>-gw-<gateway namespace>-<gateway>-ep-<entrypoint>-<rule>-<hash>@kubernetesgateway
+#   (Traefik v3.7, pkg/provider/kubernetes/gateway: makeRouterName). The
+#   route part cannot be split into namespace and name by a regular
+#   expression (both contain dashes), so Kwerft exports
+#   kwerft_http_route_info{namespace, app, route="httproute-<namespace>-<route>"}
+#   for the HTTPRoutes it renders, and the rules join on that. Redirect
+#   routes (HTTP → HTTPS) have no info series and drop out.
+apiVersion: operator.victoriametrics.com/v1beta1
+kind: VMRule
+metadata:
+  name: kwerft-recording
+  namespace: {{ .Release.Namespace }}
+  labels: {{- include "kwerft.labels" . | nindent 4 }}
+spec:
+  groups:
+    - name: kwerft.workloads
+      interval: 30s
+      rules:
+        - record: kwerft:container_cpu_usage_cores:rate5m
+          expr: |
+            sum by (namespace, app, pod) (
+              rate(container_cpu_usage_seconds_total{container!="", container!="POD"}[5m])
+              * on (namespace, pod) group_left (app)
+              max by (namespace, pod, app) (label_replace(kube_pod_labels{label_kwerft_dev_app!=""}, "app", "$1", "label_kwerft_dev_app", "(.+)"))
+            )
+        - record: kwerft:container_memory_working_set_bytes
+          expr: |
+            sum by (namespace, app, pod) (
+              container_memory_working_set_bytes{container!="", container!="POD"}
+              * on (namespace, pod) group_left (app)
+              max by (namespace, pod, app) (label_replace(kube_pod_labels{label_kwerft_dev_app!=""}, "app", "$1", "label_kwerft_dev_app", "(.+)"))
+            )
+    - name: kwerft.http
+      interval: 30s
+      rules:
+        - record: kwerft:http_requests:rate5m
+          expr: |
+            sum by (namespace, app, code_class) (
+              label_replace(
+                sum by (route, code) (
+                  label_replace(rate(traefik_router_requests_total{router=~"httproute-.+@kubernetesgateway"}[5m]),
+                    "route", "$1", "router", "(httproute-.+)-gw-kwerft-system-kwerft-ep-.+")
+                ),
+                "code_class", "${1}xx", "code", "([1-5])..")
+              * on (route) group_left (namespace, app)
+              max by (route, namespace, app) (kwerft_http_route_info)
+            )
+        - record: kwerft:http_latency_p95_seconds:5m
+          expr: |
+            histogram_quantile(0.95,
+              sum by (namespace, app, le) (
+                sum by (route, le) (
+                  label_replace(rate(traefik_router_request_duration_seconds_bucket{router=~"httproute-.+@kubernetesgateway"}[5m]),
+                    "route", "$1", "router", "(httproute-.+)-gw-kwerft-system-kwerft-ep-.+")
+                )
+                * on (route) group_left (namespace, app)
+                max by (route, namespace, app) (kwerft_http_route_info)
+              )
+            )
+{{- end }}

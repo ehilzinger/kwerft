@@ -12,6 +12,7 @@ import { repoLabel, shortSha } from "../builds";
 import { BuildStatus } from "../components/BuildStatus";
 import { AppBuilds, buildName, buildsKey, useBuilds } from "./AppBuilds";
 import { AppLogs } from "./AppLogs";
+import { AppMetrics } from "./AppMetrics";
 import { AppSettings } from "./AppSettings";
 import { errorText } from "./Apps";
 import { RunNowDialog } from "./RunNowDialog";
@@ -19,7 +20,7 @@ import "../styles/workloads.css";
 
 const route = getRouteApi("/authed/apps/$project/$name");
 
-type Tab = "overview" | "logs" | "builds" | "settings";
+type Tab = "overview" | "metrics" | "logs" | "builds" | "settings";
 
 // phaseOf mirrors the server's summary (api_workloads.go appPhase) for the
 // full App object.
@@ -144,7 +145,7 @@ export function AppDetail() {
       )}
 
       <div className="tabs" role="tablist" aria-label="App">
-        {(["overview", "logs", "builds", "settings"] as const).map((t) => (
+        {(["overview", "metrics", "logs", "builds", "settings"] as const).map((t) => (
           <button key={t} role="tab" id={`tab-${t}`} aria-selected={tab === t} aria-controls={`panel-${t}`} onClick={() => showTab(t)}>
             {t[0]!.toUpperCase() + t.slice(1)}
           </button>
@@ -154,6 +155,7 @@ export function AppDetail() {
       <div className="tabpanel" role="tabpanel" id={`panel-${tab}`} aria-labelledby={`tab-${tab}`}>
         {tab === "overview" && <Overview app={app} canDeploy={can.deploy} onRollback={(rev) => setDialog({ rollback: rev })} />}
         {tab === "overview" && <Replicas app={app} onLogs={(pod) => { setLogPod(pod); showTab("logs"); }} />}
+        {tab === "metrics" && <AppMetrics app={app} />}
         {tab === "logs" && <AppLogs app={app} pod={logPod} />}
         {tab === "builds" && <AppBuilds app={app} canDeploy={can.deploy} selected={build} />}
         {tab === "settings" && (
