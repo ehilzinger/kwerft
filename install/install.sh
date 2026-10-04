@@ -259,15 +259,15 @@ detect_addresses() {
   default_if=$(ip -4 route show default 2>/dev/null | awk '{print $5; exit}' || true)
 
   if [[ -n "$PRIVATE_IFACE" ]]; then
-    PRIVATE_CIDR=$(ip -4 -o addr show dev "$PRIVATE_IFACE" 2>/dev/null | awk '{print $4; exit}')
+    PRIVATE_CIDR=$(ip -4 -o addr show dev "$PRIVATE_IFACE" 2>/dev/null | awk '{print $4; exit}' || true)
     [[ -n "$PRIVATE_CIDR" ]] || die $EXIT_PREFLIGHT "Interface $PRIVATE_IFACE has no IPv4 address"
   else
     # First RFC 1918 address that is not on the default-route interface:
     # a Hetzner Cloud Network (cloud) or a vSwitch VLAN interface (dedicated).
     PRIVATE_CIDR=$(ip -4 -o addr show scope global 2>/dev/null \
       | awk -v d="$default_if" '$2 != d {print $2, $4}' \
-      | awk '$2 ~ /^(10\.|172\.(1[6-9]|2[0-9]|3[01])\.|192\.168\.)/ {print $2; exit}')
-    PRIVATE_IFACE=$(ip -4 -o addr show scope global 2>/dev/null | awk -v c="$PRIVATE_CIDR" '$4 == c {print $2; exit}')
+      | awk '$2 ~ /^(10\.|172\.(1[6-9]|2[0-9]|3[01])\.|192\.168\.)/ {print $2; exit}' || true)
+    PRIVATE_IFACE=$(ip -4 -o addr show scope global 2>/dev/null | awk -v c="$PRIVATE_CIDR" '$4 == c {print $2; exit}' || true)
   fi
   PRIVATE_IP=${PRIVATE_CIDR%/*}
 }
@@ -662,8 +662,10 @@ stage_kwerft() {
 
 stage_handoff() {
   # DNS must point here before Let's Encrypt can issue the console certificate.
+  # getent exits 2 when the name does not resolve yet; that is the warning
+  # below, not a stage failure (errexit + pipefail would otherwise exit 2).
   local resolved
-  resolved=$(getent ahostsv4 "$DOMAIN" 2>/dev/null | awk '{print $1; exit}')
+  resolved=$(getent ahostsv4 "$DOMAIN" 2>/dev/null | awk '{print $1; exit}' || true)
   if [[ "$resolved" != "$PUBLIC_IP" ]]; then
     warn "$DOMAIN resolves to '${resolved:-nothing}', expected $PUBLIC_IP. The certificate is issued once DNS is fixed."
   fi
