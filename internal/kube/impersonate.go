@@ -59,6 +59,7 @@ type Impersonator struct {
 	mu         sync.Mutex
 	clients    map[identity]client.Client
 	clientsets map[identity]kubernetes.Interface
+	self       kubernetes.Interface // see Self
 }
 
 type identity struct{ email, role string }
@@ -171,4 +172,29 @@ func (i *Impersonator) RESTConfig(email, role string) (*rest.Config, error) {
 	cfg := rest.CopyConfig(i.cfg)
 	cfg.Impersonate = rest.ImpersonationConfig{UserName: UserName(email), Groups: []string{RoleGroup(role), Authenticated}}
 	return cfg, nil
+}
+
+// Self returns a clientset with the console's own identity, without
+// impersonation. It exists for reads users may not make themselves but are
+// entitled to see once Kubernetes has authorised an impersonated check: the
+// build pod's log in the kwerft-builds namespace, after the user's own get of
+// the Build succeeded (internal/server/api_builds.go). Never use it for a
+// write a user asks for.
+func (i *Impersonator) Self() (kubernetes.Interface, error) {
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	if i.self != nil {
+		return i.self, nil
+	}
+	base := i.http.Transport
+	if base == nil {
+		base = http.DefaultTransport
+	}
+	// No overall timeout: log streams last as long as their context.
+	cs, err := kubernetes.NewForConfigAndClient(i.cfg, &http.Client{Transport: base})
+	if err != nil {
+		return nil, err
+	}
+	i.self = cs
+	return cs, nil
 }

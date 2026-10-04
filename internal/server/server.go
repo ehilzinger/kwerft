@@ -72,6 +72,9 @@ type Config struct {
 	// settingsHook lets tests replace DNS lookups and the Hetzner API; see
 	// api_settings.go.
 	settingsHook func(*settingsAPI)
+	// buildsHook lets tests replace the Build lookup and the build pods'
+	// Kubernetes for the build log stream; see api_builds.go.
+	buildsHook func(*buildsAPI)
 }
 
 // New returns an http.Server ready to ListenAndServe.
