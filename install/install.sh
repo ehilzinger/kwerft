@@ -27,7 +27,7 @@ K3S_VERSION="v1.37.1+k3s1"
 HELM_VERSION="v4.3.0"
 CILIUM_VERSION="1.20.2"
 CERT_MANAGER_VERSION="v1.21.2"
-GATEWAY_API_VERSION="v1.6.2"
+GATEWAY_API_VERSION="v1.6.2"            # only used when k3s does not ship the CRDs
 TRAEFIK_CHART_VERSION="41.6.1"
 VM_STACK_CHART_VERSION="0.95.0"
 VLOGS_CHART_VERSION="0.13.10"
@@ -302,7 +302,8 @@ stage_preflight() {
 
   local mem_mb; mem_mb=$(awk '/MemTotal/ {print int($2/1024)}' /proc/meminfo)
   (( mem_mb >= 3500 )) || die $EXIT_PREFLIGHT "At least 4 GB RAM required, found ${mem_mb} MB"
-  (( mem_mb >= 7000 || LITE )) || warn "Less than 8 GB RAM: Git builds will queue one at a time. Consider --lite."
+  # The platform itself uses about 2.5 GB (measured on an idle 8 GB Cloud server).
+  (( mem_mb >= 7000 || LITE )) || warn "Less than 8 GB RAM: the platform uses about 2.5 GB, leaving little for apps and Git builds. Consider --lite or a larger server."
 
   local disk_gb; disk_gb=$(df -BG --output=avail / | tail -n1 | tr -dc '0-9')
   (( disk_gb >= 30 )) || die $EXIT_PREFLIGHT "At least 30 GB free disk on / required, found ${disk_gb} GB"
@@ -499,9 +500,32 @@ mark_system_namespace() {
 # ---------------------------------------------------------------------------
 # Stage: platform services
 # ---------------------------------------------------------------------------
-stage_ingress_tls() {
+# k3s >= 1.37 ships the Gateway API CRDs as its own packaged component
+# (gateway-api-crd) and upgrades them together with Kubernetes. Taking them
+# over would make k3s and Werft fight, so use k3s's copy when it is there and
+# install the pinned release only on k3s versions without it.
+gateway_api_from_k3s() {
+  [[ "$(kc get crd gateways.gateway.networking.k8s.io \
+    -o jsonpath='{.metadata.annotations.meta\.helm\.sh/release-name}' 2>/dev/null)" == "gateway-api-crd" ]]
+}
+
+ensure_gateway_api() {
+  # k3s deploys its packaged components shortly after the API is up.
+  retry 15 2 gateway_api_from_k3s || true
+  if gateway_api_from_k3s; then
+    kc get crd gateways.gateway.networking.k8s.io \
+      -o jsonpath='{.metadata.annotations.gateway\.networking\.k8s\.io/bundle-version}'
+    echo " (k3s)"
+    return 0
+  fi
   kc apply --server-side -f "https://github.com/kubernetes-sigs/gateway-api/releases/download/${GATEWAY_API_VERSION}/standard-install.yaml" \
     >>"$LOG_FILE" 2>&1 || die $EXIT_PLATFORM "Gateway API CRDs failed to install"
+  echo "$GATEWAY_API_VERSION"
+}
+
+stage_ingress_tls() {
+  local gateway_api
+  gateway_api=$(ensure_gateway_api)
 
   helmk repo add jetstack https://charts.jetstack.io --force-update >>"$LOG_FILE" 2>&1
   helmk upgrade --install cert-manager jetstack/cert-manager --version "$CERT_MANAGER_VERSION" \
@@ -560,7 +584,7 @@ EOF
     -f "$STATE_DIR/values/traefik.yaml" \
     >>"$LOG_FILE" 2>&1 || die $EXIT_PLATFORM "Traefik installation failed"
   mark_system_namespace traefik
-  echo "Traefik (Gateway API) · cert-manager · Gateway API $GATEWAY_API_VERSION"
+  echo "Traefik · cert-manager · Gateway API $gateway_api"
 }
 
 stage_observability() {
