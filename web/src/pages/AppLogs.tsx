@@ -1,17 +1,14 @@
+import { useQuery } from "@tanstack/react-query";
+import { LogViewer } from "../components/LogViewer";
+import { podsKey } from "../components/Replicas";
+import { appLogsPath, podsApi } from "../pods";
 import type { App } from "../workloads";
 
-// Placeholder for the Logs tab of App detail. Live logs (VictoriaLogs, per
-// replica, follow/search/download as in the blueprint) replace this
-// component; it receives the App so it can select pods by the
-// kwerft.dev/app=<name> label in namespace <project>.
-export function AppLogs({ app }: { app: App }) {
-  return (
-    <div className="empty">
-      <h2>Logs are coming soon</h2>
-      <p>
-        Live logs for every replica of <b>{app.metadata.name}</b>, with search and follow, arrive with log streaming. Until then:{" "}
-        <code>kubectl logs -n {app.metadata.namespace} -l kwerft.dev/app={app.metadata.name} -f</code>
-      </p>
-    </div>
-  );
+// The Logs tab of App detail: live logs of every replica (or one, when
+// opened from the Replicas table), streamed from Kubernetes as the user.
+export function AppLogs({ app, pod }: { app: App; pod?: string }) {
+  const project = app.metadata.namespace;
+  const name = app.metadata.name;
+  const replicas = useQuery({ queryKey: podsKey(project, name), queryFn: () => podsApi.appPods(project, name), refetchInterval: 10000 });
+  return <LogViewer path={appLogsPath(project, name)} replicas={replicas.data?.pods} pod={pod} downloadName={`${project}-${name}`} />;
 }

@@ -7,6 +7,7 @@
   --accent: #2F5BD0; --accent-2: #E6ECFB; --accent-ink: #FFFFFF;
   --c2: #0D857C;
   --ok: #1B7A4E; --ok-bg: #E2F2E9; --warn: #935C00; --warn-bg: #FBEFD6; --bad: #B4371F; --bad-bg: #FBE5DF;
+  --term-bg: #0E131B; --term-ink: #D3DAE6; --term-dim: #7A869B; --term-ok: #6CCB97; --term-acc: #93B2FF; --term-warn: #E9BE62;
   --display: "Bricolage Grotesque Variable", "IBM Plex Sans", system-ui, sans-serif;
   --sans: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
   --mono: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
@@ -20,5 +21,6 @@
     --accent: #7398F6; --accent-2: #1A2747; --accent-ink: #0B0F16;
     --c2: #3FC1B3;
     --ok: #5BC98E; --ok-bg: #11281D; --warn: #E3B04B; --warn-bg: #2B220F; --bad: #F27D69; --bad-bg: #331915;
+    --term-bg: #070A0F;
   }
 }
