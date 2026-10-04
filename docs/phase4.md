@@ -1,13 +1,14 @@
 # Phase 4 — Network & access: work split and contracts
 
-Exit criteria:
-1. A developer in one project cannot read another project's pods, logs,
-   secrets, metrics, alerts, builds or traffic — proven by an automated test
-   suite against a real API server.
-2. Every release tag passes a fresh install and an upgrade from the previous
-   release on a new Hetzner Cloud server.
+Exit criterion: a developer in one project cannot read another project's
+pods, logs, secrets, metrics, alerts, builds or traffic — proven by an
+automated test suite against a real API server.
 
-Five workers build this in parallel, each in its own branch. This file is
+Moved to Phase 5 (2026-10-04), with the rest of the Hetzner Cloud API work:
+the e2e install runs (formerly W5, exit criterion 2), the Hetzner Cloud
+Firewall sync and the Cloud API token setting (formerly part of W3).
+
+Four workers build this in parallel, each in its own branch. This file is
 the contract between them. Shared, already on main: `api/v1alpha1`
 (`ProjectSpec.Access` and `Members`, `TrafficRule`, `FirewallRule`).
 
@@ -17,9 +18,8 @@ the contract between them. Shared, already on main: `api/v1alpha1`
 |---|---|---|
 | W1 project access | `project_controller.go` RoleBindings, `charts/kwerft/templates/roles.yaml`, `internal/access`, a `projectScope` helper in `internal/server` that every list/search uses, project members API + UI, the isolation test suite (`internal/server/isolation_test.go`), admin reset of a member's second factors, a "require 2FA" setting | `api_workloads.go`, `api_metrics.go`, `api_logsearch.go`, `api_alerts.go`, `api_builds.go` (only to call `projectScope`), Access/Projects pages |
 | W2 traffic rules | `internal/controllers/traffic_*.go` (TrafficRule → CiliumNetworkPolicy; App and Project policies move to CiliumNetworkPolicy — `TODO(phase-4)` in `app_render.go`), Hubble flows client (`internal/hubble/`), `internal/server/api_traffic.go`; UI: Network › Traffic rules tab, "create allow rule" from drops | `app_render.go`, `project_controller.go` (policy only), `domain_controller.go` (plain-HTTP TODO), `install.sh` (Hubble relay/metrics if needed) |
-| W3 server firewall | `internal/controllers/firewall_*.go`, the node agent that applies host rules (`cmd/kwerft` subcommand or separate DaemonSet in the chart), Hetzner Cloud Firewall sync (`internal/hetzner` cloud firewall client), the Hetzner Cloud API token setting (write-only Secret `kwerft-hcloud-token`, like the DNS token), `internal/server/api_firewall.go`; UI: Network › Server firewall tab, Settings › Hetzner Cloud API card | `install.sh` (base rules become FirewallRules; the agent's nftables table), `roles.yaml` |
+| W3 server firewall | `internal/controllers/firewall_*.go`, the node agent that applies host rules (`cmd/kwerft` subcommand or separate DaemonSet in the chart), `internal/server/api_firewall.go`; UI: Network › Server firewall tab | `install.sh` (base rules become FirewallRules; the agent's nftables table), `roles.yaml` |
 | W4 identity | OIDC SSO (`internal/auth/oidc*`), API tokens (SQLite, hashed, scoped, expiring; `Authorization: Bearer` on `/api`), scoped kubeconfig download (a Kubernetes API proxy in the console that authenticates API tokens and impersonates the user), trusting `X-Real-IP` only from Traefik (`TODO(phase-4)` in `api.go`), data-key rotation; UI: Account › API tokens, Settings › Single sign-on | `api.go`, `server.go`, `internal/store` (new tables + migrations), Login page |
-| W5 e2e install runs | `.github/workflows/e2e.yml`, `hack/e2e/` (harness: create a Cloud server through the API, install, assert, upgrade, destroy; sweeper), `RELEASING.md` | `release.yml` (call e2e after publish), `install.sh` only if a flag is missing (e.g. Let's Encrypt staging) |
 
 ## Project access (W1)
 
@@ -64,9 +64,8 @@ the contract between them. Shared, already on main: `api/v1alpha1`
   client's current IP is refused; an applied change rolls back automatically
   unless the console confirms within 60 s (the browser that made the change
   confirms by calling back).
-- Hetzner Cloud Firewall sync for Cloud nodes (label/selector-based firewall
-  named after the cluster) when a Cloud API token is set; dedicated nodes
-  get host rules only.
+- Hetzner Cloud Firewall sync and the Cloud API token: Phase 5. Phase 4
+  applies host rules on every node, Cloud or dedicated.
 - **Never apply firewall changes to a real server during development.** The
   coordinator tries it on the test server with a console session open and a
   way back (Hetzner Cloud console) ready.
@@ -85,21 +84,18 @@ the contract between them. Shared, already on main: `api/v1alpha1`
   accepts API tokens and impersonates the token's user (same groups as the
   console). The downloaded kubeconfig names the console URL and a token.
 
-## e2e (W5)
+## e2e install runs (Phase 5)
 
-- Secret `HCLOUD_TOKEN` (a separate Hetzner test project, set by the user)
-  — without it the workflow skips with a notice.
-- Per release tag (after publish) and nightly: fresh install of the tag
-  and an upgrade from the previous release, on `cx22`-class servers labelled
-  `kwerft-e2e=true`, sslip.io hostname, Let's Encrypt **staging**; assert:
-  installer exit 0, console healthy, setup via `--config` owner, deploy an
-  image App and a Git build of a public repo, HTTPS answers, a Task runs,
-  metrics and logs arrive, an alert fires; then destroy. A sweeper deletes
-  e2e servers older than 3 h.
+Moved to Phase 5. The design stays: secret `HCLOUD_TOKEN` (a separate
+Hetzner test project); per release tag and nightly a fresh install and an
+upgrade from the previous release on `kwerft-e2e=true` Cloud servers with an
+sslip.io hostname and Let's Encrypt staging; assert install, console, an
+App on HTTPS, a Task, a Git build, metrics, logs and an alert; destroy; a
+sweeper removes servers older than 3 h.
 
 ## Verification
 
 Each worker: `make check` green (and `GOTOOLCHAIN=go1.26.0 go vet ./...`),
-envtest tests, fakes for external APIs (Hubble, Hetzner, OIDC provider).
+envtest tests, fakes for external APIs (Hubble, OIDC provider).
 Nobody touches the test server or any real infrastructure; the coordinator
 merges and verifies.
