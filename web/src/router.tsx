@@ -7,6 +7,11 @@ import { Apps } from "./pages/Apps";
 import { AppDetail } from "./pages/AppDetail";
 import { Deploy } from "./pages/Deploy";
 import { Planned } from "./pages/Planned";
+import { MonitoringAlerts } from "./pages/MonitoringAlerts";
+import { MonitoringMetrics } from "./pages/MonitoringMetrics";
+import { MonitoringLogs } from "./pages/MonitoringLogs";
+import { MonitoringRules } from "./pages/MonitoringRules";
+import { MonitoringChannels } from "./pages/MonitoringChannels";
 import { Setup } from "./pages/Setup";
 import { Login } from "./pages/Login";
 import { Account } from "./pages/Account";
@@ -108,7 +113,12 @@ const routeTree = root.addChildren([
     // Access › Shell recordings (owners and admins); /access itself is Members.
     createRoute({ getParentRoute: () => authed, path: "/access/recordings", component: AccessRecordings, validateSearch: recordingsSearch }),
     createRoute({ getParentRoute: () => authed, path: "/settings", component: Settings }),
-    planned("/monitoring", "Monitoring", "Phase 3", "Alerts with one-click fixes, top consumers, and alert rules routed to email, Slack, webhooks or ntfy."),
+    // Monitoring tabs (Phase 3): Alerts, Metrics, Logs, Alert rules, Channels.
+    createRoute({ getParentRoute: () => authed, path: "/monitoring", component: MonitoringAlerts }),
+    createRoute({ getParentRoute: () => authed, path: "/monitoring/metrics", component: MonitoringMetrics }),
+    createRoute({ getParentRoute: () => authed, path: "/monitoring/logs", component: MonitoringLogs }),
+    createRoute({ getParentRoute: () => authed, path: "/monitoring/rules", component: MonitoringRules }),
+    createRoute({ getParentRoute: () => authed, path: "/monitoring/channels", component: MonitoringChannels }),
     planned("/clusters", "Clusters & nodes", "Phase 5", "Add Hetzner Cloud servers through the API or join dedicated servers with one command; manage more clusters through an outbound agent."),
     // Access tabs; /access/recordings is the Recordings tab's own route.
     createRoute({ getParentRoute: () => authed, path: "/access", component: AccessMembers }),

@@ -16,6 +16,14 @@ import (
 func ForKind(kind schema.GroupVersionKind) interface{} {
 	switch kind {
 	// Group=kwerft.dev, Version=v1alpha1
+	case v1alpha1.SchemeGroupVersion.WithKind("AlertRule"):
+		return &apiv1alpha1.AlertRuleApplyConfiguration{}
+	case v1alpha1.SchemeGroupVersion.WithKind("AlertRuleSpec"):
+		return &apiv1alpha1.AlertRuleSpecApplyConfiguration{}
+	case v1alpha1.SchemeGroupVersion.WithKind("AlertRuleStatus"):
+		return &apiv1alpha1.AlertRuleStatusApplyConfiguration{}
+	case v1alpha1.SchemeGroupVersion.WithKind("AlertScope"):
+		return &apiv1alpha1.AlertScopeApplyConfiguration{}
 	case v1alpha1.SchemeGroupVersion.WithKind("AppSource"):
 		return &apiv1alpha1.AppSourceApplyConfiguration{}
 	case v1alpha1.SchemeGroupVersion.WithKind("AppVolume"):
@@ -40,6 +48,8 @@ func ForKind(kind schema.GroupVersionKind) interface{} {
 		return &apiv1alpha1.DomainSpecApplyConfiguration{}
 	case v1alpha1.SchemeGroupVersion.WithKind("DomainStatus"):
 		return &apiv1alpha1.DomainStatusApplyConfiguration{}
+	case v1alpha1.SchemeGroupVersion.WithKind("EmailSettings"):
+		return &apiv1alpha1.EmailSettingsApplyConfiguration{}
 	case v1alpha1.SchemeGroupVersion.WithKind("GitConnection"):
 		return &apiv1alpha1.GitConnectionApplyConfiguration{}
 	case v1alpha1.SchemeGroupVersion.WithKind("GitConnectionSpec"):
@@ -54,6 +64,14 @@ func ForKind(kind schema.GroupVersionKind) interface{} {
 		return &apiv1alpha1.GitWebhookStatusApplyConfiguration{}
 	case v1alpha1.SchemeGroupVersion.WithKind("ImageSource"):
 		return &apiv1alpha1.ImageSourceApplyConfiguration{}
+	case v1alpha1.SchemeGroupVersion.WithKind("NotificationChannel"):
+		return &apiv1alpha1.NotificationChannelApplyConfiguration{}
+	case v1alpha1.SchemeGroupVersion.WithKind("NotificationChannelSpec"):
+		return &apiv1alpha1.NotificationChannelSpecApplyConfiguration{}
+	case v1alpha1.SchemeGroupVersion.WithKind("NotificationChannelStatus"):
+		return &apiv1alpha1.NotificationChannelStatusApplyConfiguration{}
+	case v1alpha1.SchemeGroupVersion.WithKind("NtfySettings"):
+		return &apiv1alpha1.NtfySettingsApplyConfiguration{}
 	case v1alpha1.SchemeGroupVersion.WithKind("Project"):
 		return &apiv1alpha1.ProjectApplyConfiguration{}
 	case v1alpha1.SchemeGroupVersion.WithKind("ProjectSpec"):
@@ -68,6 +86,8 @@ func ForKind(kind schema.GroupVersionKind) interface{} {
 		return &apiv1alpha1.ScheduleSpecApplyConfiguration{}
 	case v1alpha1.SchemeGroupVersion.WithKind("ScheduleStatus"):
 		return &apiv1alpha1.ScheduleStatusApplyConfiguration{}
+	case v1alpha1.SchemeGroupVersion.WithKind("SlackSettings"):
+		return &apiv1alpha1.SlackSettingsApplyConfiguration{}
 	case v1alpha1.SchemeGroupVersion.WithKind("TaskOnSuccess"):
 		return &apiv1alpha1.TaskOnSuccessApplyConfiguration{}
 	case v1alpha1.SchemeGroupVersion.WithKind("TaskSpec"):

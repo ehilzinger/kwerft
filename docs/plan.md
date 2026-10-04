@@ -125,7 +125,8 @@ Exit codes: 0 ok · 2 usage · 10 preflight · 20 network/DNS · 30 Kubernetes �
 | `TrafficRule` | CiliumNetworkPolicy, with Hubble hit/drop counts | Phase 4 |
 | `FirewallRule` | Cilium host policy + Hetzner Cloud Firewall | Phase 4 |
 | `NodePool`, `Cluster` | Hetzner Cloud servers + cloud-init join; agent for remote clusters | Phase 5 |
-| `BackupPlan`, `AlertRule` | Velero Schedule; VMRule + Alertmanager route | Phases 3, 6 |
+| `AlertRule`, `NotificationChannel` (cluster-scoped) | VMRule + Alertmanager route and receivers | types ✔, Phase 3 |
+| `BackupPlan` | Velero Schedule | Phase 6 |
 | `Environment` (name tentative) | Per-target overrides (hostnames, storage class, quota, replicas) applied when a Project is pushed to another instance | Phase 7 |
 
 ### Jobs (`Task`, `Schedule`)
@@ -219,6 +220,17 @@ Exit codes: 0 ok · 2 usage · 10 preflight · 20 network/DNS · 30 Kubernetes �
 - [x] Cut the first release and do the one-time GitHub setup (packages public, install repo, token): v0.1.0-rc.1/rc.2, then **v0.1.0** (2026-10-04, the first stable: top-level `install.sh` in kwerft-install, image `:latest`)
 - [x] Exit criterion on a fresh Cloud server from the published release (rc.2, 2026-10-04): app on HTTPS in 7:06; a schedule restarted an app on success
 - [ ] Not yet: admin reset of a member's second factors, data-key rotation, a per-org "require 2FA" setting (Phase 4); shared storage for pending logins before running more than one replica
+
+### Phase 3 checklist
+
+Work split and contracts: `docs/phase3.md`.
+
+- [x] Types: `AlertRule`, `NotificationChannel`; `internal/observability`; Monitoring page skeleton
+- [ ] W1 Metrics: Kwerft's own metrics, recording rules, Traefik metrics, metrics API confined to projects, overview and per-app charts
+- [ ] W2 Logs: log search over VictoriaLogs confined to projects, history in the App Logs tab, Task/Build logs after their pod is gone
+- [ ] W3 Alerting: AlertRule → VMRule, channels (Slack, email, webhook, ntfy) → Alertmanager, default rules, alerts and silences API
+- [ ] W4 Alerting UI: alerts, rules, channels; "needs attention" on Overview
+- [ ] Exit criterion on the test server: a crash-looping app alerts in Slack within 2 minutes, with a link to its logs
 
 ### Phase 2 checklist
 
