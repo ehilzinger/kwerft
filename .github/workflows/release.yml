@@ -1,0 +1,205 @@
+# Cuts a release from a tag: v0.2.0 (stable) or v0.2.0-rc.1 (prerelease).
+# Run it by hand (workflow_dispatch) to rehearse: everything is built and
+# uploaded as a workflow artifact, nothing is published. See RELEASING.md.
+#
+# The steps themselves live in hack/release.sh, so `make release-dry-run`
+# exercises the same code on a laptop.
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Version to rehearse; nothing is published (e.g. 0.2.0-rc.1)
+        required: true
+        default: 0.0.0-dryrun
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  checks:
+    uses: ./.github/workflows/ci.yml
+
+  # Builds every artifact without credentials: stamped scripts, chart,
+  # per-platform image tarballs and SBOMs.
+  build:
+    needs: checks
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.meta.outputs.version }}
+      tag: ${{ steps.meta.outputs.tag }}
+      prerelease: ${{ steps.meta.outputs.prerelease }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: meta
+        env:
+          REF: ${{ github.event_name == 'push' && github.ref_name || inputs.version }}
+        run: hack/release.sh meta "$REF" | tee -a "$GITHUB_OUTPUT"
+      - id: pins
+        run: sed -n -E 's/^(HELM_VERSION)="([^"]*)".*/\1=\2/p' install/install.sh | tee -a "$GITHUB_OUTPUT"
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: actions/setup-node@v4
+        with:
+          node-version: lts/*
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - uses: azure/setup-helm@v4
+        with:
+          version: ${{ steps.pins.outputs.HELM_VERSION }}
+      - run: make web
+      - run: hack/release.sh dry-run "$VERSION" dist/release
+        env:
+          VERSION: ${{ steps.meta.outputs.version }}
+      - run: cat dist/release/NOTES.md >>"$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-${{ steps.meta.outputs.version }}
+          path: dist/release
+          retention-days: 14
+      - uses: actions/upload-artifact@v4
+        with:
+          name: web-dist
+          path: web/dist
+          retention-days: 1
+
+  # Tag pushes only: image and chart to GHCR, then the GitHub Release.
+  publish:
+    needs: build
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write   # the GitHub Release
+      packages: write   # ghcr.io/ehilzinger/kwerft and ghcr.io/ehilzinger/charts/kwerft
+    outputs:
+      image: ${{ steps.image.outputs.ref }}
+      chart: ${{ steps.chart.outputs.ref }}
+    env:
+      VERSION: ${{ needs.build.outputs.version }}
+      TAG: ${{ needs.build.outputs.tag }}
+      PRERELEASE: ${{ needs.build.outputs.prerelease }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: pins
+        run: sed -n -E 's/^(HELM_VERSION)="([^"]*)".*/\1=\2/p' install/install.sh | tee -a "$GITHUB_OUTPUT"
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: azure/setup-helm@v4
+        with:
+          version: ${{ steps.pins.outputs.HELM_VERSION }}
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-${{ needs.build.outputs.version }}
+          path: dist/release
+      - uses: actions/download-artifact@v4
+        with:
+          name: web-dist
+          path: web/dist
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Log Helm in to ghcr.io
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: helm registry login ghcr.io --username "$GITHUB_ACTOR" --password-stdin <<<"$GITHUB_TOKEN"
+      - id: image
+        name: Push the image (linux/amd64 + linux/arm64)
+        run: echo "ref=$(hack/release.sh push-image "$VERSION" dist/release)" >>"$GITHUB_OUTPUT"
+      - id: chart
+        name: Push the chart
+        run: echo "ref=$(hack/release.sh push-chart "$VERSION" dist/release)" >>"$GITHUB_OUTPUT"
+      - name: Create the GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          IMAGE: ${{ steps.image.outputs.ref }}
+          CHART: ${{ steps.chart.outputs.ref }}
+        run: |
+          hack/release.sh notes "$VERSION" dist/release >dist/release/NOTES.md
+          assets=(dist/release/install.sh dist/release/join.sh dist/release/SHA256SUMS
+                  "dist/release/kwerft-$VERSION.tgz" dist/release/sbom/*.spdx.json)
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            # A re-run of this workflow: refresh the files, keep the notes.
+            gh release upload "$TAG" "${assets[@]}" --clobber
+          else
+            flags=(--title "Kwerft $TAG" --notes-file dist/release/NOTES.md --generate-notes --verify-tag)
+            if [[ "$PRERELEASE" == true ]]; then flags+=(--prerelease); else flags+=(--latest); fi
+            gh release create "$TAG" "${flags[@]}" "${assets[@]}"
+          fi
+          {
+            echo "Released $TAG"
+            echo
+            echo "- Image: \`$IMAGE\`"
+            echo "- Chart: \`$CHART\`"
+          } >>"$GITHUB_STEP_SUMMARY"
+
+  # Opt-in (repository variable SIGN_RELEASES=true): keyless cosign signatures.
+  # Keyless signing records this repository's name, the workflow path and the
+  # commit in the public Rekor transparency log; see RELEASING.md.
+  sign:
+    needs: publish
+    if: github.event_name == 'push' && vars.SIGN_RELEASES == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write   # the OIDC token Fulcio turns into a signing certificate
+      packages: write   # signatures are stored next to the image and chart
+    steps:
+      - uses: sigstore/cosign-installer@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - env:
+          IMAGE: ${{ needs.publish.outputs.image }}
+          CHART: ${{ needs.publish.outputs.chart }}
+        run: |
+          cosign sign --yes "$IMAGE"
+          cosign sign --yes "$CHART"
+
+  # The install script is served from a separate public repository because this
+  # one is private. Needs the INSTALL_REPO_TOKEN secret; skipped without it.
+  install-repo:
+    needs: [build, publish]
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    env:
+      VERSION: ${{ needs.build.outputs.version }}
+      INSTALL_REPO: ${{ vars.INSTALL_REPO || 'ehilzinger/kwerft-install' }}
+      HAS_TOKEN: ${{ secrets.INSTALL_REPO_TOKEN != '' }}
+    steps:
+      - name: Skip without INSTALL_REPO_TOKEN
+        if: env.HAS_TOKEN != 'true'
+        run: |
+          echo "::notice title=Install repository not updated::The INSTALL_REPO_TOKEN secret is not set, so $INSTALL_REPO was not updated with v$VERSION. The stamped scripts are attached to the GitHub Release. One-time setup: RELEASING.md."
+      - uses: actions/checkout@v4
+        if: env.HAS_TOKEN == 'true'
+      - uses: actions/checkout@v4
+        if: env.HAS_TOKEN == 'true'
+        with:
+          repository: ${{ env.INSTALL_REPO }}
+          token: ${{ secrets.INSTALL_REPO_TOKEN }}
+          path: install-repo
+      - uses: actions/download-artifact@v4
+        if: env.HAS_TOKEN == 'true'
+        with:
+          name: release-${{ needs.build.outputs.version }}
+          path: dist/release
+      - name: Publish the stamped scripts
+        if: env.HAS_TOKEN == 'true'
+        run: |
+          git -C install-repo config user.name "github-actions[bot]"
+          git -C install-repo config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          hack/release.sh install-repo install-repo "$VERSION" dist/release
+          git -C install-repo push origin HEAD:main
+          echo "Install script: https://raw.githubusercontent.com/$INSTALL_REPO/main/v$VERSION/install.sh" >>"$GITHUB_STEP_SUMMARY"

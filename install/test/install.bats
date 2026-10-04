@@ -179,3 +179,66 @@ secret_expires() { printf '%s' "$1" | base64; }
   [ "$status" -eq 10 ]
   [[ "$(<"$BATS_TEST_TMPDIR/out")" == *"Interface eth9 has no IPv4 address"* ]]
 }
+
+@test "--version accepts a leading v" {
+  run "$SCRIPT" --dry-run --platform cloud --domain ops.example.com --version v0.2.0
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"Kwerft installer 0.2.0 "* ]]
+}
+
+@test "--version rejects anything that is not a release version" {
+  run "$SCRIPT" --dry-run --platform cloud --version latest
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"--version must look like 0.2.0"* ]]
+}
+
+# check_release asks the registry through oci_manifest_status; these tests stub it.
+release_env() {
+  KWERFT_SOURCED=1 source "$SCRIPT"
+  KWERFT_CHART="oci://ghcr.io/ehilzinger/charts/kwerft"   # as when piped from curl
+  KWERFT_VERSION="0.2.0"; IMAGE=""
+  : >"$BATS_TEST_TMPDIR/lookups"
+}
+lookups() { cat "$BATS_TEST_TMPDIR/lookups"; }
+
+@test "check_release: a published release passes; chart and image are both checked" {
+  release_env
+  oci_manifest_status() { echo "$*" >>"$BATS_TEST_TMPDIR/lookups"; echo 200; }
+  check_release
+  [ "$(lookups)" = "$(printf '%s\n' 'ghcr.io ehilzinger/charts/kwerft 0.2.0' 'ghcr.io ehilzinger/kwerft 0.2.0')" ]
+}
+
+@test "check_release: an unpublished version exits 50" {
+  release_env
+  oci_manifest_status() { echo 404; }
+  run check_release
+  [ "$status" -eq 50 ]
+  [[ "$output" == *"Kwerft 0.2.0 is not published"* ]]
+}
+
+@test "check_release: a private package exits 50 and says so" {
+  release_env
+  oci_manifest_status() { if [[ "$2" == ehilzinger/kwerft ]]; then echo 403; else echo 200; fi; }
+  run check_release
+  [ "$status" -eq 50 ]
+  [[ "$output" == *"Cannot pull ghcr.io/ehilzinger/kwerft:0.2.0 anonymously"* ]]
+  [[ "$output" == *"still private"* ]]
+}
+
+@test "check_release: an unreachable registry is a network error" {
+  release_env
+  oci_manifest_status() { echo 000; }
+  run check_release
+  [ "$status" -eq 20 ]
+}
+
+@test "check_release: --image skips the image, a checkout skips everything" {
+  release_env
+  oci_manifest_status() { echo "$*" >>"$BATS_TEST_TMPDIR/lookups"; echo 200; }
+  IMAGE="registry.local:5000/kwerft:dev-1"
+  check_release
+  [ "$(lookups)" = "ghcr.io ehilzinger/charts/kwerft 0.2.0" ]
+  : >"$BATS_TEST_TMPDIR/lookups"; KWERFT_CHART=""   # chart_ref finds ../charts/kwerft
+  check_release
+  [ -z "$(lookups)" ]
+}
