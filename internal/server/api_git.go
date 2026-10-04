@@ -605,8 +605,10 @@ func (g *gitAPI) delete(w http.ResponseWriter, r *http.Request) {
 		g.internalError(w, r, err)
 		return
 	}
+	// Straight from the API server, not the cache: an App created a moment
+	// ago must still stop the delete.
 	var apps kwerftv1.AppList
-	if err := g.api.list(ctx, c, &apps); err != nil {
+	if err := c.List(ctx, &apps); err != nil {
 		g.kubeError(w, r, p, "git.connection_delete", name, "Apps not found.", err)
 		return
 	}
