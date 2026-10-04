@@ -154,10 +154,13 @@ type AppSpec struct {
 
 // AppRevision records one rollout for history and rollback.
 type AppRevision struct {
-	Number int64       `json:"number"`
-	Image  string      `json:"image"`
-	Build  string      `json:"build,omitempty"`
-	Time   metav1.Time `json:"time"`
+	Number int64  `json:"number"`
+	Image  string `json:"image"`
+	// Generation is the App spec generation this revision rolled out.
+	Generation int64 `json:"generation"`
+	// +optional
+	Build string      `json:"build,omitempty"`
+	Time  metav1.Time `json:"time"`
 }
 
 // AppStatus is written by the App reconciler.

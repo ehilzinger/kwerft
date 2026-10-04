@@ -55,7 +55,7 @@ Requirements: Go 1.26+, Node 24+. Optional: shellcheck, bats, helm, docker.
 
 ```bash
 make web        # build the UI into web/dist
-make test       # Go tests
+make test       # Go tests, incl. controllers against a real API server (envtest)
 make lint       # gofmt, go vet, TypeScript
 make generate   # regenerate deepcopy + CRDs after editing api/v1alpha1
 make check      # everything CI runs

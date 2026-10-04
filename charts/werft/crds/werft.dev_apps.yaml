@@ -504,6 +504,11 @@ spec:
                   properties:
                     build:
                       type: string
+                    generation:
+                      description: Generation is the App spec generation this revision
+                        rolled out.
+                      format: int64
+                      type: integer
                     image:
                       type: string
                     number:
@@ -513,6 +518,7 @@ spec:
                       format: date-time
                       type: string
                   required:
+                  - generation
                   - image
                   - number
                   - time

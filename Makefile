@@ -6,6 +6,9 @@ COMMIT        ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)
 LDFLAGS       := -s -w -X github.com/ehilzinger/werft/internal/version.Version=$(VERSION) -X github.com/ehilzinger/werft/internal/version.Commit=$(COMMIT)
 CONTROLLER_GEN = $(GO) run sigs.k8s.io/controller-tools/cmd/controller-gen@v0.20.1
 IMAGE         ?= ghcr.io/ehilzinger/werft:$(VERSION)
+# Kubernetes API server + etcd binaries for controller integration tests.
+ENVTEST_K8S   ?= 1.37.0
+SETUP_ENVTEST  = $(GO) run sigs.k8s.io/controller-runtime/tools/setup-envtest@v0.25.2
 
 .PHONY: help
 help: ## Show this help
@@ -43,8 +46,8 @@ verify-generate: generate ## Fail if generated files are out of date
 ## --- checks ------------------------------------------------------------
 
 .PHONY: test
-test: dist-stub ## Run Go tests
-	$(GO) test ./...
+test: dist-stub ## Run Go tests, incl. controller tests against a real API server
+	KUBEBUILDER_ASSETS="$$($(SETUP_ENVTEST) use $(ENVTEST_K8S) --bin-dir $(CURDIR)/bin/envtest -p path)" $(GO) test ./...
 
 .PHONY: lint
 lint: dist-stub ## gofmt, go vet, web typecheck
@@ -69,7 +72,7 @@ check: lint test test-install helm-lint ## Everything CI runs
 
 .PHONY: dev-api
 dev-api: dist-stub ## Run the API on :8080 (pair with `make dev-web`)
-	$(GO) run ./cmd/werft --listen=127.0.0.1:8080 --console-domain=localhost --platform=cloud
+	$(GO) run ./cmd/werft --listen=127.0.0.1:8080 --console-domain=localhost --platform=cloud --controllers=false
 
 .PHONY: dev-server
 dev-server: ## Install/upgrade on a test server: make dev-server HOST=root@1.2.3.4 ARGS="--domain ops.example.com"

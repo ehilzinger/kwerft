@@ -4,7 +4,7 @@
     {
       "name": "werft",
       "runtimeExecutable": "go",
-      "runtimeArgs": ["run", "./cmd/werft", "--listen=:8080", "--console-domain=localhost", "--platform=cloud"],
+      "runtimeArgs": ["run", "./cmd/werft", "--listen=:8080", "--console-domain=localhost", "--platform=cloud", "--controllers=false"],
       "port": 8080
     }
   ]

@@ -21,6 +21,9 @@ type Config struct {
 	Platform      string // "cloud" or "dedicated"
 	UI            fs.FS  // built web assets; index.html at the root
 	Logger        *slog.Logger
+	// Ready reports whether the server can serve real traffic (controller
+	// caches synced). Nil means always ready.
+	Ready func() bool
 }
 
 // New returns an http.Server ready to ListenAndServe.
@@ -43,8 +46,11 @@ func Handler(cfg Config) http.Handler {
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	})
-	// TODO(phase-1): report not-ready until informer caches have synced.
 	mux.HandleFunc("GET /readyz", func(w http.ResponseWriter, _ *http.Request) {
+		if cfg.Ready != nil && !cfg.Ready() {
+			http.Error(w, "caches not synced", http.StatusServiceUnavailable)
+			return
+		}
 		w.WriteHeader(http.StatusOK)
 	})
 

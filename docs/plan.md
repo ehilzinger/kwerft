@@ -89,8 +89,8 @@ Exit codes: 0 ok · 2 usage · 10 preflight · 20 network/DNS · 30 Kubernetes �
 
 | Resource | Becomes | Status |
 |---|---|---|
-| `Project` (cluster-scoped) | Namespace, quota, Pod Security level, RoleBindings, default-deny policy | types ✔ |
-| `App` | Deployment/StatefulSet, Service, HTTPRoute, PVCs, HPA, CiliumNetworkPolicy; source = image **or** Git | types ✔ |
+| `Project` (cluster-scoped) | Namespace, quota, Pod Security level, default-deny policy; RoleBindings in Phase 4 | reconciler ✔ |
+| `App` | Deployment, or StatefulSet when it has volumes; Service, HTTPRoute per public port, NetworkPolicy; source = image **or** Git | reconciler ✔ (HPA later) |
 | `Build` | Job running rootless BuildKit; pushes to zot; success creates an App revision | types ✔ |
 | `GitConnection` | GitHub App / GitLab / Gitea / deploy key credentials and webhooks | Phase 2 |
 | `Domain` | Gateway listener, Certificate, DNS record | Phase 1 |
@@ -130,6 +130,7 @@ Exit codes: 0 ok · 2 usage · 10 preflight · 20 network/DNS · 30 Kubernetes �
 - [x] Go server: health, version, SPA serving, security headers
 - [x] React console shell with design tokens from the blueprint
 - [x] Dev deploy without Docker or a registry: `make dev-server HOST=root@<ip>` (ko image + `--image-archive`)
+- [x] Project and App reconcilers with envtest integration tests (started early from Phase 1)
 - [ ] Run the installer on a Hetzner Cloud server and a dedicated server; fix chart values against the pinned versions
 - [ ] Measure the memory budget; decide on `--lite` defaults
 - [ ] e2e harness: create Cloud server via API, install, assert, destroy (+ nightly sweeper)

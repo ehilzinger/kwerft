@@ -490,6 +490,12 @@ stage_network() {
   echo "Cilium $CILIUM_VERSION · kube-proxy replacement · WireGuard$([[ $hubble == true ]] && echo ' · Hubble')"
 }
 
+# Pods in namespaces labelled werft.dev/system may reach every app (each App's
+# NetworkPolicy allows them): ingress, monitoring and the console itself.
+mark_system_namespace() {
+  kc label namespace "$1" werft.dev/system=true --overwrite >/dev/null
+}
+
 # ---------------------------------------------------------------------------
 # Stage: platform services
 # ---------------------------------------------------------------------------
@@ -553,6 +559,7 @@ EOF
     --namespace traefik --create-namespace --wait --timeout 10m \
     -f "$STATE_DIR/values/traefik.yaml" \
     >>"$LOG_FILE" 2>&1 || die $EXIT_PLATFORM "Traefik installation failed"
+  mark_system_namespace traefik
   echo "Traefik (Gateway API) · cert-manager · Gateway API $GATEWAY_API_VERSION"
 }
 
@@ -571,6 +578,7 @@ stage_observability() {
     --set server.retentionPeriod="$log_retention" \
     --set vector.enabled=true \
     >>"$LOG_FILE" 2>&1 || die $EXIT_PLATFORM "VictoriaLogs installation failed"
+  mark_system_namespace werft-observability
   echo "VictoriaMetrics ($retention) · VictoriaLogs ($log_retention) · kube-state-metrics · node-exporter"
 }
 
@@ -590,6 +598,7 @@ chart_ref() {
 
 stage_werft() {
   kc create namespace werft-system --dry-run=client -o yaml | kc apply -f - >/dev/null
+  mark_system_namespace werft-system
   if [[ -n "$CONFIG_FILE" ]]; then
     kc -n werft-system create secret generic werft-bootstrap \
       --from-file=config.yaml="$CONFIG_FILE" --dry-run=client -o yaml | kc apply -f - >/dev/null
@@ -598,15 +607,6 @@ stage_werft() {
   local ref version_args=() image_args=()
   ref=$(chart_ref)
   [[ "$ref" == oci://* ]] && version_args=(--version "$WERFT_VERSION")
-  helmk upgrade --install werft "$ref" ${version_args[@]+"${version_args[@]}"} \
-    --namespace werft-system --wait --timeout 10m \
-    --set console.domain="$DOMAIN" \
-    --set acme.email="$ACME_EMAIL" \
-    --set platform="$PLATFORM" \
-    "${image_args[@]}" \
-    >>"$LOG_FILE" 2>&1 || die $EXIT_WERFT "Werft installation failed (chart: $ref)"
-  printf '%s\n' "$DOMAIN" >"$DOMAIN_FILE"
-  echo "control plane ${IMAGE:-$WERFT_VERSION} ready"
   if [[ -n "$IMAGE" ]]; then
     if [[ -n "$IMAGE_ARCHIVE" ]]; then
       k3s ctr --namespace k8s.io images import "$IMAGE_ARCHIVE" >>"$LOG_FILE" 2>&1 \
@@ -617,6 +617,15 @@ stage_werft() {
   else
     image_args=(--set image.tag="$WERFT_VERSION")
   fi
+  helmk upgrade --install werft "$ref" ${version_args[@]+"${version_args[@]}"} \
+    --namespace werft-system --wait --timeout 10m \
+    --set console.domain="$DOMAIN" \
+    --set acme.email="$ACME_EMAIL" \
+    --set platform="$PLATFORM" \
+    "${image_args[@]}" \
+    >>"$LOG_FILE" 2>&1 || die $EXIT_WERFT "Werft installation failed (chart: $ref)"
+  printf '%s\n' "$DOMAIN" >"$DOMAIN_FILE"
+  echo "control plane ${IMAGE:-$WERFT_VERSION} ready"
 }
 
 stage_handoff() {

@@ -33,6 +33,18 @@ func TestHealth(t *testing.T) {
 	}
 }
 
+func TestReadyzWaitsForCaches(t *testing.T) {
+	ready := false
+	h := Handler(Config{UI: fstest.MapFS{}, Logger: slog.New(slog.DiscardHandler), Ready: func() bool { return ready }})
+	if got := get(t, h, "/readyz").Code; got != http.StatusServiceUnavailable {
+		t.Errorf("before sync: status %d, want 503", got)
+	}
+	ready = true
+	if got := get(t, h, "/readyz").Code; got != http.StatusOK {
+		t.Errorf("after sync: status %d, want 200", got)
+	}
+}
+
 func TestVersion(t *testing.T) {
 	rec := get(t, testHandler(), "/api/v1/version")
 	if rec.Code != http.StatusOK {
