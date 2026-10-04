@@ -13,13 +13,26 @@ type Props = {
 // backdrop come from the browser. Mount it to open it.
 export function Dialog({ title, onClose, children, actions, onSubmit }: Props) {
   const ref = useRef<HTMLDialogElement>(null);
+  // Set while the dialog is closed by unmounting rather than by the user. The
+  // close event arrives later (it is queued), and in development StrictMode
+  // mounts twice, so that event must not close the re-opened dialog.
+  const unmounting = useRef(false);
   useEffect(() => {
     const d = ref.current;
     if (d && !d.open) d.showModal();
-    return () => d?.close();
+    return () => {
+      if (d?.open) {
+        unmounting.current = true;
+        d.close();
+      }
+    };
   }, []);
   return (
-    <dialog ref={ref} className="dlg" aria-labelledby="dlg-title" onClose={onClose}>
+    <dialog ref={ref} className="dlg" aria-labelledby="dlg-title"
+      onClose={() => {
+        if (unmounting.current) unmounting.current = false;
+        else onClose();
+      }}>
       <form
         onSubmit={(e) => {
           e.preventDefault();

@@ -124,9 +124,6 @@ textarea.input { resize: vertical; min-height: 72px; }
 .loading { color: var(--muted); padding: 24px 0; }
 
 @media (max-width: 760px) {
-  /* The shell's single column must not grow to the nav's width (min-content),
-     or every page scrolls sideways on a phone. Belongs in app.css. */
-  .shell { grid-template-columns: minmax(0, 1fr); }
   .g2, .g2e, .fields { grid-template-columns: 1fr; }
   .choice, .choice.three { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .steps { grid-template-columns: repeat(4, minmax(72px, 1fr)); overflow-x: auto; }
