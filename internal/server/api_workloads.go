@@ -220,9 +220,6 @@ func (a *api) projectList(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, out)
 }
 
-// Namespaces a project must never take over.
-var reservedProjects = []string{"default", "kwerft-system", "cert-manager", "traefik", "monitoring"}
-
 func (a *api) projectCreate(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Name        string `json:"name"`
@@ -236,9 +233,8 @@ func (a *api) projectCreate(w http.ResponseWriter, r *http.Request) {
 		invalid(w, "name", "Use lowercase letters, digits and dashes, starting and ending with a letter or digit (at most 63).")
 		return
 	}
-	// kwerft-* covers the platform's own namespaces (system, builds,
-	// observability) and any it adds later.
-	if slices.Contains(reservedProjects, req.Name) || strings.HasPrefix(req.Name, "kube-") || strings.HasPrefix(req.Name, "kwerft-") {
+	// The CRD refuses these too; checking here names the field.
+	if kwerftv1.IsReservedProjectName(req.Name) {
 		invalid(w, "name", fmt.Sprintf("%q is reserved for the platform. Pick another name.", req.Name))
 		return
 	}

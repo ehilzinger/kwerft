@@ -1,9 +1,24 @@
 package v1alpha1
 
 import (
+	"slices"
+	"strings"
+
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
+
+// ReservedProjectNames are namespaces a Project must never take over, on top
+// of every kube-* and kwerft-* name (the platform's own namespaces: system,
+// builds, observability and any it adds later). Keep in sync with the
+// XValidation rule on Project.
+var ReservedProjectNames = []string{"default", "cert-manager", "traefik", "monitoring"}
+
+// IsReservedProjectName reports whether name belongs to the platform and so
+// cannot be a Project.
+func IsReservedProjectName(name string) bool {
+	return slices.Contains(ReservedProjectNames, name) || strings.HasPrefix(name, "kube-") || strings.HasPrefix(name, "kwerft-")
+}
 
 // ProjectSpec describes a group of apps that share a namespace, quotas and
 // access rules.
@@ -42,6 +57,7 @@ type ProjectStatus struct {
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
 // +kubebuilder:resource:scope=Cluster,shortName=proj
+// +kubebuilder:validation:XValidation:rule="!(self.metadata.name in ['default', 'cert-manager', 'traefik', 'monitoring']) && !self.metadata.name.startsWith('kube-') && !self.metadata.name.startsWith('kwerft-')",message="this name is reserved for the platform"
 // +kubebuilder:printcolumn:name="Display name",type=string,JSONPath=`.spec.displayName`
 // +kubebuilder:printcolumn:name="Ready",type=string,JSONPath=`.status.conditions[?(@.type=="Ready")].status`
 // +kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`

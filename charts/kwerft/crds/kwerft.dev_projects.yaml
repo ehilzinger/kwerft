@@ -146,6 +146,10 @@ spec:
                 type: integer
             type: object
         type: object
+        x-kubernetes-validations:
+        - message: this name is reserved for the platform
+          rule: '!(self.metadata.name in [''default'', ''cert-manager'', ''traefik'',
+            ''monitoring'']) && !self.metadata.name.startsWith(''kube-'') && !self.metadata.name.startsWith(''kwerft-'')'
     served: true
     storage: true
     subresources:

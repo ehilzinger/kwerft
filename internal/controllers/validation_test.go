@@ -56,6 +56,31 @@ func TestCELRejectsInvalidSpecs(t *testing.T) {
 		}
 	})
 
+	t.Run("project names reserved for the platform", func(t *testing.T) {
+		// kubectl must not get around the console's check: a Project would
+		// otherwise label a platform namespace and lock it down.
+		names := append([]string{"kube-system", "kwerft-system", "kwerft-builds", "kwerft-observability", "kwerft-anything"}, kwerftv1.ReservedProjectNames...)
+		for _, name := range names {
+			if !kwerftv1.IsReservedProjectName(name) {
+				t.Errorf("IsReservedProjectName(%q) = false", name)
+			}
+			expectInvalid(t, k8s.Create(ctx, &kwerftv1.Project{ObjectMeta: metav1.ObjectMeta{Name: name}}), "reserved for the platform")
+		}
+	})
+	t.Run("project names that only look like platform ones", func(t *testing.T) {
+		for _, name := range []string{"kwerft", "my-kwerft-app", "kubernetes", "defaults"} {
+			if kwerftv1.IsReservedProjectName(name) {
+				t.Errorf("IsReservedProjectName(%q) = true", name)
+			}
+			p := &kwerftv1.Project{ObjectMeta: metav1.ObjectMeta{Name: name}}
+			if err := k8s.Create(ctx, p); err != nil {
+				t.Errorf("project %q: %v", name, err)
+				continue
+			}
+			_ = k8s.Delete(ctx, p)
+		}
+	})
+
 	t.Run("task without source or fromApp", func(t *testing.T) {
 		expectInvalid(t, k8s.Create(ctx, task("nothing", kwerftv1.TaskSpec{})), "set source or fromApp")
 	})

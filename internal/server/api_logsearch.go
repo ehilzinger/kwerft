@@ -8,7 +8,6 @@ import (
 	"net/http"
 	"slices"
 	"strconv"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -82,7 +81,7 @@ func (a *api) registerLogSearch(mux *http.ServeMux) {
 
 // platformNamespace: never part of a project scope, whatever its labels say.
 func platformNamespace(ns string) bool {
-	return strings.HasPrefix(ns, "kube-") || strings.HasPrefix(ns, "kwerft-") || slices.Contains(reservedProjects, ns)
+	return kwerftv1.IsReservedProjectName(ns)
 }
 
 func (s *logSearchAPI) kubeProjectNamespaces(ctx context.Context, pr *principal) ([]string, error) {
