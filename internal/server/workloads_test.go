@@ -454,6 +454,9 @@ func TestAppCreateUpdateRollback(t *testing.T) {
 	if code := c.dev.do(t, "PUT", path, map[string]any{"spec": spec, "resourceVersion": v1.ResourceVersion}, &e); code != http.StatusConflict {
 		t.Errorf("update with a stale resourceVersion: %d %+v, want 409", code, e)
 	}
+	if code := c.dev.do(t, "PUT", path, map[string]any{"spec": spec, "generation": v1.Generation}, &e); code != http.StatusConflict {
+		t.Errorf("update of a stale generation: %d %+v, want 409", code, e)
+	}
 	appAt(t, c.dev, "shop", "web", atRevision(2, "nginx:1.28"))
 
 	// Roll back to revision 1: its image again, as revision 3, settings kept.

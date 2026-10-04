@@ -482,12 +482,15 @@ func (a *api) appGet(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, appJSON(&app))
 }
 
-// appUpdate replaces the spec. With resourceVersion (from the object the
-// user edited) a concurrent change is a 409 instead of being overwritten.
+// appUpdate replaces the spec. To not overwrite someone else's change, send
+// the generation of the spec that was edited (status updates, which happen
+// all the time, do not change it) or, stricter, the resourceVersion; either
+// mismatch is a 409.
 func (a *api) appUpdate(w http.ResponseWriter, r *http.Request) {
 	project, name := r.PathValue("project"), r.PathValue("app")
 	var req struct {
 		Spec            kwerftv1.AppSpec `json:"spec"`
+		Generation      int64            `json:"generation"`
 		ResourceVersion string           `json:"resourceVersion"`
 	}
 	if !decodeStrict(w, r, &req) || !validateSpec(w, &req.Spec) {
@@ -503,6 +506,10 @@ func (a *api) appUpdate(w http.ResponseWriter, r *http.Request) {
 	var app kwerftv1.App
 	if err := c.Get(ctx, types.NamespacedName{Namespace: project, Name: name}, &app); err != nil {
 		a.kubeError(w, r, p, "app.update", target, appNotFound(project, name), err)
+		return
+	}
+	if req.Generation != 0 && req.Generation != app.Generation {
+		writeError(w, http.StatusConflict, "Someone else changed this app's settings in the meantime. Reload and try again.")
 		return
 	}
 	if req.ResourceVersion != "" {
