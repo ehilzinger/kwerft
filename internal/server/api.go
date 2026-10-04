@@ -71,8 +71,8 @@ func (a *api) register(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/v1/session", a.sameOrigin(a.login))
 	mux.HandleFunc("DELETE /api/v1/session", a.sameOrigin(a.requireUser(a.logout)))
 
-	mux.HandleFunc("GET /api/v1/audit", a.requireUser(a.requireRole(a.auditList, store.RoleOwner, store.RoleAdmin)))
 	a.registerMFA(mux)
+	a.registerMembers(mux) // members, invites, roles, audit log
 
 	a.registerWorkloads(mux)
 	a.registerJobs(mux)
@@ -337,22 +337,6 @@ func (a *api) logout(w http.ResponseWriter, r *http.Request) {
 	a.clearCookie(w, a.cookies.session)
 	a.audit(r, p.user.Email, "session.logout", p.user.Email, "")
 	w.WriteHeader(http.StatusNoContent)
-}
-
-func (a *api) auditList(w http.ResponseWriter, r *http.Request) {
-	entries, err := a.store.RecentAudit(r.Context(), 100)
-	if err != nil {
-		a.internalError(w, r, err)
-		return
-	}
-	out := make([]map[string]any, 0, len(entries))
-	for _, e := range entries {
-		out = append(out, map[string]any{
-			"at": e.At.UTC().Format(time.RFC3339), "actor": e.Actor, "action": e.Action,
-			"target": e.Target, "ip": e.IP, "detail": e.Detail,
-		})
-	}
-	writeJSON(w, http.StatusOK, out)
 }
 
 // ---- request hygiene -------------------------------------------------------

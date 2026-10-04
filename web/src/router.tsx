@@ -16,6 +16,8 @@ import { TaskDetail } from "./pages/TaskDetail";
 import { Volumes } from "./pages/Volumes";
 import { Network } from "./pages/Network";
 import { AccessRecordings, recordingsSearch } from "./pages/AccessRecordings";
+import { AccessAudit, AccessMembers, AccessRoles } from "./pages/Access";
+import { InviteAccept } from "./pages/InviteAccept";
 
 type Context = { queryClient: QueryClient };
 
@@ -46,6 +48,13 @@ export const loginRoute = createRoute({
   },
 });
 
+// An invite link: public, the token is the credential (see InviteAccept).
+export const inviteRoute = createRoute({
+  getParentRoute: () => root,
+  path: "/invite/$token",
+  component: InviteAccept,
+});
+
 // Everything else needs a finished setup and a signed-in user.
 const authed = createRoute({
   getParentRoute: () => root,
@@ -70,6 +79,7 @@ const planned = (path: string, title: string, phase: string, summary: string) =>
 const routeTree = root.addChildren([
   setupRoute,
   loginRoute,
+  inviteRoute,
   authed.addChildren([
     createRoute({ getParentRoute: () => authed, path: "/", component: Overview }),
     createRoute({ getParentRoute: () => authed, path: "/apps", component: Apps }),
@@ -94,7 +104,10 @@ const routeTree = root.addChildren([
     createRoute({ getParentRoute: () => authed, path: "/access/recordings", component: AccessRecordings, validateSearch: recordingsSearch }),
     planned("/monitoring", "Monitoring", "Phase 3", "Alerts with one-click fixes, top consumers, and alert rules routed to email, Slack, webhooks or ntfy."),
     planned("/clusters", "Clusters & nodes", "Phase 5", "Add Hetzner Cloud servers through the API or join dedicated servers with one command; manage more clusters through an outbound agent."),
-    planned("/access", "Access", "Phase 4", "Members and roles mapped to Kubernetes RBAC, SSO, API tokens and an append-only audit log."),
+    // Access tabs; /access/recordings is the Recordings tab's own route.
+    createRoute({ getParentRoute: () => authed, path: "/access", component: AccessMembers }),
+    createRoute({ getParentRoute: () => authed, path: "/access/roles", component: AccessRoles }),
+    createRoute({ getParentRoute: () => authed, path: "/access/audit", component: AccessAudit }),
   ]),
 ]);
 

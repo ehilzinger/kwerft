@@ -140,6 +140,27 @@ var migrations = []string{
 		last_used_at  INTEGER NOT NULL DEFAULT 0
 	);
 	CREATE INDEX passkeys_user ON passkeys(user_id);`,
+	// Invites and audit filters (see members.go). An invite is open while
+	// accepted_at and revoked_at are NULL; at most one open invite per email.
+	// sent_at stays NULL until an email sender delivers invites.
+	`CREATE TABLE invites (
+		id               TEXT PRIMARY KEY,
+		org_id           TEXT NOT NULL,
+		email            TEXT NOT NULL COLLATE NOCASE,
+		role             TEXT NOT NULL CHECK (role IN ('owner','admin','developer','viewer')),
+		token_hash       TEXT NOT NULL UNIQUE,
+		invited_by_email TEXT NOT NULL,
+		invited_by_name  TEXT NOT NULL,
+		created_at       INTEGER NOT NULL,
+		expires_at       INTEGER NOT NULL,
+		sent_at          INTEGER,
+		accepted_at      INTEGER,
+		accepted_user_id TEXT,
+		revoked_at       INTEGER
+	);
+	CREATE UNIQUE INDEX invites_open_email ON invites(email) WHERE accepted_at IS NULL AND revoked_at IS NULL;
+	CREATE INDEX audit_actor ON audit(actor, id);
+	CREATE INDEX audit_action ON audit(action, id);`,
 }
 
 func (s *Store) migrate(ctx context.Context) error {

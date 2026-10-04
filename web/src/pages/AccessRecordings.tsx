@@ -8,6 +8,7 @@ import { errorText } from "./Apps";
 import "../styles/workloads.css";
 import "../styles/jobs.css";
 import "../styles/recordings.css";
+import { AccessLayout } from "./Access";
 
 // Shell recordings under Access (/access/recordings): every shell session
 // into an App replica or a Task's pod, newest first, for owners and admins.
@@ -33,18 +34,8 @@ export function AccessRecordings() {
   const allowed = role === "owner" || role === "admin";
 
   return (
-    <section className="view">
-      <div className="ph">
-        <div>
-          <h1>Access</h1>
-          <p className="sub">Shell recordings · kept 90 days · output only, keystrokes are not recorded</p>
-        </div>
-      </div>
-      {/* Until Access.tsx (Members) lands with the shared tab strip. */}
-      <nav className="tabs" aria-label="Access">
-        <Link to="/access">Members</Link>
-        <Link to="/access/recordings" search={{}} className="on" aria-current="page">Shell recordings</Link>
-      </nav>
+    <AccessLayout current="recordings">
+      <p className="dim">Shell recordings · kept 90 days · output only, keystrokes are not recorded</p>
       {session.isPending ? null : allowed ? (
         <Recordings />
       ) : (
@@ -53,7 +44,7 @@ export function AccessRecordings() {
           <p>Recordings show everything a shell displayed, which can include secrets. Ask an owner or admin if you need to review a session.</p>
         </div>
       )}
-    </section>
+    </AccessLayout>
   );
 }
 

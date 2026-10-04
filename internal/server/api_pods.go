@@ -515,8 +515,10 @@ func (s *slots) acquire(user string) func() {
 }
 
 // sessionAlive reports whether the user's console session still exists, so
-// long-lived streams end when someone signs out or is signed out.
+// long-lived streams end when someone signs out or is signed out (or removed),
+// and whether their role is unchanged: a stream was authorized for the role
+// it started with.
 func (p *podsAPI) sessionAlive(ctx context.Context, pr *principal) bool {
-	_, _, err := p.store.SessionByHash(ctx, pr.idHash, p.now())
-	return err == nil
+	_, u, err := p.store.SessionByHash(ctx, pr.idHash, p.now())
+	return err == nil && u.Role == pr.user.Role
 }
