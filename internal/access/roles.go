@@ -114,6 +114,14 @@ var Matrix = []Permission{
 		},
 	},
 	{
+		ID: "builds", Label: "Build apps from Git and cancel builds", Enforced: ByKubernetes,
+		Grants: map[string]Grant{Owner: yes, Admin: yes, Developer: yes, Viewer: no},
+		Kube: []Check{
+			{Group: "kwerft.dev", Resource: "builds", Verb: "create", Namespaced: true},
+			{Group: "kwerft.dev", Resource: "builds", Verb: "patch", Namespaced: true},
+		},
+	},
+	{
 		ID: "shell", Label: "Open a shell in a container (recorded)", Enforced: ByKubernetes,
 		Grants: map[string]Grant{Owner: yes, Admin: yes, Developer: yes, Viewer: no},
 		Kube: []Check{

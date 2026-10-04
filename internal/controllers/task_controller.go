@@ -182,7 +182,13 @@ func (r *TaskReconciler) ensureJob(ctx context.Context, task *kwerftv1.Task) (*b
 			return nil, nil, err
 		}
 	}
-	run, wait := resolveTask(task, app, project)
+	var appImage *resolvedImage
+	if app != nil {
+		if appImage, err = resolveImage(ctx, r.Client, app); err != nil {
+			return nil, nil, err
+		}
+	}
+	run, wait := resolveTask(task, app, appImage, project)
 	if wait != nil {
 		return nil, wait, nil
 	}
@@ -416,6 +422,8 @@ func (r *TaskReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Owns(&networkingv1.NetworkPolicy{}).
 		Watches(&kwerftv1.App{}, waiting).
 		Watches(&kwerftv1.Volume{}, waiting).
+		// A successful build gives a Task from a Git app its image.
+		Watches(&kwerftv1.Build{}, waiting).
 		Named("task").
 		Complete(r)
 }

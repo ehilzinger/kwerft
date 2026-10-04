@@ -70,6 +70,12 @@ func TestMain(m *testing.M) {
 		fmt.Println("create gateway namespace:", err)
 		os.Exit(1)
 	}
+	// Builds run in kwerft-builds and push to the registry Service; the
+	// chart creates both in real clusters.
+	if err := setupBuildInfra(context.Background()); err != nil {
+		fmt.Println("build infrastructure:", err)
+		os.Exit(1)
+	}
 
 	mgr, err := ctrl.NewManager(cfg, ctrl.Options{
 		Scheme:                 NewScheme(),
@@ -93,6 +99,15 @@ func TestMain(m *testing.M) {
 	must((&VolumeReconciler{Client: mgr.GetClient()}).SetupWithManager(mgr))
 	must((&TaskReconciler{Client: mgr.GetClient(), APIReader: mgr.GetAPIReader(), Now: testClock.Now}).SetupWithManager(mgr))
 	must((&ScheduleReconciler{Client: mgr.GetClient(), Now: testClock.Now}).SetupWithManager(mgr))
+	must((&BuildReconciler{
+		Client:              mgr.GetClient(),
+		APIReader:           mgr.GetAPIReader(),
+		BuildKitImage:       DefaultBuildKitImage,
+		RailpackImage:       DefaultRailpackImage,
+		MaxConcurrentBuilds: 1,
+		Timeout:             DefaultBuildTimeout,
+		InstallationToken:   fakeInstallationToken,
+	}).SetupWithManager(mgr))
 
 	ctx, cancel := context.WithCancel(context.Background())
 	go func() { _ = mgr.Start(ctx) }()

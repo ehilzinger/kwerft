@@ -149,3 +149,23 @@ func TestMatrixIsComplete(t *testing.T) {
 		t.Errorf("RolesWith(members) = %v", got)
 	}
 }
+
+// TestDevelopersCannotRewriteBuilds: developers start and cancel builds, but
+// a Build is history (and a revision's provenance): no update or delete.
+func TestDevelopersCannotRewriteBuilds(t *testing.T) {
+	roles, _ := chartRBAC(t)
+	dev := roles["kwerft:developer"].Rules
+	for _, verb := range []string{"create", "patch"} {
+		if !allows(dev, Check{Group: "kwerft.dev", Resource: "builds", Verb: verb}) {
+			t.Errorf("developers cannot %s builds", verb)
+		}
+	}
+	for _, verb := range []string{"update", "delete", "deletecollection"} {
+		if allows(dev, Check{Group: "kwerft.dev", Resource: "builds", Verb: verb}) {
+			t.Errorf("developers may %s builds", verb)
+		}
+	}
+	if allows(dev, Check{Group: "kwerft.dev", Resource: "builds", Subresource: "status", Verb: "patch"}) {
+		t.Error("developers may write build status")
+	}
+}

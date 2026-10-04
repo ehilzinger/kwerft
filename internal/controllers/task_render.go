@@ -41,7 +41,8 @@ type taskRun struct {
 
 // resolveTask merges the Task over its App (nil without FromApp). It returns
 // a reason and message instead when the Task has to wait.
-func resolveTask(task *kwerftv1.Task, app *kwerftv1.App, project string) (*taskRun, *readiness) {
+// appImage is the App's resolved image (resolveImage), nil while it has none.
+func resolveTask(task *kwerftv1.Task, app *kwerftv1.App, appImage *resolvedImage, project string) (*taskRun, *readiness) {
 	s := task.Spec
 	run := &taskRun{
 		task:    task,
@@ -89,11 +90,10 @@ func resolveTask(task *kwerftv1.Task, app *kwerftv1.App, project string) (*taskR
 	case s.Source != nil && s.Source.Image != nil:
 		run.image, run.pullSecret = s.Source.Image.Ref, s.Source.Image.PullSecret
 	case app != nil:
-		image, ok := resolveImage(app)
-		if !ok {
+		if appImage == nil {
 			return nil, &readiness{metav1.ConditionFalse, "AwaitingBuild", "Waiting for the first successful build of App " + app.Name}
 		}
-		run.image = image
+		run.image = appImage.image
 		if src := app.Spec.Source.Image; src != nil {
 			run.pullSecret = src.PullSecret
 		}

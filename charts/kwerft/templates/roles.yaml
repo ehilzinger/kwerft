@@ -38,6 +38,11 @@ rules:
   - apiGroups: [kwerft.dev]
     resources: [apps, domains, tasks, schedules, volumes]
     verbs: [get, list, watch, create, update, patch, delete]
+  # Builds: start one ("Build now") and cancel it (the cancel annotation is a
+  # patch; the spec is immutable). No update, no delete: Kwerft prunes them.
+  - apiGroups: [kwerft.dev]
+    resources: [builds]
+    verbs: [create, patch]
   # Everything else Kwerft defines (projects, builds, ...): read only.
   - apiGroups: [kwerft.dev]
     resources: ["*"]
