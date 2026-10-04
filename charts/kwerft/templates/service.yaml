@@ -1,3 +1,5 @@
+{{- /* The console's Service (the Gateway's backend); agents serve nothing. */ -}}
+{{- if ne .Values.mode "agent" }}
 apiVersion: v1
 kind: Service
 metadata:
@@ -10,3 +12,4 @@ spec:
     - name: http
       port: 80
       targetPort: http
+{{- end }}

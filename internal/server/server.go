@@ -15,6 +15,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
+	"github.com/ehilzinger/kwerft/internal/clusters"
 	"github.com/ehilzinger/kwerft/internal/git"
 	"github.com/ehilzinger/kwerft/internal/hubble"
 	"github.com/ehilzinger/kwerft/internal/kube"
@@ -98,6 +99,15 @@ type Config struct {
 	// TrustedProxy reports whether a TCP peer is Traefik, whose X-Real-Ip
 	// names the client (see clientip.go); nil trusts loopback only.
 	TrustedProxy func(netip.Addr) bool
+
+	// Clusters reaches the API of every managed cluster (internal/clusters):
+	// the management cluster and remote clusters through their agents'
+	// tunnels. Nil means the local cluster only. (W4 builds per-cluster
+	// clients on it.)
+	Clusters clusters.Registry
+	// Tunnel accepts remote clusters' agents at /api/v1/clusters/connect and
+	// reports on them; nil refuses agents.
+	Tunnel *clusters.Hub
 
 	// ActiveConsoleDomain returns the hostname the console is served on now
 	// (ConsoleSettings.status, which Settings can change); nil or "" means

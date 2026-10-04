@@ -1,5 +1,7 @@
 // Command kwerft runs the Kwerft console: REST/WebSocket API, the reconcilers
-// for kwerft.dev resources, and the embedded web UI — one binary.
+// for kwerft.dev resources, and the embedded web UI — one binary. `kwerft
+// agent` runs the reconcilers in a remote cluster with a tunnel to the
+// console instead (agent.go); `kwerft node-agent` is the firewall DaemonSet.
 package main
 
 import (
@@ -27,6 +29,7 @@ import (
 
 	kwerftv1 "github.com/ehilzinger/kwerft/api/v1alpha1"
 	"github.com/ehilzinger/kwerft/internal/auth"
+	"github.com/ehilzinger/kwerft/internal/clusters"
 	"github.com/ehilzinger/kwerft/internal/controllers"
 	"github.com/ehilzinger/kwerft/internal/git"
 	"github.com/ehilzinger/kwerft/internal/hubble"
@@ -43,6 +46,11 @@ func main() {
 	// `kwerft node-agent` is the firewall DaemonSet (nodeagent.go).
 	if len(os.Args) > 1 && os.Args[1] == "node-agent" {
 		os.Exit(runNodeAgent(os.Args[2:]))
+	}
+	// `kwerft agent` takes the console's flags for the reconcilers, plus its own.
+	agentMode := len(os.Args) > 1 && os.Args[1] == "agent"
+	if agentMode {
+		os.Args = append(os.Args[:1], os.Args[2:]...)
 	}
 	var (
 		listen         = flag.String("listen", ":8080", "HTTP listen address")
@@ -64,6 +72,9 @@ func main() {
 		buildTimeout        = flag.Duration("build-timeout", controllers.DefaultBuildTimeout, "a build running longer fails")
 		buildAppArmor       = flag.String("build-apparmor-profile", "kwerft-buildkit", "AppArmor profile (loaded on every node) build containers run under; empty runs them unconfined")
 		hubbleRelay         = flag.String("hubble-relay", hubble.DefaultRelayAddress, "Hubble relay (host:port, plain gRPC) for traffic rule counts and dropped connections; empty turns them off (install.sh --lite has no Hubble)")
+
+		consoleURL     = flag.String("console-url", os.Getenv("KWERFT_CONSOLE_URL"), "agent mode: the console to connect to, https://<console>")
+		agentTokenFile = flag.String("agent-token-file", "/etc/kwerft-agent/token", "agent mode: file with this cluster's agent token (the mounted Secret kwerft-agent)")
 	)
 	flag.Parse()
 
@@ -93,6 +104,35 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
+	// The reconcilers, the same in the console's cluster and (agent mode)
+	// in remote ones.
+	var flows *hubble.Aggregator
+	newControllers := func() (ctrl.Manager, error) {
+		traffic := &controllers.TrafficRuleReconciler{}
+		// Cilium's flows, read in-cluster from the Hubble relay: the
+		// console's traffic views and the TrafficRules' status counts.
+		if *hubbleRelay != "" {
+			flows = hubble.NewAggregator()
+			flows.Logger = log
+			go flows.Run(ctx, hubble.NewRelay(*hubbleRelay))
+			traffic.Counts = flows
+		}
+		return newManager(log, *leaderElect, *metricsListen, *privateNetwork, traffic, &controllers.DomainReconciler{
+			ConsoleDomain: *consoleDomain,
+			GatewayClass:  *gatewayClass,
+			ClusterIssuer: *clusterIssuer,
+		}, &controllers.BuildReconciler{
+			BuildKitImage:       *buildkitImage,
+			RailpackImage:       *railpackImage,
+			MaxConcurrentBuilds: *maxConcurrentBuilds,
+			Timeout:             *buildTimeout,
+			AppArmorProfile:     *buildAppArmor,
+		})
+	}
+	if agentMode {
+		os.Exit(runAgent(ctx, log, agentOptions{consoleURL: *consoleURL, tokenFile: *agentTokenFile, namespace: namespace, listen: *listen}, newControllers))
+	}
+
 	if err := os.MkdirAll(*dataDir, 0o700); err != nil {
 		log.Error("cannot create data directory", "dir", *dataDir, "err", err)
 		os.Exit(1)
@@ -118,32 +158,21 @@ func main() {
 	var tokens setup.TokenSource = setup.NewStaticTokenSource("", 0) // expired: no setup possible
 	var ready atomic.Bool
 	var mgr ctrl.Manager
-	// Cilium's flows, read in-cluster from the Hubble relay: the console's
-	// traffic views and the TrafficRules' status counts.
-	var flows *hubble.Aggregator
-	if *runControllers && *hubbleRelay != "" {
-		flows = hubble.NewAggregator()
-		flows.Logger = log
-		go flows.Run(ctx, hubble.NewRelay(*hubbleRelay))
-	}
+	// The clusters this console manages: this one, and remote ones through
+	// their agents' tunnels (internal/clusters). Only with the reconcilers,
+	// which keep the Cluster objects.
+	var registry clusters.Registry
+	var hub *clusters.Hub
 	if *runControllers {
-		traffic := &controllers.TrafficRuleReconciler{}
-		if flows != nil {
-			traffic.Counts = flows
-		}
-		mgr, err = newManager(log, *leaderElect, *metricsListen, *privateNetwork, traffic, &controllers.DomainReconciler{
-			ConsoleDomain: *consoleDomain,
-			GatewayClass:  *gatewayClass,
-			ClusterIssuer: *clusterIssuer,
-		}, &controllers.BuildReconciler{
-			BuildKitImage:       *buildkitImage,
-			RailpackImage:       *railpackImage,
-			MaxConcurrentBuilds: *maxConcurrentBuilds,
-			Timeout:             *buildTimeout,
-			AppArmorProfile:     *buildAppArmor,
-		})
+		mgr, err = newControllers()
 		if err != nil {
 			log.Error("cannot start controllers", "err", err)
+			os.Exit(1)
+		}
+		hub = &clusters.Hub{Local: mgr.GetConfig(), Clusters: mgr.GetCache(), Logger: log.With("component", "tunnel")}
+		registry = hub
+		if err := setupClusters(mgr, hub, namespace, *consoleDomain); err != nil {
+			log.Error("cannot start the cluster reconciler", "err", err)
 			os.Exit(1)
 		}
 		tokens = &setup.SecretTokenSource{Reader: mgr.GetAPIReader(), Writer: mgr.GetClient(), Namespace: namespace}
@@ -156,6 +185,9 @@ func main() {
 		}()
 	} else {
 		ready.Store(true)
+		if cfg, err := ctrl.GetConfig(); err == nil {
+			registry = &clusters.Static{Config: cfg}
+		}
 	}
 	if *dev {
 		token := "kwft_setup_" + auth.NewToken()[:24]
@@ -217,6 +249,9 @@ func main() {
 		Metrics:      metricsClient,
 		Hubble:       flows,
 
+		Clusters: registry,
+		Tunnel:   hub,
+
 		ActiveConsoleDomain: activeConsoleDomain(mgr, *dev),
 	})
 
@@ -270,7 +305,7 @@ func waitUntilReady(ctx context.Context, log *slog.Logger, mgr ctrl.Manager, rea
 	types := []client.Object{&kwerftv1.Project{}, &kwerftv1.App{}, &kwerftv1.Domain{},
 		&kwerftv1.Volume{}, &kwerftv1.Task{}, &kwerftv1.Schedule{}, &kwerftv1.ConsoleSettings{},
 		&kwerftv1.GitConnection{}, &kwerftv1.Build{}, &kwerftv1.AlertRule{}, &kwerftv1.NotificationChannel{},
-		&kwerftv1.FirewallRule{}}
+		&kwerftv1.FirewallRule{}, &kwerftv1.Cluster{}}
 	for _, obj := range types {
 		for {
 			_, err := mgr.GetCache().GetInformer(ctx, obj, cache.BlockUntilSynced(false))

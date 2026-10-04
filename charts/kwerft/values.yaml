@@ -1,8 +1,22 @@
 # Set by install.sh; override with --set or a values file for manual installs.
 platform: dedicated            # cloud | dedicated — selects storage and firewall defaults
 
+# console: the console and the reconcilers (the management cluster).
+# agent: Kwerft in a cluster managed from another console (docs/phase5.md):
+#   the reconcilers plus `kwerft agent`, which dials the console and carries
+#   its requests to this cluster's API. No console UI, Service, database,
+#   data key or setup token. install.sh --agent sets it.
+mode: console
+
 console:
-  domain: ""                   # e.g. ops.example.com (required)
+  domain: ""                   # e.g. ops.example.com (required in console mode)
+
+agent:
+  consoleURL: ""               # https://<console> (required in agent mode)
+  # Secret (in the release namespace) with key "token": the cluster's agent
+  # token. install.sh --agent writes it, so the token never sits in Helm
+  # values or release history.
+  tokenSecret: kwerft-agent
 
 acme:
   enabled: true                # issue certificates with Let's Encrypt

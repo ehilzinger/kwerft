@@ -1,3 +1,7 @@
+{{- $agent := eq .Values.mode "agent" }}
+{{- if not (has .Values.mode (list "console" "agent")) }}
+{{- fail "mode must be console or agent" }}
+{{- end }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -23,9 +27,18 @@ spec:
           image: {{ include "kwerft.image" . }}
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           args:
+            {{- if $agent }}
+            # Agent mode (docs/phase5.md): the reconcilers, and a tunnel to
+            # the console instead of the console itself.
+            - agent
+            - --console-url={{ required "agent.consoleURL is required in agent mode" .Values.agent.consoleURL }}
+            - --agent-token-file=/etc/kwerft-agent/token
+            {{- end }}
             - --listen=:8080
+            {{- if not $agent }}
             - --data-dir=/var/lib/kwerft
             - --console-domain={{ required "console.domain is required" .Values.console.domain }}
+            {{- end }}
             - --platform={{ .Values.platform }}
             - --gateway-class={{ .Values.gateway.className }}
             - --cluster-issuer={{ if .Values.acme.enabled }}letsencrypt{{ end }}
@@ -46,6 +59,7 @@ spec:
           env:
             - name: POD_NAMESPACE
               valueFrom: { fieldRef: { fieldPath: metadata.namespace } }
+            {{- if not $agent }}
             - name: KWERFT_DATA_KEY
               valueFrom: { secretKeyRef: { name: {{ include "kwerft.fullname" . }}-data-key, key: key } }
             # Set only while a data-key rotation is unfinished (docs/plan.md).
@@ -53,6 +67,7 @@ spec:
               valueFrom: { secretKeyRef: { name: {{ include "kwerft.fullname" . }}-data-key, key: previous, optional: true } }
             - name: KWERFT_DATA_KEY_SECRET
               value: {{ include "kwerft.fullname" . }}-data-key
+            {{- end }}
           ports:
             - name: http
               containerPort: 8080
@@ -69,13 +84,27 @@ spec:
           resources: {{- toYaml .Values.resources | nindent 12 }}
           securityContext: {{- toYaml .Values.securityContext | nindent 12 }}
           volumeMounts:
+            {{- if $agent }}
+            # Read before every dial, so a rotated token needs no restart.
+            - name: agent-token
+              mountPath: /etc/kwerft-agent
+              readOnly: true
+            {{- else }}
             - name: data
               mountPath: /var/lib/kwerft
+            {{- end }}
             - name: tmp
               mountPath: /tmp
       volumes:
+        {{- if $agent }}
+        - name: agent-token
+          secret:
+            secretName: {{ .Values.agent.tokenSecret }}
+            items: [{ key: token, path: token }]
+        {{- else }}
         - name: data
           persistentVolumeClaim:
             claimName: {{ include "kwerft.fullname" . }}-data
+        {{- end }}
         - name: tmp
           emptyDir: {}

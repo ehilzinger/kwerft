@@ -53,6 +53,15 @@ fake (`hetznertest.Server.Handle`), and the Clusters page skeleton
 - Secret `cluster-<name>-agent` in `kwerft-system`: the agent's token
   (stored hashed in the console as well) and the console URL, for the
   installer's agent mode.
+- As built (W3): every installer run on a k3s server writes
+  `cluster-local-join` in its own cluster's `kwerft-system`
+  (`write_join_secret`); in the management cluster that *is*
+  `cluster-<local>-join`, in a remote one the agent reports it and the
+  Cluster reconciler copies it to `cluster-<name>-join` (owned by the
+  Cluster). The token hash lives on the Cluster (annotation
+  `kwerft.dev/agent-token-hash`), not in the Secret, and
+  `cluster-<name>-agent` exists only for a hetzner-cloud cluster until its
+  agent first connects (keys `token`, `consoleURL`); see As built (W3).
 
 ## Ownership
 
@@ -85,3 +94,148 @@ Each worker: `make check` green (and `GOTOOLCHAIN=go1.26.0 go vet ./...`),
 envtest tests, fakes for Hetzner Cloud/Robot and for a remote cluster (a
 second envtest API server behind an in-process tunnel is a good model).
 Nobody creates real infrastructure; the coordinator does, after asking.
+
+## As built (W3): multi-cluster core
+
+**Tunnel** (`internal/clusters/tunnel*.go`, diagram in `tunnel.go`). The
+agent dials `wss://<console>/api/v1/clusters/connect` with
+`Authorization: Bearer <agent token>`; TLS is verified against the system's
+public CAs. Over the WebSocket (one binary message per write) runs HTTP/2:
+the console is the client, the agent the server (`golang.org/x/net/http2`,
+already in the module graph: flow control per stream, 1000 concurrent
+streams, PING every 30 s of silence with a 15 s timeout on both ends,
+30 s write timeout). Every connection the console opens to the cluster's
+API is one HTTP/2 `CONNECT` stream carrying plain HTTP/1.1 to the agent,
+which serves it with an `http.Server` whose only handler is a reverse proxy
+to its own API server, with its service account's credentials. Byte streams
+rather than one HTTP/2 request per API request, because protocol upgrades
+(SPDY and WebSocket exec/attach/port-forward) need them; watches and log
+follows stream unchanged (`FlushInterval: -1`). Upgrades go to the API
+server over a transport pinned to HTTP/1.1 (net/http would otherwise put a
+SPDY upgrade on a pooled HTTP/2 connection). Why not yamux: a new
+dependency for what HTTP/2 already does; why not `rest.Config.Dial`:
+client-go's SPDY and WebSocket round trippers ignore it.
+
+**Registry** (`clusters.Hub`, wired in `main.go` as `server.Config.Clusters`
+and `.Tunnel`). `List` = `local` first, then every Cluster object (Connected
+when its agent is). `RESTConfig(local)` = the console's own config;
+`RESTConfig(remote)` = `http://127.0.0.1:<port>` with a per-session bearer
+key: the console listens on a loopback port per connected cluster (only
+reachable inside its pod) and the agent refuses requests without that key,
+then replaces it with its own credentials. Callers add impersonation as
+today (`kube.NewImpersonator(cfg, …)` works unchanged; the tests do exactly
+that). A config dies with its session (connection refused): rebuild clients
+on `Changed()`, which closes on every connect and disconnect.
+`ErrUnavailable` for a known but disconnected cluster, `ErrUnknown` for no
+Cluster object. `Hub.Agent(name)` reports versions, nodes, join material,
+the agent's address and when it connected and last answered (polled every
+30 s; two missed answers drop the session). One session per cluster: a new
+connection replaces the old one (so a half-open connection never locks an
+agent out; a stolen token is answered by rotating).
+
+**Agent mode.** `kwerft agent --console-url https://<console>
+--agent-token-file /etc/kwerft-agent/token` plus the console's reconciler
+flags: the same reconcilers as in the management cluster (not the Cluster
+reconciler), the tunnel (only on the leader), health probes on `:8080`, no
+store, no UI. The token file is re-read before every dial (a rotated token
+needs no restart). Backoff 1 s → 1 min with jitter, 2 min after a refusal.
+
+**Chart.** `mode: console | agent`; agent mode needs `agent.consoleURL` and
+mounts `agent.tokenSecret` (default `kwerft-agent`, key `token`, written by
+the installer so the token is never in Helm values). It leaves out the
+console Service, the SQLite PVC and the data key. Same service account and
+`kwerft-controller` ClusterRole as the console, so the agent has exactly the
+console's local rights (impersonating only the console's users and groups —
+the tests prove `system:masters` is refused through the tunnel).
+
+**Installer flags (exact).**
+
+    install.sh --agent --console https://<console> --cluster-token kwag_<cluster>_<secret> [--version V] [--platform P] [--private-iface IF] [--lite] [--yes]
+
+(`KWERFT_CONSOLE`, `KWERFT_CLUSTER_TOKEN` in the environment work too.)
+`--console` must be `https://<hostname>[:port]`; the token must be an agent
+token; `--agent` refuses `--domain`, `--config` and `--join`. Stages:
+Preflight … Observability as a normal install (k3s server, Cilium, Traefik,
+cert-manager, metrics/logs stack — every cluster runs its own), then
+**Kwerft agent** (CRDs, Secret `kwerft-agent` from stdin, `cluster-local-join`,
+the chart with `mode=agent`), no Handoff and no setup token. Re-running is
+idempotent and is how a rotated token is installed. A server keeps its mode:
+`--agent` on a console server, or a plain install on an agent server, exits
+2. The console's install command is `curl -fsSL
+https://raw.githubusercontent.com/ehilzinger/kwerft-install/main/install.sh
+| sudo bash -s -- --agent --console https://<console> --cluster-token <token>`
+(plus `--version <console version>` for release builds).
+
+**Cluster reconciler** (`internal/controllers/cluster_controller.go`,
+management cluster only). Creates Cluster `local` (provider `local`, status
+from the console's own API: versions, nodes; re-created if deleted). Remote
+clusters get the finalizer `kwerft.dev/cluster-cleanup`; status from the
+agent: `Connected` (lastSeen at most once a minute), `Disconnected` once it
+was seen, otherwise `Provisioning` (hetzner-cloud) or `Pending` (adopted;
+reason `NoToken` without a token hash), `Failed` for a name that is not a
+DNS label of ≤ 40 characters. Each pass calls `DisconnectUnless(name,
+hash)`, so a token rotated or removed by any means (also kubectl) ends the
+old session. Deleting: disconnect, delete every NodePool with
+`spec.cluster == name` and wait until they are gone (W2's finalizer deletes
+the servers by label), delete `cluster-<name>-agent`/`-join`, release.
+
+**For W2 (hetzner-cloud).** The reconciler server-side applies NodePool
+`<cluster>-control-plane` (role `control-plane`, `serverType`/`location`
+from `spec.hetznerCloud`, `count` = `controlPlanes`, owned by the Cluster,
+labels `kwerft.dev/cluster=<name>`), and Secret
+`kwerft-system/cluster-<name>-agent` with `token` and `consoleURL`
+(`https://<active console hostname>`) while the cluster has never
+connected. The first server of that pool runs
+`install.sh --agent --console <consoleURL> --cluster-token <token> --yes`
+(add `--platform cloud`, `--version`); servers 2 and 3 join with the join
+material from `cluster-<name>-join` once the first is connected. The agent
+Secret is deleted after the first connection (and when the token is rotated
+before it).
+
+**API** (`internal/server/api_clusters.go`, owners and admins, every write
+impersonated and audited): `GET /api/v1/clusters`, `GET
+/api/v1/clusters/{name}` (with the cluster's NodePools), `POST
+/api/v1/clusters` `{name, displayName?, provider: hetzner-cloud|adopted,
+hetznerCloud?: {location, serverType, controlPlanes: 1|3}}` (adopted:
+answers `token` and `installCommand` once), `DELETE
+/api/v1/clusters/{name}`, `POST /api/v1/clusters/{name}/token` (rotate:
+new token once, old agent disconnected). Names `local` and `connect` are
+reserved. `GET /api/v1/clusters/connect` is the agents' endpoint.
+
+**Security decisions.**
+- The token (`kwag_<cluster>_<32 random bytes>`) is shown once; only its
+  SHA-256 is kept, as an annotation on the Cluster, written as the signed-in
+  user. So no user request needs the console's own rights to Secrets (the
+  only Secret Kwerft writes for clusters is the reconciler's, for cloud-init).
+- The connect endpoint refuses any request with an `Origin` (browsers),
+  takes no session, compares in constant time, rate-limits refusals per
+  client address (20 per 15 min) and audits them (`cluster.agent_rejected`).
+- Rotation never pushes the new token through the tunnel: the agent that is
+  connected may be the one holding a leaked token.
+- The tunnel reaches only the cluster's API server; the loopback end needs
+  the per-session key; the agent's credentials never leave its cluster.
+
+**Tests.** `internal/clusters/tunnel_test.go` (fake TLS + HTTP/2 API
+server: log follow streaming, exec over WebSocket with client-go's
+executor, a SPDY-style upgrade proven to reach the API server over
+HTTP/1.1, session key enforcement, refused tokens and Origins, reconnect,
+rotation, replacement); `tunnel_envtest_test.go` (two real API servers:
+the agent's identity, impersonation as viewer/owner incl. RBAC denials and
+`system:masters` refused, a project created through the console's
+Impersonator lands in the remote cluster only, watches, disconnect);
+`internal/controllers/cluster_controller_test.go` (local, adopted with join
+material and rotation, hetzner-cloud pool/secret/delete, invalid names);
+`internal/server/clusters_test.go` (API roles, validation, adopt → a real
+agent connects → rotate → refused and audited, delete; connect endpoint
+refuses sessions and Origins and rate-limits); bats for `--agent`.
+
+**Limits and open points.**
+- Logs through a *real* API server are not in the envtest (no kubelet);
+  the fake API server covers streaming. Port-forward is the same upgrade
+  path as exec but untested end to end.
+- One console replica: sessions live in its memory (as SQLite already
+  requires). Each console restart drops all agents for their backoff (≤ 1 min).
+- Per-cluster throughput is one TCP connection (WebSocket through Traefik);
+  fine for API traffic, not for bulk data.
+- The agent runs the full reconciler set, including the DNS reconciler with
+  no console hostname; per-cluster apps domains are W4's.

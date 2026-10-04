@@ -3,6 +3,9 @@
 #  - impersonate: to forward user requests with the user's identity
 #  - full access to kwerft.dev resources: the reconcilers own them
 #  - the objects the reconcilers render (TODO(phase-1): narrow to exact verbs)
+# In agent mode (a remote cluster, docs/phase5.md) the same service account and
+# role serve the agent: the console's requests through its tunnel reach this
+# cluster with exactly these rights, user requests impersonated as locally.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:

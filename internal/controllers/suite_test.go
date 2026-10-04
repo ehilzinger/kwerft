@@ -23,6 +23,7 @@ import (
 	"github.com/go-logr/logr"
 
 	kwerftv1 "github.com/ehilzinger/kwerft/api/v1alpha1"
+	"github.com/ehilzinger/kwerft/internal/clusters"
 )
 
 // k8s is a client for the test API server; nil when envtest is unavailable.
@@ -123,6 +124,12 @@ func TestMain(m *testing.M) {
 	must((&AlertRuleReconciler{Client: mgr.GetClient(), ConsoleDomain: testConsoleDomain}).SetupWithManager(mgr))
 	must((&NotificationChannelReconciler{Client: mgr.GetClient(), APIReader: mgr.GetAPIReader(), Now: channelClock.Now}).SetupWithManager(mgr))
 	must((&FirewallReconciler{Client: mgr.GetClient(), APIReader: mgr.GetAPIReader(), PrivateNetwork: testPrivateNetwork}).SetupWithManager(mgr))
+	// Clusters (cluster_controller_test.go): agents come and go through a fake tunnel.
+	must((&ClusterReconciler{Client: mgr.GetClient(), APIReader: mgr.GetAPIReader(), Tunnel: testTunnel,
+		Namespace: GatewayNamespace, ConsoleDomain: testConsoleDomain, Resync: 500 * time.Millisecond,
+		Local: func(context.Context) clusters.AgentInfo {
+			return clusters.AgentInfo{KubernetesVersion: "v-test", Nodes: 1, ReadyNodes: 1}
+		}}).SetupWithManager(mgr))
 
 	ctx, cancel := context.WithCancel(context.Background())
 	go func() { _ = mgr.Start(ctx) }()

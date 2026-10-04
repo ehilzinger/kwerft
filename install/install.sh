@@ -80,6 +80,8 @@ CHANNEL="${KWERFT_CHANNEL:-stable}"
 JOIN_URL="${KWERFT_JOIN_URL:-}"
 JOIN_TOKEN="${KWERFT_JOIN_TOKEN:-}"
 JOIN_ROLE="${KWERFT_JOIN_ROLE:-worker}"
+CONSOLE_URL="${KWERFT_CONSOLE:-}"         # --agent: the console this cluster connects to
+CLUSTER_TOKEN="${KWERFT_CLUSTER_TOKEN:-}" # --agent: the cluster's agent token (kwag_<cluster>_…)
 KWERFT_CHART="${KWERFT_CHART:-}"
 IMAGE="${KWERFT_IMAGE:-}"
 IMAGE_ARCHIVE="${KWERFT_IMAGE_ARCHIVE:-}"
@@ -92,6 +94,7 @@ MODE="install"
 DRY_RUN=0
 ASSUME_YES=0
 HARDEN_SSH=0
+AGENT=0                 # --agent (MODE becomes agent unless --uninstall or --reset-firewall)
 LITE=0
 
 # Discovered facts.
@@ -147,6 +150,13 @@ Join an existing cluster:
   --join URL --token T   Join the cluster whose console runs at URL
   --role R               worker | control-plane (default: worker)
 
+Connect a new cluster to a console (agent mode):
+  --agent                Install Kwerft without its own console: this cluster is
+                         managed from the console at --console (Clusters › Adopt
+                         shows the whole command)
+  --console URL          The console, https://<console>
+  --cluster-token T      This cluster's agent token from the console (kwag_…)
+
 Development:
   --image REF            Run this console image (repository:tag) instead of the release
   --image-archive FILE   Import FILE (docker/OCI tarball) into k3s first; needs --image.
@@ -185,6 +195,9 @@ parse_args() {
       --join)           need_arg "$@"; JOIN_URL=$2; MODE="join"; shift 2 ;;
       --token)          need_arg "$@"; JOIN_TOKEN=$2; shift 2 ;;
       --role)           need_arg "$@"; JOIN_ROLE=$2; shift 2 ;;
+      --agent)          AGENT=1; shift ;;
+      --console)        need_arg "$@"; CONSOLE_URL=$2; shift 2 ;;
+      --cluster-token)  need_arg "$@"; CLUSTER_TOKEN=$2; shift 2 ;;
       --image)          need_arg "$@"; IMAGE=$2; shift 2 ;;
       --image-archive)  need_arg "$@"; IMAGE_ARCHIVE=$2; shift 2 ;;
       --lite)           LITE=1; shift ;;
@@ -198,7 +211,22 @@ parse_args() {
     esac
   done
 
-  [[ -n "$JOIN_URL" ]] && MODE="join"
+  if [[ -n "$JOIN_URL" ]]; then
+    (( AGENT )) && die $EXIT_USAGE "--agent and --join exclude each other"
+    MODE="join"
+  fi
+  if (( AGENT )) && [[ "$MODE" == "install" ]]; then
+    MODE="agent"
+  fi
+  if [[ "$MODE" == "agent" ]]; then
+    [[ -n "$CONSOLE_URL" && -n "$CLUSTER_TOKEN" ]] || die $EXIT_USAGE "--agent needs --console and --cluster-token (Clusters › Adopt in the console shows the whole command)"
+    [[ -z "$DOMAIN" && -z "$CONFIG_FILE" ]] || die $EXIT_USAGE "--agent installs no console: --domain and --config do not apply"
+    CONSOLE_URL=${CONSOLE_URL%/}
+    valid_console_url "$CONSOLE_URL" || die $EXIT_USAGE "--console must look like https://ops.example.com, got '$CONSOLE_URL'"
+    valid_cluster_token "$CLUSTER_TOKEN" || die $EXIT_USAGE "--cluster-token is not an agent token (kwag_<cluster>_…); copy the command from the console again"
+  elif [[ -n "$CONSOLE_URL" || -n "$CLUSTER_TOKEN" ]]; then
+    die $EXIT_USAGE "--console and --cluster-token need --agent"
+  fi
   # Releases are tagged v0.2.0; chart versions and image tags drop the "v".
   KWERFT_VERSION=${KWERFT_VERSION#v}
   [[ "$KWERFT_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]] \
@@ -289,6 +317,26 @@ lower() { printf '%s' "$1" | tr '[:upper:]' '[:lower:]'; }
 
 valid_hostname() {
   [[ ${#1} -le 253 && "$1" =~ ^([a-z0-9]([-a-z0-9]*[a-z0-9])?\.)+[a-z]([-a-z0-9]*[a-z0-9])?$ ]]
+}
+
+# valid_console_url accepts https://<hostname>[:port] only: the agent verifies
+# the console's certificate against public CAs.
+valid_console_url() {
+  local host=${1#https://}
+  [[ "$1" == https://* ]] || return 1
+  host=${host%:[0-9]*}
+  valid_hostname "$host" && [[ "${1#https://}" =~ ^[^/?#@]+$ ]]
+}
+
+# valid_cluster_token: kwag_<cluster>_<secret> (internal/clusters.NewAgentToken).
+valid_cluster_token() {
+  [[ "$1" =~ ^kwag_[a-z]([-a-z0-9]*[a-z0-9])?_[A-Za-z0-9_-]{32,}$ ]]
+}
+
+# cluster_of_token prints the cluster an agent token belongs to.
+cluster_of_token() {
+  local rest=${1#kwag_}
+  printf '%s' "${rest%%_*}"
 }
 
 # ---------------------------------------------------------------------------
@@ -430,7 +478,7 @@ stage_preflight() {
 
   curl -fsS --max-time 10 -o /dev/null https://get.k3s.io || die $EXIT_NETWORK "No outbound HTTPS to get.k3s.io"
   [[ -n "$PUBLIC_IP" ]] || die $EXIT_NETWORK "Could not determine the public IPv4 address"
-  if [[ "$MODE" == "install" ]]; then check_release; fi
+  if [[ "$MODE" == "install" || "$MODE" == "agent" ]]; then check_release; fi
 
   local priv="no private network"
   [[ -n "$PRIVATE_IP" ]] && priv="private $PRIVATE_IP on $PRIVATE_IFACE"
@@ -562,8 +610,8 @@ node-ip: $node_ip
 node-external-ip: $PUBLIC_IP
 advertise-address: $node_ip
 tls-san:
-  - $DOMAIN
-  - $PUBLIC_IP
+${DOMAIN:+  - $DOMAIN
+}  - $PUBLIC_IP
 cluster-cidr: $POD_CIDR
 service-cidr: $SERVICE_CIDR
 flannel-backend: none
@@ -1171,6 +1219,7 @@ stage_kwerft() {
     | kc apply --server-side --force-conflicts -f - >>"$LOG_FILE" 2>&1 \
     || die $EXIT_KWERFT "Kwerft CRDs failed to apply (chart: $ref)"
   apply_console_settings
+  write_join_secret
   adopt_namespace kwerft-builds
   local taken
   taken=$(registry_address_taken)
@@ -1190,6 +1239,89 @@ stage_kwerft() {
     >>"$LOG_FILE" 2>&1 || die $EXIT_KWERFT "Kwerft installation failed (chart: $ref)"
   printf '%s\n' "$DOMAIN" >"$DOMAIN_FILE"   # fallback; the cluster setting is the record
   echo "control plane ${IMAGE:-$KWERFT_VERSION} ready · registry zot $ZOT_VERSION at $REGISTRY_CLUSTER_IP:5000"
+}
+
+# ---------------------------------------------------------------------------
+# Agent mode: Kwerft without its console, managed from another one
+# (docs/phase5.md). The chart runs `kwerft agent`: the reconcilers, and a
+# tunnel that dials the console with the cluster's token and carries the
+# console's requests to this cluster's API server, which stays private.
+# ---------------------------------------------------------------------------
+stage_kwerft_agent() {
+  kc create namespace kwerft-system --dry-run=client -o yaml | kc apply -f - >/dev/null
+  mark_system_namespace kwerft-system
+
+  local ref version_args=() image_args=()
+  ref=$(chart_ref)
+  [[ "$ref" == oci://* ]] && version_args=(--version "$KWERFT_VERSION")
+  if [[ -n "$IMAGE" ]]; then
+    if [[ -n "$IMAGE_ARCHIVE" ]]; then
+      k3s ctr --namespace k8s.io images import "$IMAGE_ARCHIVE" >>"$LOG_FILE" 2>&1 \
+        || die $EXIT_KWERFT "Could not import $IMAGE_ARCHIVE into k3s"
+    fi
+    image_args=(--set image.repository="${IMAGE%:*}" --set image.tag="${IMAGE##*:}" --set image.pullPolicy=IfNotPresent)
+  else
+    image_args=(--set image.tag="$KWERFT_VERSION")
+  fi
+  local firewall_args=(--set firewall.privateNetwork="")
+  [[ -n "$PRIVATE_CIDR" ]] && firewall_args=(--set firewall.privateNetwork="$(network_of "$PRIVATE_CIDR")")
+  helmk show crds "$ref" ${version_args[@]+"${version_args[@]}"} 2>>"$LOG_FILE" \
+    | kc apply --server-side --force-conflicts -f - >>"$LOG_FILE" 2>&1 \
+    || die $EXIT_KWERFT "Kwerft CRDs failed to apply (chart: $ref)"
+  adopt_namespace kwerft-builds
+  local taken
+  taken=$(registry_address_taken)
+  [[ -z "$taken" ]] || die $EXIT_KWERFT "The registry's fixed address $REGISTRY_CLUSTER_IP is taken by Service $taken." \
+    "Delete or re-create that Service (it gets a new address) and re-run the installer."
+  write_agent_secret
+  write_join_secret
+  helmk upgrade --install kwerft "$ref" ${version_args[@]+"${version_args[@]}"} \
+    --namespace kwerft-system --wait --timeout 10m --skip-crds \
+    --set mode=agent \
+    --set agent.consoleURL="$CONSOLE_URL" \
+    --set acme.email="$ACME_EMAIL" \
+    --set platform="$PLATFORM" \
+    --set hubble.enabled="$(hubble_enabled)" \
+    "${image_args[@]}" "${firewall_args[@]}" \
+    --set registry.image.tag="$ZOT_VERSION" \
+    --set registry.clusterIP="$REGISTRY_CLUSTER_IP" \
+    --set builds.buildkitImage="docker.io/moby/buildkit:${BUILDKIT_VERSION}-rootless" \
+    --set builds.railpackImage="ghcr.io/railwayapp/railpack-frontend:${RAILPACK_VERSION}" \
+    >>"$LOG_FILE" 2>&1 || die $EXIT_KWERFT "Kwerft installation failed (chart: $ref)"
+  echo "agent ${IMAGE:-$KWERFT_VERSION} · cluster $(cluster_of_token "$CLUSTER_TOKEN") → $CONSOLE_URL"
+}
+
+# write_agent_secret stores the agent token where the chart mounts it
+# (agent.tokenSecret). From stdin, so the token is not in kubectl's
+# arguments; the agent rereads it before every connection, so a rotated
+# token (re-run with the new command) needs no restart.
+write_agent_secret() {
+  printf '%s' "$CLUSTER_TOKEN" \
+    | kc -n kwerft-system create secret generic kwerft-agent --from-file=token=/dev/stdin --dry-run=client -o yaml \
+    | kc apply -f - >>"$LOG_FILE" 2>&1 || die $EXIT_KWERFT "Could not store the agent token"
+}
+
+# write_join_secret records how new nodes join this cluster: Secret
+# cluster-local-join (keys server, token) in kwerft-system. In a remote
+# cluster the agent hands it to the console (which keeps it as
+# cluster-<name>-join); in the console's own cluster it is the join material
+# of the Cluster "local". Only on a k3s server, which holds the join token.
+write_join_secret() {
+  local token_file=/var/lib/rancher/k3s/server/token server
+  [[ -r "$token_file" ]] || return 0
+  server="https://${PRIVATE_IP:-$PUBLIC_IP}:6443"
+  kc -n kwerft-system create secret generic cluster-local-join \
+    --from-literal=server="$server" --from-file=token="$token_file" --dry-run=client -o yaml \
+    | kc apply -f - >>"$LOG_FILE" 2>&1 || die $EXIT_KWERFT "Could not store the cluster's join material"
+}
+
+print_agent_summary() {
+  local secs=$(( $(date +%s) - START_TS ))
+  echo
+  printf '  Console     %s%s%s\n' "$C_ACC" "$CONSOLE_URL" "$C_0"
+  printf '  This cluster (%s) appears under Clusters there once its agent connects, within a minute.\n' "$(cluster_of_token "$CLUSTER_TOKEN")"
+  printf '  Log         %s\n\n' "$LOG_FILE"
+  printf '%sDone in %dm %02ds.%s Re-run the same command any time to repair or upgrade.\n' "$C_OK" $((secs / 60)) $((secs % 60)) "$C_0"
 }
 
 # adopt_namespace hands a namespace the chart creates, but that already exists
@@ -1454,12 +1586,22 @@ main() {
 
   detect_platform
   detect_addresses
-  [[ "$MODE" == "join" ]] || resolve_domain
+  [[ "$MODE" == "join" || "$MODE" == "agent" ]] || resolve_domain
+  # A server keeps the mode it was installed in: a console is not turned
+  # into an agent (or back) by re-running with other flags.
+  if (( ! DRY_RUN )); then
+    if [[ "$MODE" == "agent" ]] && stage_done handoff; then
+      die $EXIT_USAGE "This server runs a Kwerft console; --agent is for a cluster without one."
+    fi
+    if [[ "$MODE" == "install" ]] && stage_done kwerft-agent; then
+      die $EXIT_USAGE "This server runs Kwerft in agent mode (managed from a console). Re-run the console's command with --agent."
+    fi
+  fi
 
   printf '%s▸ Kwerft installer %s%s  %schannel=%s · platform=%s · mode=%s%s\n\n' \
     "$C_ACC$C_B" "$KWERFT_VERSION" "$C_0" "$C_DIM" "$CHANNEL" "$PLATFORM" "$MODE" "$C_0"
 
-  if [[ "$MODE" != "join" ]] && is_temp_domain; then
+  if [[ "$MODE" == "install" ]] && is_temp_domain; then
     warn "No --domain given: using temporary hostname $DOMAIN (fine for trying Kwerft, not for production)."
     echo
   fi
@@ -1481,6 +1623,11 @@ main() {
   run_stage network       "Network"       stage_network force
   run_stage ingress       "Ingress & TLS" stage_ingress_tls force
   run_stage observability "Observability" stage_observability force
+  if [[ "$MODE" == "agent" ]]; then
+    run_stage kwerft-agent "Kwerft agent" stage_kwerft_agent force
+    (( DRY_RUN )) || print_agent_summary
+    return
+  fi
   run_stage kwerft         "Kwerft"         stage_kwerft force
   run_stage handoff       "Handoff"       stage_handoff force
 
