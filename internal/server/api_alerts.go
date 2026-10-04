@@ -279,6 +279,10 @@ func (al *alertsAPI) list(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, out)
 }
 
+// resolvedAfter: vmalert writes ALERTS at every evaluation (20s, or 10s)
+// while an alert fires, so a series silent this long has stopped.
+const resolvedAfter = 90 * time.Second
+
 // resolved are the alerts that fired in the last 24 hours and no longer do:
 // Alertmanager forgets them, but vmalert writes the ALERTS series.
 func (al *alertsAPI) resolved(ctx context.Context, v visibility, current []alerting.AMAlert) ([]alertJSON, error) {
@@ -317,9 +321,14 @@ func (al *alertsAPI) resolved(ctx context.Context, v visibility, current []alert
 		if active[fp] || !v.sees(labels) {
 			continue
 		}
+		ended := time.Unix(int64(s.Value), 0).UTC()
+		if now.Sub(ended) < resolvedAfter {
+			// Still written at the last evaluations: firing, even if its
+			// labels differ from Alertmanager's copy (vmalert may add some).
+			continue
+		}
 		j := newAlertJSON(v, labels)
 		j.Fingerprint, j.State = fp, "resolved"
-		ended := time.Unix(int64(s.Value), 0).UTC()
 		j.EndsAt = &ended
 		j.StartsAt = starts[fp]
 		if j.StartsAt.IsZero() {
