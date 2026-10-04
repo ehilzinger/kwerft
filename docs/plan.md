@@ -278,6 +278,37 @@ Work split and contracts: `docs/phase2.md`.
 - [ ] ~~e2e harness~~ moved to Phase 4
 - [ ] Publish the image and chart to GHCR (`ghcr.io/ehilzinger`) from CI
 
+## Open follow-ups (collected 2026-10-04, after v0.4.0)
+
+Things found while building Phases 1–4 that are not done yet. Pick them up
+before the beta or move them into a phase.
+
+**To try on the test server (need the user's browser or accounts)**
+- Server firewall: "Your address" shows the real public IP, then SSH narrowing to it (W3's step-by-step plan and recovery in `docs/phase4.md` › As built (W3)); also checks that `X-Real-Ip` is trusted from Traefik's actual peer address (cilium_host) — compare audit-log IPs with the real client.
+- Single sign-on with a real provider (redirect URI `https://<console>/api/v1/sso/callback`); an API token and a downloaded kubeconfig (`kubectl auth whoami`, exec/secrets/`--as` refused).
+- Slack as a notification channel (only ntfy was tried); the Phase 3 exit criterion literally names Slack.
+- Git connections by GitHub App and by SSH deploy key (only a fine-grained token was tried on the server).
+- A resolved notification after an alert stops firing; silences from the Alerts tab.
+
+**Small fixes**
+- ntfy notifications: set the logs link as the tap target (ntfy `click`), not only in the text.
+- Reconcilers log "object has been modified" conflicts as errors since status writes are guarded (`patchStatus`); retry them quietly instead.
+- After an upgrade, developers and viewers have no project access for the seconds until the Project reconciler's resync writes the per-project RoleBindings; keep the old binding until then or have the installer wait for them.
+- A few checks still use the console role instead of the project role (`POST /git/check`, the alert-rule write route, Jobs/Volumes/Schedule pages), so a console viewer who is a developer in a Members project cannot use them.
+- `keep-` tags of a deleted App stay in the registry; webhooks Kwerft created on a Git host stay when the connection is deleted; GitHub App `slug` is never filled in.
+- API tokens page: provider-friendly identity names, whether a token's projects still exist.
+- The blueprint artifact still shows "Mirror to Hetzner Cloud Firewall" and a Phase 4 Hetzner card (moved to Phase 5).
+- `TrafficRuleSpec`'s doc comment says Apps open their ports to their project; they do not (only to `allowFrom` and, when not isolated, every project).
+
+**Design gaps to decide**
+- The in-cluster registry has no authentication: a build in project A could push tags into project B's repository (running Apps are protected by digest pinning). Per-project registry credentials.
+- Project names stay listable through Kubernetes for every role (cluster-scoped read); alert-rule and channel names are visible to all.
+- Builds cannot reach private Git hosts on private networks (by design of the builds egress policy); an opt-in per connection.
+- `VolumeFillingUp` never fires on local-path volumes (no kubelet volume stats).
+- Hubble counts restart with the console and are per replica; the Traefik router-name format the HTTP metrics depend on is Traefik 3.7's.
+- zot-minimal has no metrics endpoint.
+- "Patch-only" Secrets are readable from a patch response at the API level; only the kubeconfig proxy closes that gap.
+
 ## Kwerft for Mac (Phase 7)
 
 A native macOS app for running dev workloads locally and mirroring them to a
