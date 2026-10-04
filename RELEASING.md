@@ -71,7 +71,9 @@ Nothing is published by either of these:
   --image-archive kwerft-image-0.2.0-linux-amd64.tar`.
 
 - On GitHub: Actions → release → Run workflow, with a version such as
-  `0.2.0-rc.1`. The artifacts are attached to the run.
+  `0.2.0-rc.1`. It builds everything and writes the notes to the run's
+  summary; nothing is published and no workflow artifacts are stored (they
+  count against the account's storage quota for private repositories).
 
 ## One-time GitHub setup
 
@@ -150,8 +152,8 @@ before the first stable release.
    or Settings → Secrets and variables → Actions → New repository secret.
 
 If a release ran before the secret existed, publish its scripts afterwards:
-re-run the `install-repo` job of that run (within 14 days, while its artifacts
-exist), or by hand:
+re-run the `install-repo` job of that run (it fetches the stamped scripts from
+the GitHub Release), or by hand:
 
 ```bash
 gh release download v0.2.0 -R ehilzinger/kwerft -p install.sh -p join.sh -p SHA256SUMS -D /tmp/kwerft-0.2.0

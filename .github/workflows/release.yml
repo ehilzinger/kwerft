@@ -1,6 +1,6 @@
 # Cuts a release from a tag: v0.2.0 (stable) or v0.2.0-rc.1 (prerelease).
 # Run it by hand (workflow_dispatch) to rehearse: everything is built and
-# uploaded as a workflow artifact, nothing is published. See RELEASING.md.
+# summarised, nothing is published. See RELEASING.md.
 #
 # The steps themselves live in hack/release.sh, so `make release-dry-run`
 # exercises the same code on a laptop.
@@ -27,15 +27,25 @@ jobs:
   checks:
     uses: ./.github/workflows/ci.yml
 
-  # Builds every artifact without credentials: stamped scripts, chart,
-  # per-platform image tarballs and SBOMs.
-  build:
+  # Builds everything (stamped scripts, chart, per-platform images, SBOMs) and,
+  # for tag pushes only, publishes image and chart to GHCR and creates the
+  # GitHub Release. One job on purpose: handing build output to a separate
+  # publish job needs workflow artifacts, which count against the account's
+  # storage quota for private repositories — a full quota failed v0.1.0-rc.1.
+  # Manual runs (workflow_dispatch) build and summarise, but publish nothing.
+  release:
     needs: checks
     runs-on: ubuntu-latest
+    permissions:
+      contents: write   # the GitHub Release (tag pushes only)
+      packages: write   # ghcr.io/ehilzinger/kwerft and ghcr.io/ehilzinger/charts/kwerft
     outputs:
       version: ${{ steps.meta.outputs.version }}
       tag: ${{ steps.meta.outputs.tag }}
-      prerelease: ${{ steps.meta.outputs.prerelease }}
+      image: ${{ steps.image.outputs.ref }}
+      chart: ${{ steps.chart.outputs.ref }}
+    env:
+      PUBLISH: ${{ github.event_name == 'push' }}
     steps:
       - uses: actions/checkout@v4
       - id: meta
@@ -60,68 +70,37 @@ jobs:
         env:
           VERSION: ${{ steps.meta.outputs.version }}
       - run: cat dist/release/NOTES.md >>"$GITHUB_STEP_SUMMARY"
-      - uses: actions/upload-artifact@v4
-        with:
-          name: release-${{ steps.meta.outputs.version }}
-          path: dist/release
-          retention-days: 14
-      - uses: actions/upload-artifact@v4
-        with:
-          name: web-dist
-          path: web/dist
-          retention-days: 1
 
-  # Tag pushes only: image and chart to GHCR, then the GitHub Release.
-  publish:
-    needs: build
-    if: github.event_name == 'push'
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write   # the GitHub Release
-      packages: write   # ghcr.io/ehilzinger/kwerft and ghcr.io/ehilzinger/charts/kwerft
-    outputs:
-      image: ${{ steps.image.outputs.ref }}
-      chart: ${{ steps.chart.outputs.ref }}
-    env:
-      VERSION: ${{ needs.build.outputs.version }}
-      TAG: ${{ needs.build.outputs.tag }}
-      PRERELEASE: ${{ needs.build.outputs.prerelease }}
-    steps:
-      - uses: actions/checkout@v4
-      - id: pins
-        run: sed -n -E 's/^(HELM_VERSION)="([^"]*)".*/\1=\2/p' install/install.sh | tee -a "$GITHUB_OUTPUT"
-      - uses: actions/setup-go@v5
-        with:
-          go-version-file: go.mod
-      - uses: azure/setup-helm@v4
-        with:
-          version: ${{ steps.pins.outputs.HELM_VERSION }}
-      - uses: actions/download-artifact@v4
-        with:
-          name: release-${{ needs.build.outputs.version }}
-          path: dist/release
-      - uses: actions/download-artifact@v4
-        with:
-          name: web-dist
-          path: web/dist
       - uses: docker/login-action@v3
+        if: env.PUBLISH == 'true'
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
       - name: Log Helm in to ghcr.io
+        if: env.PUBLISH == 'true'
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: helm registry login ghcr.io --username "$GITHUB_ACTOR" --password-stdin <<<"$GITHUB_TOKEN"
       - id: image
         name: Push the image (linux/amd64 + linux/arm64)
+        if: env.PUBLISH == 'true'
+        env:
+          VERSION: ${{ steps.meta.outputs.version }}
         run: echo "ref=$(hack/release.sh push-image "$VERSION" dist/release)" >>"$GITHUB_OUTPUT"
       - id: chart
         name: Push the chart
+        if: env.PUBLISH == 'true'
+        env:
+          VERSION: ${{ steps.meta.outputs.version }}
         run: echo "ref=$(hack/release.sh push-chart "$VERSION" dist/release)" >>"$GITHUB_OUTPUT"
       - name: Create the GitHub Release
+        if: env.PUBLISH == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.meta.outputs.version }}
+          TAG: ${{ steps.meta.outputs.tag }}
+          PRERELEASE: ${{ steps.meta.outputs.prerelease }}
           IMAGE: ${{ steps.image.outputs.ref }}
           CHART: ${{ steps.chart.outputs.ref }}
         run: |
@@ -147,7 +126,7 @@ jobs:
   # Keyless signing records this repository's name, the workflow path and the
   # commit in the public Rekor transparency log; see RELEASING.md.
   sign:
-    needs: publish
+    needs: release
     if: github.event_name == 'push' && vars.SIGN_RELEASES == 'true'
     runs-on: ubuntu-latest
     permissions:
@@ -161,8 +140,8 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
       - env:
-          IMAGE: ${{ needs.publish.outputs.image }}
-          CHART: ${{ needs.publish.outputs.chart }}
+          IMAGE: ${{ needs.release.outputs.image }}
+          CHART: ${{ needs.release.outputs.chart }}
         run: |
           cosign sign --yes "$IMAGE"
           cosign sign --yes "$CHART"
@@ -170,11 +149,12 @@ jobs:
   # The install script is served from a separate public repository because this
   # one is private. Needs the INSTALL_REPO_TOKEN secret; skipped without it.
   install-repo:
-    needs: [build, publish]
+    needs: release
     if: github.event_name == 'push'
     runs-on: ubuntu-latest
     env:
-      VERSION: ${{ needs.build.outputs.version }}
+      VERSION: ${{ needs.release.outputs.version }}
+      TAG: ${{ needs.release.outputs.tag }}
       INSTALL_REPO: ${{ vars.INSTALL_REPO || 'ehilzinger/kwerft-install' }}
       HAS_TOKEN: ${{ secrets.INSTALL_REPO_TOKEN != '' }}
     steps:
@@ -190,11 +170,12 @@ jobs:
           repository: ${{ env.INSTALL_REPO }}
           token: ${{ secrets.INSTALL_REPO_TOKEN }}
           path: install-repo
-      - uses: actions/download-artifact@v4
+      # The stamped scripts exactly as attached to the GitHub Release.
+      - name: Fetch the stamped scripts from the release
         if: env.HAS_TOKEN == 'true'
-        with:
-          name: release-${{ needs.build.outputs.version }}
-          path: dist/release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release download "$TAG" --pattern install.sh --pattern join.sh --pattern SHA256SUMS --dir dist/release
       - name: Publish the stamped scripts
         if: env.HAS_TOKEN == 'true'
         run: |
