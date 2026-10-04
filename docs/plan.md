@@ -19,7 +19,7 @@ the same plan in long form.
 
 1. **One command, zero follow-up.** The installer is idempotent and fully flag-driven; re-running repairs or upgrades. Cloud-init can call it unattended.
 2. **Kubernetes is the database.** Apps, rules and domains are custom resources; the UI writes them and reconcilers render native objects. GitOps works for free.
-3. **Lean on a 4 GB box.** Platform overhead around 2 GB of RAM; builds need 8 GB to run comfortably.
+3. **Fits an 8 GB box.** The platform uses about 2.5 GB of RAM (measured), so an 8 GB server is the recommended size; 4 GB works with `--lite` and little else.
 4. **Secure by default.** Projects isolated, Kubernetes API private, secrets encrypted, every shell session and change audited.
 5. **Never a dead end.** YAML export, scoped kubeconfig, `kubectl` all keep working.
 
@@ -60,10 +60,23 @@ mTLS WebSocket tunnel, so they need no public Kubernetes API.
 | Platform DB | SQLite (users, sessions, tokens, audit) + Litestream | Postgres (later, for HA) |
 | Identity | argon2id, passkeys/TOTP, OIDC | embedded Dex |
 
-Memory budget on one node (validate in Phase 0): k3s 600 MB, Cilium 300 MB,
-Traefik + cert-manager 180 MB, VictoriaMetrics stack 350 MB, VictoriaLogs +
-Vector 200 MB, Werft 150 MB, zot 60 MB → **≈ 1.9 GB**, plus 1–2 GB per
-running build.
+Memory, measured 2026-10-04 on an idle Hetzner Cloud server (8 GB, Ubuntu
+26.04, k3s v1.37.1, one demo app):
+
+| Component | Estimate | Measured |
+|---|---|---|
+| k3s process (API server, embedded etcd, kubelet, containerd) | 600 MB | **1.3 GB** |
+| Cilium agent, operator, Envoy, Hubble relay | 300 MB | 300 MB |
+| Traefik, cert-manager | 180 MB | 125 MB |
+| VictoriaMetrics stack, VictoriaLogs, Vector, node-exporter | 550 MB | 625 MB |
+| CoreDNS, metrics-server, local-path | — | 45 MB |
+| Werft | 150 MB | 13 MB |
+| zot registry (Phase 2) | 60 MB | — |
+| **Platform total** | **≈ 1.9 GB** | **≈ 2.4 GB** (host: 3.0 GB used incl. OS) |
+
+Plus 1–2 GB per running build. Recommended server: 8 GB. k3s dominates;
+`--lite` defaults should target the observability stack (the next-largest
+item) — e.g. drop vmalert/Alertmanager and shorten retention.
 
 ## Installer (`install/install.sh`)
 
@@ -131,15 +144,17 @@ Exit codes: 0 ok · 2 usage · 10 preflight · 20 network/DNS · 30 Kubernetes �
 - [x] React console shell with design tokens from the blueprint
 - [x] Dev deploy without Docker or a registry: `make dev-server HOST=root@<ip>` (ko image + `--image-archive`)
 - [x] Project and App reconcilers with envtest integration tests (started early from Phase 1)
-- [ ] Run the installer on a Hetzner Cloud server and a dedicated server; fix chart values against the pinned versions
-- [ ] Measure the memory budget; decide on `--lite` defaults
+- [x] First install on a Hetzner Cloud server (2026-10-04): all stages pass, Let's Encrypt certificate issued, a demo App reachable publicly, network isolation verified
+- [ ] Same on a dedicated server
+- [x] Measure the memory budget (see table above)
+- [ ] Decide `--lite` defaults
 - [ ] e2e harness: create Cloud server via API, install, assert, destroy (+ nightly sweeper)
 - [ ] Publish the image and chart to GHCR (`ghcr.io/ehilzinger`) from CI
 
 ## Risks
 
 - **Single node is a single point of failure** — say so in the UI; etcd snapshots to Object Storage from day one.
-- **Overhead on small servers** — hold the budget in CI; `--lite` profile.
+- **Overhead on small servers** — measured at ≈ 2.4 GB; hold it in CI; `--lite` profile for 4 GB servers.
 - **Builds compete with apps for memory** — Jobs with limits, one at a time on small nodes, optional build node pool.
 - **Cloud vs. dedicated asymmetry** — Robot cannot create servers on demand; vSwitch ↔ Cloud Network coupling is per network zone; otherwise WireGuard over public IPs (requires the console to open node ports per joiner — Phase 5).
 - **Firewall lock-out** — caller-IP check, auto-revert timer, `install.sh --reset-firewall`.
