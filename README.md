@@ -23,8 +23,9 @@ image (see the roadmap in docs/plan.md). A shorter `get.kwerft.dev`-style URL
 comes once Kwerft has its own domain.
 
 No domain yet? Leave out `--domain` and the console gets a temporary
-`<public-ip>.sslip.io` hostname; re-run with `--domain` once DNS points at the
-server. `--email` is optional.
+`<public-ip>.sslip.io` hostname; once DNS points at the server, change it under
+Settings in the console (or re-run with `--domain`). A re-run without
+`--domain` keeps whatever Settings chose. `--email` is optional.
 
 `./install/install.sh --help` lists every flag; `--dry-run` prints the plan
 without changing anything. Re-running the script resumes or repairs an
@@ -33,7 +34,8 @@ install. For unattended installs (cloud-init), pass `--config kwerft.yaml`:
 ```yaml
 domain: ops.example.com
 email: ops@example.com
-dns: { solver: hetzner, tokenFile: /root/dns.token }
+appsDomain: apps.example.com          # apps get <name>.apps.example.com
+dns: { solver: hetzner, tokenFile: /root/dns.token }   # wildcard certificate via Hetzner DNS
 owner: { email: you@example.com, passwordFile: /root/owner.pw }
 ```
 
