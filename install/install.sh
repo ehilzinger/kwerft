@@ -60,6 +60,7 @@ readonly WG_PORT=51871
 readonly POD_CIDR="10.42.0.0/16"
 readonly SERVICE_CIDR="10.43.0.0/16"
 readonly TEMP_DOMAIN_SUFFIX=".sslip.io"   # wildcard DNS: <ip>.sslip.io resolves to <ip>
+readonly ACME_STAGING_URL="https://acme-staging-v02.api.letsencrypt.org/directory"   # --acme-server staging
 readonly REGISTRY_HOST="registry.kwerft.internal:5000"   # internal/builds.RegistryHost
 readonly REGISTRY_CLUSTER_IP="10.43.0.50"  # zot's fixed ClusterIP (chart: registry.clusterIP), inside SERVICE_CIDR
 readonly REGISTRY_MARKER="# Managed by Kwerft installer (registry mirror)."
@@ -72,6 +73,7 @@ FIREWALL_STATE_DIR="$STATE_DIR/firewall"  # the node agent's state (internal/fir
 # Options (flags override KWERFT_* environment variables).
 DOMAIN="${KWERFT_DOMAIN:-}"
 ACME_EMAIL="${KWERFT_EMAIL:-}"
+ACME_SERVER="${KWERFT_ACME_SERVER:-}"   # empty: the chart's default, Let's Encrypt production
 CONFIG_FILE="${KWERFT_CONFIG:-}"
 PLATFORM="${KWERFT_PLATFORM:-auto}"
 PRIVATE_IFACE="${KWERFT_PRIVATE_IFACE:-}"
@@ -135,6 +137,9 @@ Install:
   --domain HOST          Console hostname. Without it, a temporary <public-ip>.sslip.io
                          name is used so you can try Kwerft before setting up DNS
   --email ADDR           Let's Encrypt account contact (optional)
+  --acme-server URL      ACME directory for certificates, or "staging" for Let's Encrypt's
+                         staging CA (untrusted certificates, generous rate limits: for tests).
+                         Default: Let's Encrypt production. Give it on every run
   --config FILE          Pre-seed owner, DNS, Hetzner tokens; skips the setup wizard
   --platform P           auto | cloud | dedicated (default: auto)
   --private-iface IF     Interface for node-to-node and API traffic
@@ -177,6 +182,7 @@ parse_args() {
     case "$1" in
       --domain)         need_arg "$@"; DOMAIN=$2; shift 2 ;;
       --email)          need_arg "$@"; ACME_EMAIL=$2; shift 2 ;;
+      --acme-server)    need_arg "$@"; ACME_SERVER=$2; shift 2 ;;
       --config)         need_arg "$@"; CONFIG_FILE=$2; shift 2 ;;
       --platform)       need_arg "$@"; PLATFORM=$2; shift 2 ;;
       --private-iface)  need_arg "$@"; PRIVATE_IFACE=$2; shift 2 ;;
@@ -208,6 +214,10 @@ parse_args() {
   case "$JOIN_ROLE" in worker|control-plane) ;; *) die $EXIT_USAGE "--role must be worker or control-plane" ;; esac
   if [[ "$MODE" == "join" && -z "$JOIN_TOKEN" ]]; then die $EXIT_USAGE "--join needs --token"; fi
   if [[ -n "$CONFIG_FILE" && ! -r "$CONFIG_FILE" ]]; then die $EXIT_USAGE "Config file not readable: $CONFIG_FILE"; fi
+  [[ "$ACME_SERVER" == staging ]] && ACME_SERVER=$ACME_STAGING_URL
+  if [[ -n "$ACME_SERVER" && ! "$ACME_SERVER" =~ ^https://[^[:space:]]+$ ]]; then
+    die $EXIT_USAGE "--acme-server must be an https:// ACME directory URL or staging, got '$ACME_SERVER'"
+  fi
   if [[ -n "$IMAGE" && "${IMAGE##*/}" != *:* ]]; then die $EXIT_USAGE "--image needs a tag, e.g. ghcr.io/ehilzinger/kwerft:dev-abc123"; fi
   if [[ -n "$IMAGE_ARCHIVE" && -z "$IMAGE" ]]; then die $EXIT_USAGE "--image-archive needs --image to say which image it contains"; fi
   if [[ -n "$IMAGE_ARCHIVE" && ! -r "$IMAGE_ARCHIVE" ]]; then die $EXIT_USAGE "Image archive not readable: $IMAGE_ARCHIVE"; fi
@@ -1149,7 +1159,7 @@ stage_kwerft() {
       --from-file=config.yaml="$CONFIG_FILE" --dry-run=client -o yaml | kc apply -f - >/dev/null
   fi
 
-  local ref version_args=() image_args=()
+  local ref version_args=() image_args=() acme_args=()
   ref=$(chart_ref)
   [[ "$ref" == oci://* ]] && version_args=(--version "$KWERFT_VERSION")
   if [[ -n "$IMAGE" ]]; then
@@ -1162,6 +1172,7 @@ stage_kwerft() {
   else
     image_args=(--set image.tag="$KWERFT_VERSION")
   fi
+  [[ -n "$ACME_SERVER" ]] && acme_args=(--set acme.server="$ACME_SERVER")
   # Shown in the required firewall rule cluster-private (Network → Server firewall).
   local firewall_args=(--set firewall.privateNetwork="")
   [[ -n "$PRIVATE_CIDR" ]] && firewall_args=(--set firewall.privateNetwork="$(network_of "$PRIVATE_CIDR")")
@@ -1182,7 +1193,7 @@ stage_kwerft() {
     --set acme.email="$ACME_EMAIL" \
     --set platform="$PLATFORM" \
     --set hubble.enabled="$(hubble_enabled)" \
-    "${image_args[@]}" "${firewall_args[@]}" \
+    "${image_args[@]}" "${firewall_args[@]}" ${acme_args[@]+"${acme_args[@]}"} \
     --set registry.image.tag="$ZOT_VERSION" \
     --set registry.clusterIP="$REGISTRY_CLUSTER_IP" \
     --set builds.buildkitImage="docker.io/moby/buildkit:${BUILDKIT_VERSION}-rootless" \
@@ -1461,6 +1472,13 @@ main() {
 
   if [[ "$MODE" != "join" ]] && is_temp_domain; then
     warn "No --domain given: using temporary hostname $DOMAIN (fine for trying Kwerft, not for production)."
+    echo
+  fi
+  if [[ "$MODE" != "join" && "$ACME_SERVER" == "$ACME_STAGING_URL" ]]; then
+    warn "Certificates come from Let's Encrypt staging: browsers do not trust them (for tests)."
+    echo
+  elif [[ "$MODE" != "join" && -n "$ACME_SERVER" ]]; then
+    say "Certificates come from the ACME directory $ACME_SERVER."
     echo
   fi
 

@@ -206,6 +206,30 @@ secret_expires() { printf '%s' "$1" | base64; }
   [[ "$output" == *"--version must look like 0.2.0"* ]]
 }
 
+@test "--acme-server staging selects Let's Encrypt staging and says so" {
+  run "$SCRIPT" --dry-run --platform cloud --domain ops.example.com --acme-server staging
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"Let's Encrypt staging"* ]]
+  KWERFT_SOURCED=1 source "$SCRIPT"
+  parse_args --acme-server staging
+  [ "$ACME_SERVER" = "https://acme-staging-v02.api.letsencrypt.org/directory" ]
+}
+
+@test "KWERFT_ACME_SERVER works like --acme-server; without either the chart's default stays" {
+  KWERFT_ACME_SERVER=staging KWERFT_SOURCED=1 source "$SCRIPT"
+  parse_args
+  [ "$ACME_SERVER" = "https://acme-staging-v02.api.letsencrypt.org/directory" ]
+  run env -u KWERFT_ACME_SERVER "$SCRIPT" --dry-run --platform cloud --domain ops.example.com
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"ACME"* && "$output" != *"staging"* ]]
+}
+
+@test "--acme-server must be an https URL" {
+  run "$SCRIPT" --dry-run --platform cloud --acme-server http://acme.example.com/directory
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"--acme-server must be an https:// ACME directory URL or staging"* ]]
+}
+
 # check_release asks the registry through oci_manifest_status; these tests stub it.
 release_env() {
   KWERFT_SOURCED=1 source "$SCRIPT"

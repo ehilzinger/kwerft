@@ -1,0 +1,190 @@
+# End-to-end install runs on fresh Hetzner Cloud servers: the published
+# installer of a release, a fresh install and an upgrade from the release
+# before it, checked the way a user would use Kwerft; the servers are always
+# deleted again. See RELEASING.md › "e2e install runs".
+#
+# - release.yml calls it after a tag is published (a failed run does not
+#   unpublish anything).
+# - Nightly: the latest stable release, fresh and as an upgrade.
+# - By hand: Actions → e2e → Run workflow, with a version.
+# - The sweeper deletes e2e servers and SSH keys older than 3 h.
+#
+# Needs the secret HCLOUD_TOKEN (a Hetzner Cloud project used only for this);
+# without it every job skips with a notice. Results go to the run summary;
+# no workflow artifacts (they count against the private repository's quota).
+name: e2e
+
+on:
+  workflow_call:
+    inputs:
+      version:
+        description: Release to test, e.g. 0.5.0
+        type: string
+        required: true
+      release:
+        description: Called by the release workflow for a freshly published tag
+        type: boolean
+        default: false
+    secrets:
+      HCLOUD_TOKEN:
+        required: false
+  schedule:
+    - cron: "17 2 * * *"    # nightly e2e (and a sweep)
+    - cron: "47 */3 * * *"  # sweep only
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Release to test (empty = the latest stable release)
+        required: false
+        default: ""
+      upgrade:
+        description: Also test the upgrade from the release before it
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+env:
+  INSTALL_REPO: ${{ vars.INSTALL_REPO || 'ehilzinger/kwerft-install' }}
+
+jobs:
+  # Decides what to run: the version, the release to upgrade from, and
+  # whether there is a token at all.
+  resolve:
+    if: github.event_name != 'schedule' || github.event.schedule == '17 2 * * *'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      run: ${{ steps.plan.outputs.run }}
+      version: ${{ steps.plan.outputs.version }}
+      matrix: ${{ steps.plan.outputs.matrix }}
+    steps:
+      - name: Skip without HCLOUD_TOKEN
+        id: token
+        env:
+          HAS_TOKEN: ${{ secrets.HCLOUD_TOKEN != '' }}
+        run: |
+          echo "present=$HAS_TOKEN" >>"$GITHUB_OUTPUT"
+          if [[ "$HAS_TOKEN" != true ]]; then
+            echo "::notice title=e2e skipped::The HCLOUD_TOKEN secret is not set, so no e2e install run. One-time setup: RELEASING.md › e2e install runs."
+            echo "e2e install runs skipped: the HCLOUD_TOKEN secret is not set (RELEASING.md › e2e install runs)." >>"$GITHUB_STEP_SUMMARY"
+          fi
+      - uses: actions/checkout@v4
+        if: steps.token.outputs.present == 'true'
+      - uses: actions/setup-go@v5
+        if: steps.token.outputs.present == 'true'
+        with:
+          go-version-file: go.mod
+      - id: plan
+        if: steps.token.outputs.present == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ inputs.version }}
+          UPGRADE: ${{ github.event_name != 'workflow_dispatch' || inputs.upgrade }}
+        run: |
+          set -o pipefail
+          gh release list -R "$GITHUB_REPOSITORY" --limit 100 --json tagName,isDraft \
+            --jq '.[] | select(.isDraft | not) | .tagName' >"$RUNNER_TEMP/tags"
+          if [[ -z "$VERSION" ]]; then
+            VERSION=$(go run ./hack/e2e latest <"$RUNNER_TEMP/tags")
+            [[ -n "$VERSION" ]] || { echo "::error::No stable release to test."; exit 1; }
+          fi
+          VERSION=${VERSION#v}
+          FROM=""
+          if [[ "$UPGRADE" == true ]]; then
+            FROM=$(go run ./hack/e2e previous -version "$VERSION" <"$RUNNER_TEMP/tags")
+            [[ -n "$FROM" ]] || echo "::notice title=No upgrade run::There is no stable release before v$VERSION to upgrade from."
+          fi
+          # The published installers must exist before a server is paid for.
+          for v in "$VERSION" ${FROM:+"$FROM"}; do
+            url="https://raw.githubusercontent.com/$INSTALL_REPO/main/v$v/install.sh"
+            if ! curl -fsSIL --retry 3 -o /dev/null "$url"; then
+              echo "::error title=Installer not published::$url is missing. Was the install-repo job of the v$v release skipped (INSTALL_REPO_TOKEN)? See RELEASING.md."
+              exit 1
+            fi
+          done
+          matrix=$(jq -cn --arg from "$FROM" \
+            '[{name: "fresh", from: ""}] + (if $from == "" then [] else [{name: "upgrade", from: $from}] end)')
+          {
+            echo "run=true"
+            echo "version=$VERSION"
+            echo "matrix=$matrix"
+          } | tee -a "$GITHUB_OUTPUT"
+
+  install:
+    needs: resolve
+    if: needs.resolve.outputs.run == 'true'
+    name: ${{ matrix.name == 'fresh' && 'fresh install' || format('upgrade from v{0}', matrix.from) }}
+    runs-on: ubuntu-latest
+    # The harness gives up after 80 min and then deletes the server.
+    timeout-minutes: 100
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.resolve.outputs.matrix) }}
+    concurrency:
+      group: e2e-v${{ needs.resolve.outputs.version }}-${{ matrix.name }}
+      cancel-in-progress: false
+    env:
+      HCLOUD_TOKEN: ${{ secrets.HCLOUD_TOKEN }}
+      RUN_ID: ${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.name }}
+      VERSION: ${{ needs.resolve.outputs.version }}
+      FROM: ${{ matrix.from }}
+      E2E_SERVER_TYPES: ${{ vars.E2E_SERVER_TYPES }}
+      E2E_LOCATIONS: ${{ vars.E2E_LOCATIONS }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Build the harness
+        run: go build -o "$RUNNER_TEMP/e2e" ./hack/e2e
+      - name: Install, check, destroy
+        run: |
+          "$RUNNER_TEMP/e2e" run -version "$VERSION" ${FROM:+-from "$FROM"} -run-id "$RUN_ID" \
+            -installer-url "https://raw.githubusercontent.com/$INSTALL_REPO/main/v{version}/install.sh"
+      # The harness deletes what it created, also when it fails. This catches
+      # a harness that was killed (job timeout, cancel) before it could.
+      - name: Delete this run's leftovers
+        if: always()
+        run: |
+          if [[ -x "$RUNNER_TEMP/e2e" ]]; then
+            "$RUNNER_TEMP/e2e" sweep -run "$RUN_ID" -summary ""
+          fi
+      - name: Note for the release
+        if: failure() && inputs.release
+        run: |
+          {
+            echo
+            echo "**v$VERSION stays published:** a failed e2e run does not unpublish the image, chart, installer or GitHub Release."
+            echo "Fix forward with a new tag, or mark the GitHub Release as a pre-release / remove the top-level installer in $INSTALL_REPO by hand."
+          } >>"$GITHUB_STEP_SUMMARY"
+
+  # Deletes e2e servers and SSH keys older than 3 h: whatever a run could not
+  # clean up (a runner lost mid-run). Only resources labelled kwerft-e2e=true.
+  sweep:
+    if: github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    concurrency:
+      group: e2e-sweep
+      cancel-in-progress: false
+    env:
+      HCLOUD_TOKEN: ${{ secrets.HCLOUD_TOKEN }}
+    steps:
+      - name: Skip without HCLOUD_TOKEN
+        id: token
+        env:
+          HAS_TOKEN: ${{ secrets.HCLOUD_TOKEN != '' }}
+        run: |
+          echo "present=$HAS_TOKEN" >>"$GITHUB_OUTPUT"
+          [[ "$HAS_TOKEN" == true ]] || echo "::notice title=Sweep skipped::The HCLOUD_TOKEN secret is not set."
+      - uses: actions/checkout@v4
+        if: steps.token.outputs.present == 'true'
+      - uses: actions/setup-go@v5
+        if: steps.token.outputs.present == 'true'
+        with:
+          go-version-file: go.mod
+      - if: steps.token.outputs.present == 'true'
+        run: go run ./hack/e2e sweep -max-age 3h

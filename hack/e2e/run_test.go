@@ -1,0 +1,477 @@
+package main
+
+import (
+	"bytes"
+	"context"
+	"errors"
+	"fmt"
+	"io"
+	"regexp"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+
+	"golang.org/x/crypto/ssh"
+)
+
+// fakeRemote plays the server: cloud-init, the installer (which "installs"
+// a version into the fake console), the setup token.
+type fakeRemote struct {
+	mu       sync.Mutex
+	console  *fakeConsole
+	cmds     []string
+	exit     map[string]int  // installer exit code by version
+	noStage  map[string]bool // versions whose installer lacks --acme-server
+	hang     bool            // the installer never finishes
+	versions []string        // installed, in order
+}
+
+var installCmd = regexp.MustCompile(`^bash '/root/kwerft-install-([^']+)\.sh'(.*)$`)
+
+func (f *fakeRemote) run(ctx context.Context, cmd string, stdout, stderr io.Writer) (int, error) {
+	f.mu.Lock()
+	f.cmds = append(f.cmds, cmd)
+	f.mu.Unlock()
+	switch {
+	case strings.HasPrefix(cmd, "cloud-init status"):
+		fmt.Fprintln(stdout, "Ubuntu 26.04 LTS")
+	case strings.HasPrefix(cmd, "curl -fsSL"):
+	case strings.HasPrefix(cmd, "grep -q -e '--acme-server'"):
+		v := strings.TrimSuffix(strings.TrimPrefix(cmd[strings.Index(cmd, "kwerft-install-"):], "kwerft-install-"), ".sh'")
+		if f.noStage[v] {
+			return 1, nil
+		}
+	case installCmd.MatchString(cmd):
+		v := installCmd.FindStringSubmatch(cmd)[1]
+		if f.hang {
+			<-ctx.Done()
+			return -1, ctx.Err()
+		}
+		fmt.Fprintf(stdout, "▸ Kwerft installer %s\n✓ Preflight\n", v)
+		if code := f.exit[v]; code != 0 {
+			fmt.Fprintf(stderr, "✗ Stage \"Kubernetes\" failed\n")
+			return code, nil
+		}
+		f.mu.Lock()
+		f.versions = append(f.versions, v)
+		f.mu.Unlock()
+		f.console.installed(v)
+	case cmd == "cat /etc/kwerft/setup-token":
+		fmt.Fprintln(stdout, f.console.token)
+	}
+	return 0, nil
+}
+
+func (f *fakeRemote) close() error { return nil }
+
+func (f *fakeRemote) commands() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]string(nil), f.cmds...)
+}
+
+type harness struct {
+	cloud   *fakeCloud
+	console *fakeConsole
+	remote  *fakeRemote
+	runner  *runner
+	log     *bytes.Buffer
+	dials   int
+	masked  []string
+}
+
+func newHarness(t *testing.T, version, from string) *harness {
+	t.Helper()
+	h := &harness{cloud: newFakeCloud(t), log: &bytes.Buffer{}}
+	h.console = newFakeConsole(t, newTestCA(t, "(STAGING) Let's Encrypt"), "203.0.113.10")
+	h.remote = &fakeRemote{console: h.console, exit: map[string]int{}, noStage: map[string]bool{}}
+	cfg := config{
+		Token: "test-token", Version: version, From: from, RunID: "42-1-fresh",
+		ServerTypes: []string{"cx33", "cx43"}, Locations: []string{"nbg1", "fsn1"}, Images: []string{"ubuntu-26.04", "ubuntu-24.04"},
+		InstallerURL: "https://example.test/v{version}/install.sh", GitRepo: "https://github.com/traefik/whoami", GitBranch: "master",
+		Timeout: time.Minute, InstallTimeout: 10 * time.Second, Poll: time.Millisecond,
+	}
+	if err := cfg.validate(); err != nil {
+		t.Fatal(err)
+	}
+	h.runner = &runner{
+		cfg: cfg, cloud: h.cloud.client(),
+		dial: func(_ context.Context, addr string, k *runKeys) (remote, error) {
+			h.dials++
+			if addr != "203.0.113.10:22" {
+				return nil, fmt.Errorf("dialled %s", addr)
+			}
+			if h.dials < 3 {
+				return nil, errors.New("connection refused")
+			}
+			return h.remote, nil
+		},
+		transport: h.console.client,
+		log:       h.log,
+		now:       time.Now,
+		mask:      func(s string) { h.masked = append(h.masked, s) },
+		rep:       &report{Title: "Kwerft e2e"},
+	}
+	return h
+}
+
+func (h *harness) markdown() string {
+	var b bytes.Buffer
+	h.runner.rep.markdown(&b)
+	return b.String()
+}
+
+func (h *harness) assertCleanedUp(t *testing.T) {
+	t.Helper()
+	if s, k := h.cloud.counts(); s != 0 || k != 0 {
+		t.Errorf("left behind: %d server(s), %d SSH key(s)", s, k)
+	}
+	if !h.runner.rep.CleanupOK {
+		t.Errorf("cleanup not reported OK: %v", h.runner.rep.Cleanup)
+	}
+}
+
+func resultsByName(rep *report) map[string]result {
+	out := map[string]result{}
+	for _, r := range rep.Results {
+		out[r.Name] = r
+	}
+	return out
+}
+
+func TestFreshInstallPassesAndCleansUp(t *testing.T) {
+	h := newHarness(t, "0.5.0", "")
+	h.runner.run(context.Background())
+
+	md := h.markdown()
+	if !h.runner.rep.passed() {
+		t.Fatalf("run failed:\n%s\nlog:\n%s", md, h.log)
+	}
+	h.assertCleanedUp(t)
+	res := resultsByName(h.runner.rep)
+	for _, name := range []string{"Create server", "SSH", "Install v0.5.0", "Console on HTTPS", "Owner from the setup token, sign in",
+		"Project and apps created", "App on HTTPS", "Task runs and restarts web", "Git build deploys", "Log search", "Metrics", "Crash loop alert"} {
+		if res[name].Status != pass {
+			t.Errorf("%s: %+v", name, res[name])
+		}
+	}
+	if !strings.Contains(res["Console on HTTPS"].Detail, "(STAGING) Let's Encrypt") {
+		t.Errorf("the certificate's issuer is not reported: %q", res["Console on HTTPS"].Detail)
+	}
+	if !strings.Contains(md, "cx33 (4 vCPU, 8 GB) in nbg1, ubuntu-26.04") || !strings.Contains(md, "€0.0136") {
+		t.Errorf("server or cost missing from the summary:\n%s", md)
+	}
+
+	// The installer ran with the sslip.io name, staging and the version.
+	var install string
+	for _, c := range h.remote.commands() {
+		if installCmd.MatchString(c) {
+			install = c
+		}
+	}
+	want := "bash '/root/kwerft-install-0.5.0.sh' '--domain' '203.0.113.10.sslip.io' '--version' '0.5.0' '--yes' '--acme-server' 'staging'"
+	if install != want {
+		t.Errorf("installer command\n got %s\nwant %s", install, want)
+	}
+	// Secrets are masked in CI logs.
+	if len(h.masked) != 2 || h.masked[0] != h.console.token {
+		t.Errorf("masked %v", h.masked)
+	}
+
+	// Labels and the pinned host key went to Hetzner.
+	h.cloud.mu.Lock()
+	defer h.cloud.mu.Unlock()
+	if len(h.cloud.userData) != 1 {
+		t.Fatalf("servers created: %d", len(h.cloud.userData))
+	}
+	for _, ud := range h.cloud.userData {
+		if !strings.Contains(ud, h.runner.keys.hostPublic) || !strings.Contains(ud, "BEGIN OPENSSH PRIVATE KEY") {
+			t.Errorf("user data does not pin the host key:\n%s", ud)
+		}
+	}
+}
+
+func TestInstallerFailureStillDestroys(t *testing.T) {
+	h := newHarness(t, "0.5.0", "")
+	h.remote.exit["0.5.0"] = 30
+	h.runner.run(context.Background())
+
+	if h.runner.rep.passed() {
+		t.Fatal("a failed install passed")
+	}
+	h.assertCleanedUp(t)
+	res := resultsByName(h.runner.rep)
+	if r := res["Install v0.5.0"]; r.Status != fail || !strings.Contains(r.Detail, "installer exited 30 (Kubernetes)") {
+		t.Errorf("install result: %+v", r)
+	}
+	if _, ran := res["App on HTTPS"]; ran {
+		t.Error("checks ran after a failed install")
+	}
+	if !strings.Contains(h.runner.rep.Log, "Stage \"Kubernetes\" failed") {
+		t.Errorf("the installer's output is not in the report: %q", h.runner.rep.Log)
+	}
+}
+
+func TestTimeoutStillDestroys(t *testing.T) {
+	h := newHarness(t, "0.5.0", "")
+	h.remote.hang = true
+	h.runner.cfg.InstallTimeout = time.Hour
+	h.runner.cfg.Timeout = 300 * time.Millisecond
+	h.runner.run(context.Background())
+
+	if h.runner.rep.passed() {
+		t.Fatal("a timed-out run passed")
+	}
+	h.assertCleanedUp(t)
+	if !strings.Contains(strings.Join(h.runner.rep.Notes, " "), "stopped early") {
+		t.Errorf("notes: %v", h.runner.rep.Notes)
+	}
+}
+
+func TestCancelStillDestroys(t *testing.T) {
+	h := newHarness(t, "0.5.0", "")
+	h.remote.hang = true
+	h.runner.cfg.InstallTimeout = time.Hour
+	ctx, cancel := context.WithCancel(context.Background())
+	time.AfterFunc(200*time.Millisecond, cancel)
+	h.runner.run(ctx)
+	h.assertCleanedUp(t)
+}
+
+func TestFailedCheckFailsRunButOthersReport(t *testing.T) {
+	h := newHarness(t, "0.5.0", "")
+	h.console.buildFail = true
+	h.console.noAlert = true
+	h.runner.cfg.Timeout = 3 * time.Second
+	h.runner.run(context.Background())
+
+	if h.runner.rep.passed() {
+		t.Fatal("passed with a failed build")
+	}
+	h.assertCleanedUp(t)
+	res := resultsByName(h.runner.rep)
+	if r := res["Git build deploys"]; r.Status != fail || !strings.Contains(r.Detail, "Dockerfile not found") {
+		t.Errorf("build: %+v", r)
+	}
+	if res["Metrics"].Status != pass || res["Log search"].Status != pass {
+		t.Errorf("independent checks should still pass: %+v %+v", res["Metrics"], res["Log search"])
+	}
+	if res["Crash loop alert"].Status == pass {
+		t.Errorf("alert: %+v", res["Crash loop alert"])
+	}
+	// The report keeps a fixed order whatever finished first.
+	var names []string
+	for _, r := range h.runner.rep.Results {
+		names = append(names, r.Name)
+	}
+	if got := strings.Join(names[len(names)-6:], ","); got != "App on HTTPS,Task runs and restarts web,Log search,Git build deploys,Metrics,Crash loop alert" {
+		t.Errorf("order: %s", got)
+	}
+}
+
+func TestUpgradeFromAnInstallerWithoutStaging(t *testing.T) {
+	h := newHarness(t, "0.5.0", "0.4.0")
+	h.remote.noStage["0.4.0"] = true
+	h.runner.run(context.Background())
+
+	if !h.runner.rep.passed() {
+		t.Fatalf("run failed:\n%s\nlog:\n%s", h.markdown(), h.log)
+	}
+	h.assertCleanedUp(t)
+	if got := strings.Join(h.remote.versions, ","); got != "0.4.0,0.5.0" {
+		t.Errorf("installed %s", got)
+	}
+	cmds := strings.Join(h.remote.commands(), "\n")
+	if !strings.Contains(cmds, "bash '/root/kwerft-install-0.4.0.sh' '--domain' '203.0.113.10.sslip.io' '--version' '0.4.0' '--yes'\n") {
+		t.Errorf("the old installer got --acme-server:\n%s", cmds)
+	}
+	if strings.Count(cmds, "kc patch clusterissuer letsencrypt") != 1 {
+		t.Errorf("the staging fallback should run once, after the old installer:\n%s", cmds)
+	}
+	res := resultsByName(h.runner.rep)
+	for _, name := range []string{"Install v0.4.0", "App before the upgrade", "Upgrade to v0.5.0", "After the upgrade", "Crash loop alert"} {
+		if res[name].Status != pass {
+			t.Errorf("%s: %+v", name, res[name])
+		}
+	}
+	if !strings.Contains(res["Install v0.4.0"].Detail, "switched to staging") {
+		t.Errorf("detail: %q", res["Install v0.4.0"].Detail)
+	}
+	if !strings.Contains(h.markdown(), "Upgrade from v0.4.0 to v0.5.0") {
+		t.Error("scenario missing from the summary")
+	}
+}
+
+func TestUpgradeChecksTheVersion(t *testing.T) {
+	h := newHarness(t, "0.5.0", "0.4.0")
+	// The upgrade "succeeds" but the console keeps running the old version.
+	h.remote.exit["0.5.0"] = 0
+	orig := h.console
+	h.runner.transport = orig.client
+	h.runner.cfg.Timeout = 2 * time.Second
+	stuck := &fakeRemoteStuck{fakeRemote: h.remote, stay: "0.4.0"}
+	h.runner.dial = func(context.Context, string, *runKeys) (remote, error) { return stuck, nil }
+	h.runner.run(context.Background())
+
+	res := resultsByName(h.runner.rep)
+	if r := res["After the upgrade"]; r.Status != fail || !strings.Contains(r.Detail, `reports version "0.4.0", want 0.5.0`) {
+		t.Errorf("after the upgrade: %+v", r)
+	}
+	h.assertCleanedUp(t)
+}
+
+// fakeRemoteStuck installs every version but the console stays at one.
+type fakeRemoteStuck struct {
+	*fakeRemote
+	stay string
+}
+
+func (f *fakeRemoteStuck) run(ctx context.Context, cmd string, stdout, stderr io.Writer) (int, error) {
+	code, err := f.fakeRemote.run(ctx, cmd, stdout, stderr)
+	if installCmd.MatchString(cmd) {
+		f.console.installed(f.stay)
+	}
+	return code, err
+}
+
+func TestServerTypeAndLocationFallback(t *testing.T) {
+	h := newHarness(t, "0.5.0", "")
+	h.cloud.unavailable["cx33/nbg1"] = true
+	h.cloud.unavailable["cx33/fsn1"] = true
+	delete(h.cloud.images, "ubuntu-26.04")
+	h.runner.run(context.Background())
+
+	if !h.runner.rep.passed() {
+		t.Fatalf("run failed:\n%s", h.markdown())
+	}
+	md := h.markdown()
+	if !strings.Contains(md, "cx43 (8 vCPU, 16 GB) in nbg1, ubuntu-24.04") {
+		t.Errorf("fallback not used:\n%s", md)
+	}
+	if !strings.Contains(md, "cx33 in nbg1: resource_unavailable; cx33 in fsn1: resource_unavailable") {
+		t.Errorf("skipped combinations not noted:\n%s", md)
+	}
+}
+
+func TestNoServerAvailable(t *testing.T) {
+	h := newHarness(t, "0.5.0", "")
+	for _, c := range []string{"cx33/nbg1", "cx33/fsn1", "cx43/nbg1", "cx43/fsn1"} {
+		h.cloud.unavailable[c] = true
+	}
+	// A server of this run whose create answer never arrived.
+	h.cloud.mu.Lock()
+	h.cloud.servers[7] = &hServer{ID: 7, Name: "kwerft-e2e-42-1-fresh", Created: time.Now(), Labels: map[string]string{labelE2E: "true", labelRun: "42-1-fresh"}}
+	h.cloud.mu.Unlock()
+	h.runner.run(context.Background())
+	if h.runner.rep.passed() {
+		t.Fatal("passed without a server")
+	}
+	// The SSH key was uploaded before; it must go again, and the lost server too.
+	h.assertCleanedUp(t)
+	if !strings.Contains(strings.Join(h.runner.rep.Cleanup, "; "), "deleted server kwerft-e2e-42-1-fresh (id 7") {
+		t.Errorf("cleanup: %v", h.runner.rep.Cleanup)
+	}
+}
+
+func TestFailedDeletionFailsTheRun(t *testing.T) {
+	h := newHarness(t, "0.5.0", "")
+	h.cloud.failDeletes = true
+	h.runner.run(context.Background())
+	if h.runner.rep.passed() {
+		t.Fatal("passed although the server was not deleted")
+	}
+	md := h.markdown()
+	if !strings.Contains(md, "NOT deleted") || !strings.Contains(md, "incomplete") {
+		t.Errorf("summary does not flag the leftover:\n%s", md)
+	}
+}
+
+func TestDeletionIsAwaited(t *testing.T) {
+	h := newHarness(t, "0.5.0", "")
+	h.cloud.pollsUntilGone = 3
+	h.runner.run(context.Background())
+	h.assertCleanedUp(t)
+}
+
+func TestHostKeyPinning(t *testing.T) {
+	k, err := newRunKeys("kwerft-e2e-test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ci := cloudInit(k)
+	for _, want := range []string{"#cloud-config\n", "ssh_deletekeys: true\n", "  ed25519_private: |\n    -----BEGIN OPENSSH PRIVATE KEY-----\n", "  ed25519_public: ssh-ed25519 "} {
+		if !strings.Contains(ci, want) {
+			t.Errorf("cloud-init lacks %q:\n%s", want, ci)
+		}
+	}
+	// The key in cloud-init is the one the harness pins.
+	var pemLines []string
+	for _, l := range strings.Split(ci, "\n") {
+		if strings.HasPrefix(l, "    ") {
+			pemLines = append(pemLines, strings.TrimPrefix(l, "    "))
+		}
+	}
+	parsed, err := ssh.ParsePrivateKey([]byte(strings.Join(pemLines, "\n") + "\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(parsed.PublicKey().Marshal(), k.host.PublicKey().Marshal()) {
+		t.Error("cloud-init installs a different host key than the one pinned")
+	}
+	if !strings.HasPrefix(k.clientPub, "ssh-ed25519 ") || !strings.HasSuffix(k.clientPub, " kwerft-e2e-test") {
+		t.Errorf("client key %q", k.clientPub)
+	}
+}
+
+func TestConfigValidate(t *testing.T) {
+	base := config{Version: "0.5.0", RunID: "1-1-fresh", ServerTypes: []string{"cx33"}, Locations: []string{"nbg1"}, Images: []string{"ubuntu-26.04"}}
+	for name, tc := range map[string]struct {
+		mod  func(*config)
+		want string
+	}{
+		"ok":            {func(*config) {}, ""},
+		"no version":    {func(c *config) { c.Version = "" }, "required"},
+		"bad version":   {func(c *config) { c.Version = "latest" }, "not a release version"},
+		"from newer":    {func(c *config) { c.From = "0.6.0" }, "must be older"},
+		"from same":     {func(c *config) { c.From = "0.5.0" }, "must be older"},
+		"bad run id":    {func(c *config) { c.RunID = "a b" }, "label value"},
+		"long run id":   {func(c *config) { c.RunID = strings.Repeat("a", 60) }, "label value"},
+		"no locations":  {func(c *config) { c.Locations = nil }, "must not be empty"},
+		"rc from final": {func(c *config) { c.Version, c.From = "0.5.0-rc.1", "0.4.0" }, ""},
+	} {
+		c := base
+		tc.mod(&c)
+		err := c.validate()
+		if (tc.want == "") != (err == nil) || (err != nil && !strings.Contains(err.Error(), tc.want)) {
+			t.Errorf("%s: %v, want %q", name, err, tc.want)
+		}
+	}
+}
+
+func TestDryRunPrintsThePlan(t *testing.T) {
+	t.Setenv("HCLOUD_TOKEN", "")
+	var out bytes.Buffer
+	if err := cmdRun(context.Background(), []string{"-version", "v0.5.0", "-from", "0.4.0", "-run-id", "7-1-upgrade", "-dry-run"}, &out); err != nil {
+		t.Fatal(err)
+	}
+	s := out.String()
+	for _, want := range []string{
+		"Dry run — Upgrade from v0.4.0 to v0.5.0, run 7-1-upgrade. Nothing is created.",
+		`upload the public key as "kwerft-e2e-7-1-upgrade" with labels kwerft-e2e=true, run=7-1-upgrade`,
+		"cx33, cx43 in nbg1, fsn1, hel1",
+		"https://raw.githubusercontent.com/ehilzinger/kwerft-install/main/v0.4.0/install.sh",
+		"--acme-server staging --version 0.5.0",
+		"Always, also on failure, timeout or cancel: delete the server and the SSH key",
+	} {
+		if !strings.Contains(s, want) {
+			t.Errorf("plan lacks %q:\n%s", want, s)
+		}
+	}
+	// Without -dry-run, no token is a usage error.
+	err := cmdRun(context.Background(), []string{"-version", "0.5.0"}, io.Discard)
+	var u usageError
+	if !errors.As(err, &u) || !strings.Contains(err.Error(), "HCLOUD_TOKEN") {
+		t.Errorf("without a token: %v", err)
+	}
+}

@@ -232,7 +232,7 @@ Work split and contracts: `docs/phase5.md`. Full multi-cluster; verification on 
 - [ ] W2 Node pools & HA: Cloud servers as nodes (join, replace, drain, delete), 3-node HA control plane, build pools scaling to zero, dedicated join and remove, vSwitch coupling (fakes)
 - [ ] W3 Multi-cluster core: `kwerft agent` tunnel, Cluster reconciler (local, Hetzner Cloud, adopted), agent mode in the installer and chart
 - [ ] W4 Multi-cluster console: every API and page cluster-aware through the Registry, observability per cluster
-- [ ] W5 e2e install runs per release tag and nightly, sweeper
+- [x] W5 e2e install runs per release tag and nightly, sweeper: `hack/e2e` + `.github/workflows/e2e.yml` (called by `release.yml` after publishing), fresh install and upgrade from the previous stable release on `cx33` servers, Let's Encrypt staging (`install.sh --acme-server`), checks of the Phase 1–3 exit criteria, always destroys; tested with fakes, not yet run for real (needs the `HCLOUD_TOKEN` secret: RELEASING.md › e2e install runs)
 - [ ] Exit criteria on real Cloud servers: a node lost with apps reachable; a second cluster managed; a release tag passes e2e
 
 ### Phase 4 checklist
