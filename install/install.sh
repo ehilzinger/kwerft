@@ -2,7 +2,10 @@
 # Kwerft installer — turns a fresh Ubuntu server on Hetzner (Cloud or dedicated)
 # into a single-node Kubernetes cluster with the Kwerft console on top.
 #
-#   curl -fsSL https://raw.githubusercontent.com/ehilzinger/kwerft/main/install/install.sh | sudo bash -s -- --domain ops.example.com --email ops@example.com --yes
+#   curl -fsSL https://raw.githubusercontent.com/ehilzinger/kwerft-install/main/install.sh | sudo bash -s -- --domain ops.example.com --email ops@example.com --yes
+#
+# Released copies come from the public ehilzinger/kwerft-install repository:
+# main holds the latest stable release, v<version>/install.sh every release.
 #
 # The script is idempotent: every stage records completion in $STATE_DIR and is
 # skipped on the next run. Re-running repairs a broken install or upgrades it.
@@ -17,8 +20,9 @@ set -Eeuo pipefail
 shopt -s inherit_errexit 2>/dev/null || true   # bash >= 4.4: fail inside $(...) too
 
 # ---------------------------------------------------------------------------
-# Pinned versions. Release tooling rewrites this block; keep it self-contained
-# because the script is usually piped from curl with no sibling files.
+# Pinned versions. hack/release.sh stamps KWERFT_VERSION_DEFAULT with the
+# release version; keep this block self-contained because the script is
+# usually piped from curl with no sibling files.
 # Latest upstream releases as of 2026-10-04. TODO(phase-0): verify chart values
 # against these versions on a real server and add SHA-256 checksums.
 # ---------------------------------------------------------------------------
@@ -32,6 +36,7 @@ TRAEFIK_CHART_VERSION="41.6.1"
 VM_STACK_CHART_VERSION="0.95.0"
 VLOGS_CHART_VERSION="0.13.10"
 KWERFT_CHART_REPO="oci://ghcr.io/ehilzinger/charts/kwerft"
+KWERFT_IMAGE_REPO="ghcr.io/ehilzinger/kwerft"   # the chart's image.repository; checked before installing
 
 # ---------------------------------------------------------------------------
 # Exit codes are part of the automation contract — do not renumber.
@@ -174,6 +179,10 @@ parse_args() {
   done
 
   [[ -n "$JOIN_URL" ]] && MODE="join"
+  # Releases are tagged v0.2.0; chart versions and image tags drop the "v".
+  KWERFT_VERSION=${KWERFT_VERSION#v}
+  [[ "$KWERFT_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]] \
+    || die $EXIT_USAGE "--version must look like 0.2.0, v0.2.0 or v0.2.0-rc.1"
   case "$PLATFORM" in auto|cloud|dedicated) ;; *) die $EXIT_USAGE "--platform must be auto, cloud or dedicated" ;; esac
   case "$CHANNEL" in stable|edge) ;; *) die $EXIT_USAGE "--channel must be stable or edge" ;; esac
   case "$JOIN_ROLE" in worker|control-plane) ;; *) die $EXIT_USAGE "--role must be worker or control-plane" ;; esac
@@ -320,6 +329,7 @@ stage_preflight() {
 
   curl -fsS --max-time 10 -o /dev/null https://get.k3s.io || die $EXIT_NETWORK "No outbound HTTPS to get.k3s.io"
   [[ -n "$PUBLIC_IP" ]] || die $EXIT_NETWORK "Could not determine the public IPv4 address"
+  if [[ "$MODE" == "install" ]]; then check_release; fi
 
   local priv="no private network"
   [[ -n "$PRIVATE_IP" ]] && priv="private $PRIVATE_IP on $PRIVATE_IFACE"
@@ -612,15 +622,62 @@ stage_observability() {
 # ---------------------------------------------------------------------------
 chart_ref() {
   if [[ -n "$KWERFT_CHART" ]]; then echo "$KWERFT_CHART"; return; fi
-  # Piped from curl there is no script file, so no directory to look in.
-  local dir here=""
-  dir=$(dirname "${BASH_SOURCE[0]:-$0}")
-  if [[ -d "$dir" ]]; then here=$(cd "$dir" && pwd); fi
-  if [[ -n "$here" && -f "$here/../charts/kwerft/Chart.yaml" ]]; then
-    echo "$here/../charts/kwerft"      # running from a repository checkout
-  else
-    echo "$KWERFT_CHART_REPO"
+  # Piped from curl there is no script file, so no checkout to look in (and
+  # the current directory must not count as one).
+  local src="${BASH_SOURCE[0]:-}" here
+  if [[ -f "$src" ]]; then
+    here=$(cd "$(dirname "$src")" && pwd)
+    if [[ -f "$here/../charts/kwerft/Chart.yaml" ]]; then
+      echo "$here/../charts/kwerft"    # running from a repository checkout
+      return
+    fi
   fi
+  echo "$KWERFT_CHART_REPO"
+}
+
+# oci_manifest_status <registry> <repository> <tag> prints the HTTP status of an
+# anonymous manifest request: 200 published, 404 no such tag, 401/403 private
+# or no such package (registries do not tell those apart), 000 unreachable.
+oci_manifest_status() {
+  local url="https://$1/v2/$2/manifests/$3" accept headers code challenge realm service token
+  accept="application/vnd.oci.image.index.v1+json, application/vnd.oci.image.manifest.v1+json"
+  accept+=", application/vnd.docker.distribution.manifest.list.v2+json, application/vnd.docker.distribution.manifest.v2+json"
+  headers=$(curl -sS --max-time 20 -I -H "Accept: $accept" "$url" 2>/dev/null | tr -d '\r') || { echo 000; return 0; }
+  code=$(awk 'NR == 1 {print $2}' <<<"$headers")
+  if [[ "$code" == 401 ]]; then
+    # Anonymous pulls still need a token: answer the registry's Bearer challenge.
+    challenge=$(sed -n 's/^[Ww][Ww][Ww]-[Aa]uthenticate: *Bearer *//p' <<<"$headers")
+    realm=$(sed -n 's/.*realm="\([^"]*\)".*/\1/p' <<<"$challenge")
+    service=$(sed -n 's/.*service="\([^"]*\)".*/\1/p' <<<"$challenge")
+    [[ -n "$realm" ]] || { echo 401; return 0; }
+    token=$(curl -fsS --max-time 20 -G "$realm" --data-urlencode "service=$service" \
+      --data-urlencode "scope=repository:$2:pull" 2>/dev/null | sed -n 's/.*"token" *: *"\([^"]*\)".*/\1/p') || true
+    [[ -n "$token" ]] || { echo 401; return 0; }
+    code=$(curl -sS --max-time 20 -o /dev/null -w '%{http_code}' -I -H "Accept: $accept" \
+      -H "Authorization: Bearer $token" "$url" 2>/dev/null) || code=000
+  fi
+  echo "${code:-000}"
+}
+
+# check_release fails before anything is installed when the release cannot be
+# pulled: a version that was never published, or packages that are still private.
+check_release() {
+  local ref; ref=$(chart_ref)
+  [[ "$ref" == oci://* ]] || return 0          # a checkout installs its own chart
+  local refs=("${ref#oci://}") r status
+  [[ -n "$IMAGE" ]] || refs+=("$KWERFT_IMAGE_REPO")
+  for r in "${refs[@]}"; do
+    status=$(oci_manifest_status "${r%%/*}" "${r#*/}" "$KWERFT_VERSION")
+    case "$status" in
+      200) ;;
+      404) die $EXIT_KWERFT "Kwerft $KWERFT_VERSION is not published: $r has no version $KWERFT_VERSION." \
+             "Released versions: https://github.com/ehilzinger/kwerft-install (this installer defaults to $KWERFT_VERSION_DEFAULT)." ;;
+      401|403) die $EXIT_KWERFT "Cannot pull $r:$KWERFT_VERSION anonymously: it is not published, or the package" \
+             "is still private (maintainers: make it public on GitHub, see RELEASING.md)." ;;
+      000) die $EXIT_NETWORK "Cannot reach ${r%%/*} to look up Kwerft $KWERFT_VERSION" ;;
+      *)   die $EXIT_KWERFT "Unexpected HTTP $status from ${r%%/*} while looking up $r:$KWERFT_VERSION" ;;
+    esac
+  done
 }
 
 stage_kwerft() {
