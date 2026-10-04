@@ -153,11 +153,16 @@ func (r *GitConnectionReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 	}
 	data, err := r.ensureSecret(ctx, &gc)
 	if err != nil {
-		if apierrors.IsNotFound(err) {
+		switch {
+		case apierrors.IsNotFound(err):
 			// The builds namespace does not exist (yet).
 			return r.report(ctx, &gc, func(st *kwerftv1.GitConnectionStatus) {
 				setReady(&st.Conditions, gc.Generation, metav1.ConditionFalse, "NoBuildsNamespace",
 					"The namespace "+builds.Namespace+" does not exist; the installer creates it.")
+			}, gitRetry)
+		case isTerminal(err):
+			return r.report(ctx, &gc, func(st *kwerftv1.GitConnectionStatus) {
+				setReady(&st.Conditions, gc.Generation, metav1.ConditionFalse, reasonOf(err), err.Error())
 			}, gitRetry)
 		}
 		return ctrl.Result{}, err
@@ -312,19 +317,17 @@ func (r *GitConnectionReconciler) ensureSecret(ctx context.Context, gc *kwerftv1
 		return nil, err
 	}
 	if !metav1.IsControlledBy(&sec, gc) {
-		// A Secret of an earlier connection with the same name: adopt it,
-		// but drop its credentials (they were meant for another
-		// connection) unless they are ours by label.
-		if sec.Labels[LabelGitConnection] != gc.Name {
-			return nil, fmt.Errorf("secret %s exists and does not belong to this connection", key.Name)
+		// Never adopt credentials: a Secret left by an earlier connection of
+		// the same name (not yet garbage-collected) holds credentials meant
+		// for that one, perhaps for another host. Remove it; the next pass
+		// creates a fresh one.
+		if owner := metav1.GetControllerOf(&sec); owner == nil || owner.Kind != "GitConnection" || sec.Labels[LabelGitConnection] != gc.Name {
+			return nil, terminalf("SecretConflict", "The Secret %s/%s exists and does not belong to this connection.", key.Namespace, key.Name)
 		}
-		patch := map[string]any{"metadata": map[string]any{"ownerReferences": []metav1.OwnerReference{{
-			APIVersion: kwerftv1.GroupVersion.String(), Kind: "GitConnection", Name: gc.Name, UID: gc.UID,
-			Controller: ptrTo(true), BlockOwnerDeletion: ptrTo(true),
-		}}, "resourceVersion": sec.ResourceVersion}}
-		if err := r.mergePatch(ctx, &sec, patch); err != nil {
+		if err := r.Delete(ctx, &sec, client.Preconditions{UID: &sec.UID}); client.IgnoreNotFound(err) != nil {
 			return nil, err
 		}
+		return nil, fmt.Errorf("removed %s left by an earlier connection; recreating it", key.Name)
 	}
 	if len(sec.Data[builds.KeyWebhookSecret]) == 0 {
 		// resourceVersion makes this a compare-and-swap: should the console

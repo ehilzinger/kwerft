@@ -268,6 +268,11 @@ func (g *github) Head(ctx context.Context, repo Repo, branch string) (Commit, er
 func (g *github) Commit(ctx context.Context, repo Repo, sha string) (Commit, error) {
 	var out githubCommit
 	if err := g.api.do(ctx, "GET", repoPath(repo)+"/commits/"+url.PathEscape(sha), nil, &out); err != nil {
+		// GitHub answers an unknown SHA with 422 "No commit found".
+		var apiErr *APIError
+		if errors.As(err, &apiErr) && apiErr.Status == http.StatusUnprocessableEntity {
+			apiErr.kind = ErrNotFound
+		}
 		return Commit{}, err
 	}
 	return out.commit(), nil

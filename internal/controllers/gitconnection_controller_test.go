@@ -316,3 +316,53 @@ func TestGitConnectionDeployKeyRecordsHostKey(t *testing.T) {
 		t.Errorf("status = %+v", got.Status)
 	}
 }
+
+func TestGitConnectionNeverAdoptsOldCredentials(t *testing.T) {
+	requireEnvtest(t)
+	ctx := context.Background()
+	ensureNamespace(t, builds.Namespace)
+	r := &GitConnectionReconciler{Client: k8s, ConsoleDomain: testConsoleDomain}
+	// A Secret left behind by an earlier connection "reused" (another UID),
+	// with that connection's token.
+	old := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Namespace: builds.Namespace, Name: "git-reused",
+		Labels: map[string]string{LabelGitConnection: "reused"},
+		OwnerReferences: []metav1.OwnerReference{{APIVersion: kwerftv1.GroupVersion.String(), Kind: "GitConnection", Name: "reused",
+			UID: "00000000-0000-0000-0000-000000000001", Controller: ptrTo(true)}}},
+		Data: map[string][]byte{builds.KeyToken: []byte("old-token"), builds.KeyWebhookSecret: []byte("old")}}
+	if err := k8s.Create(ctx, old); err != nil {
+		t.Fatal(err)
+	}
+	gc := &kwerftv1.GitConnection{ObjectMeta: metav1.ObjectMeta{Name: "reused"},
+		Spec: kwerftv1.GitConnectionSpec{Provider: kwerftv1.GitLab, URL: "https://gitlab.example.com", Auth: kwerftv1.GitAuthToken}}
+	if err := k8s.Create(ctx, gc); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = k8s.Delete(context.Background(), gc) })
+	if _, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: types.NamespacedName{Name: gc.Name}}); err == nil {
+		t.Error("the old Secret was used")
+	}
+	gitReconcile(t, r, gc.Name)
+	sec := credentials(t, gc.Name)
+	if len(sec.Data[builds.KeyToken]) != 0 || string(sec.Data[builds.KeyWebhookSecret]) == "old" || !metav1.IsControlledBy(sec, getConnection(t, gc.Name)) {
+		t.Errorf("secret = %v %+v", sec.Data, sec.OwnerReferences)
+	}
+
+	// A Secret of that name that is not a connection's: left alone, reported.
+	foreign := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Namespace: builds.Namespace, Name: "git-foreign"}}
+	if err := k8s.Create(ctx, foreign); err != nil {
+		t.Fatal(err)
+	}
+	gc2 := &kwerftv1.GitConnection{ObjectMeta: metav1.ObjectMeta{Name: "foreign"},
+		Spec: kwerftv1.GitConnectionSpec{Provider: kwerftv1.GitLab, URL: "https://gitlab.example.com", Auth: kwerftv1.GitAuthNone}}
+	if err := k8s.Create(ctx, gc2); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = k8s.Delete(context.Background(), gc2) })
+	gitReconcile(t, r, gc2.Name)
+	if c := ready(t, getConnection(t, gc2.Name)); c.Reason != "SecretConflict" {
+		t.Errorf("foreign secret: %+v", c)
+	}
+	if err := k8s.Get(ctx, client.ObjectKeyFromObject(foreign), &corev1.Secret{}); err != nil {
+		t.Errorf("the foreign Secret was touched: %v", err)
+	}
+}

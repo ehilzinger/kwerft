@@ -682,7 +682,7 @@ func (g *gitAPI) connectionFor(ctx context.Context, gc *kwerftv1.GitConnection) 
 // hostMessage explains a Git host error for the deploy wizard.
 func hostMessage(err error, repo git.Repo, conn git.Connection, what string) string {
 	switch {
-	case errors.Is(err, git.ErrNotFound) && conn.Auth == kwerftv1.GitAuthNone:
+	case conn.Auth == kwerftv1.GitAuthNone && (errors.Is(err, git.ErrNotFound) || errors.Is(err, git.ErrUnauthorized) || errors.Is(err, git.ErrForbidden)):
 		return what + " not found. If the repository is private, add a Git connection for " + repo.Host + " first."
 	case errors.Is(err, git.ErrNotFound):
 		return what + " not found, or the connection " + conn.Name + " has no access to it."
