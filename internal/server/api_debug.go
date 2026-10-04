@@ -125,7 +125,7 @@ func (s *shellSession) startDebug(ctx context.Context, b podBackend, pod *corev1
 	for {
 		cur, err := b.getPod(ctx, s.project, s.pod)
 		if err != nil {
-			return "", kubeMessage(err, "The replica went away while the debug container was starting.")
+			return "", kubeMessage(err, "The pod went away while the debug container was starting.")
 		}
 		for _, st := range cur.Status.EphemeralContainerStatuses {
 			if st.Name != ec.Name {

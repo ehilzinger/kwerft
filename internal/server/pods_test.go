@@ -53,6 +53,8 @@ type fakePods struct {
 	exec    func(ctx context.Context, opts *corev1.PodExecOptions, s execStreams) error
 	// debugState is the status a debug toolbox gets; nil means running.
 	debugState *corev1.ContainerState
+	// taskPhases sets a Task's phase (default Running); "missing" is not found.
+	taskPhases map[string]kwerftv1.TaskPhase
 }
 
 func newFakePods(pods ...corev1.Pod) *fakePods {
@@ -67,7 +69,16 @@ func (f *fakePods) app(_ context.Context, project, name string) error {
 }
 
 func (f *fakePods) task(_ context.Context, project, name string) (*kwerftv1.Task, error) {
-	return &kwerftv1.Task{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: project}}, nil
+	if name == "missing" {
+		return nil, apierrors.NewNotFound(schema.GroupResource{Group: "kwerft.dev", Resource: "tasks"}, name)
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	phase, ok := f.taskPhases[name]
+	if !ok {
+		phase = kwerftv1.TaskRunning
+	}
+	return &kwerftv1.Task{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: project}, Status: kwerftv1.TaskStatus{Phase: phase}}, nil
 }
 
 func (f *fakePods) listPods(_ context.Context, ns string, sel labels.Selector) ([]corev1.Pod, error) {
@@ -1112,7 +1123,7 @@ func TestOldRecordingsArePruned(t *testing.T) {
 	rc.lastPrune = time.Time{}
 	fresh, _ := rc.start(recordingMeta{User: "b", Started: now}, 80, 24)
 	_ = fresh.finish(now, "exited", nil)
-	list, _ := rc.list(10)
+	list, _ := rc.list(10, recordingFilter{})
 	if len(list) != 1 || list[0].ID != fresh.meta.ID {
 		t.Errorf("after pruning: %+v", list)
 	}

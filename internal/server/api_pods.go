@@ -80,6 +80,7 @@ func (a *api) registerPods(mux *http.ServeMux) {
 	// WebSocket: Origin first (browsers do not apply SameSite or CORS to the
 	// handshake the way they do to fetch), then the session cookie.
 	mux.HandleFunc("GET /api/v1/projects/{project}/apps/{app}/pods/{pod}/shell", p.wsOrigin(read(p.appShell)))
+	mux.HandleFunc("GET /api/v1/projects/{project}/tasks/{task}/pods/{pod}/shell", p.wsOrigin(read(p.taskShell)))
 
 	recordings := func(h http.HandlerFunc) http.HandlerFunc {
 		return a.requireUser(a.requireRole(h, "owner", "admin"))

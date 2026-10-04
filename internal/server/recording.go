@@ -34,7 +34,8 @@ import (
 // shows every command that was run. Output can contain secrets too (`env`,
 // `cat` of a key), so recordings are files only the console can read (0600
 // in a 0700 directory on its data volume), only owners and admins may list
-// and download them, every download is audited, and they are deleted after
+// and download or play them, every download and playback is audited, and
+// they are deleted after
 // recordingRetention.
 //
 // Next to each <id>.cast is <id>.json with who, where, when and how the
@@ -60,14 +61,20 @@ type recorder struct {
 
 	mu        sync.Mutex
 	lastPrune time.Time
+	live      map[string]bool // recordings of sessions still running
 }
 
 // recordingMeta is the sidecar <id>.json and what the list endpoint returns.
 type recordingMeta struct {
-	ID        string `json:"id"`
-	User      string `json:"user"`
-	Project   string `json:"project"`
-	App       string `json:"app"`
+	ID      string `json:"id"`
+	User    string `json:"user"`
+	Project string `json:"project"`
+	// Kind says what the pod belonged to: "app" (a replica; App is set) or
+	// "task" (a run; Task is set). Sidecars from before Task shells have no
+	// kind and are App shells.
+	Kind      string `json:"kind"`
+	App       string `json:"app,omitempty"`
+	Task      string `json:"task,omitempty"`
 	Pod       string `json:"pod"`
 	Container string `json:"container"`
 	Shell     string `json:"shell"`
@@ -82,6 +89,10 @@ type recordingMeta struct {
 	Bytes          int64      `json:"bytes"`
 	// Input is false: keystrokes are not recorded (see above).
 	Input bool `json:"inputRecorded"`
+	// Live is set by the list endpoint for sessions still running. A
+	// recording that has not ended and is not live was cut short (the
+	// console stopped during the session).
+	Live bool `json:"live,omitempty"`
 }
 
 // castHeader is the first line of an asciicast v2 file. Field order follows
@@ -144,7 +155,27 @@ func (rc *recorder) start(meta recordingMeta, width, height int) (*recording, er
 		_ = f.Close()
 		return nil, err
 	}
+	rc.setLive(meta.ID, true)
 	return rec, nil
+}
+
+func (rc *recorder) setLive(id string, live bool) {
+	rc.mu.Lock()
+	defer rc.mu.Unlock()
+	if rc.live == nil {
+		rc.live = map[string]bool{}
+	}
+	if live {
+		rc.live[id] = true
+	} else {
+		delete(rc.live, id)
+	}
+}
+
+func (rc *recorder) isLive(id string) bool {
+	rc.mu.Lock()
+	defer rc.mu.Unlock()
+	return rc.live[id]
 }
 
 // output records terminal output. It returns errRecordingFull once the
@@ -225,6 +256,7 @@ func (rec *recording) finish(at time.Time, reason string, exitCode *int) error {
 	if merr := rec.r.writeMeta(&rec.meta); err == nil {
 		err = merr
 	}
+	rec.r.setLive(rec.meta.ID, false)
 	return err
 }
 
@@ -272,8 +304,20 @@ func (rc *recorder) prune(now time.Time) {
 	}
 }
 
-// list returns the newest recordings first.
-func (rc *recorder) list(limit int) ([]recordingMeta, error) {
+// recordingFilter narrows the list; empty fields match everything.
+type recordingFilter struct {
+	User, Project, App, Task string
+}
+
+func (f recordingFilter) match(m *recordingMeta) bool {
+	return (f.User == "" || strings.EqualFold(m.User, f.User)) &&
+		(f.Project == "" || m.Project == f.Project) &&
+		(f.App == "" || m.App == f.App) &&
+		(f.Task == "" || m.Task == f.Task)
+}
+
+// list returns the newest recordings that match f, at most limit of them.
+func (rc *recorder) list(limit int, f recordingFilter) ([]recordingMeta, error) {
 	entries, err := os.ReadDir(rc.dir)
 	if errors.Is(err, os.ErrNotExist) {
 		return []recordingMeta{}, nil
@@ -292,9 +336,24 @@ func (rc *recorder) list(limit int) ([]recordingMeta, error) {
 			continue
 		}
 		var m recordingMeta
-		if json.Unmarshal(data, &m) == nil && m.ID == id {
-			out = append(out, m)
+		if json.Unmarshal(data, &m) != nil || m.ID != id {
+			continue
 		}
+		if m.Kind == "" {
+			m.Kind = "app"
+		}
+		if !f.match(&m) {
+			continue
+		}
+		if m.Ended == nil {
+			// Running, or cut short: the sidecar has no size or length yet.
+			m.Live = rc.isLive(id)
+			if info, err := os.Stat(rc.path(id, ".cast")); err == nil {
+				m.Bytes = info.Size()
+				m.Duration = max(info.ModTime().Sub(m.Started).Seconds(), 0)
+			}
+		}
+		out = append(out, m)
 	}
 	slices.SortFunc(out, func(x, y recordingMeta) int { return y.Started.Compare(x.Started) })
 	if len(out) > limit {
@@ -347,7 +406,8 @@ func (p *podsAPI) recordingList(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, []recordingMeta{})
 		return
 	}
-	list, err := p.rec.list(500)
+	q := r.URL.Query()
+	list, err := p.rec.list(500, recordingFilter{User: q.Get("user"), Project: q.Get("project"), App: q.Get("app"), Task: q.Get("task")})
 	if err != nil {
 		p.internalError(w, r, err)
 		return
@@ -372,7 +432,14 @@ func (p *podsAPI) recordingGet(w http.ResponseWriter, r *http.Request) {
 	}
 	defer f.Close()
 	pr := r.Context().Value(ctxKey{}).(*principal)
-	p.audit(r, pr.user.Email, "recording.download", id, "")
+	// The console's player fetches the same file with ?play=1; watching a
+	// session shows its output as much as downloading it, so both are
+	// audited, under their own names.
+	action := "recording.download"
+	if r.URL.Query().Get("play") == "1" {
+		action = "recording.play"
+	}
+	p.audit(r, pr.user.Email, action, id, "")
 	w.Header().Set("Content-Type", "application/x-asciicast")
 	w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="kwerft-shell-%s.cast"`, id))
 	w.Header().Set("Cache-Control", "no-store")

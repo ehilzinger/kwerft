@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"slices"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -105,8 +106,33 @@ func shouldFallBack(err error) bool {
 	return httpstream.IsUpgradeFailure(err) || httpstream.IsHTTPSProxyError(err)
 }
 
+// shellOwner is what a shell's pod belongs to: a replica of an App, or the
+// pod of a Task's run. Both share one implementation; resolve() and the
+// recording's metadata tell them apart.
+type shellOwner struct {
+	kind string // app | task
+	name string
+}
+
+func (o shellOwner) label() string {
+	if o.kind == "task" {
+		return controllers.LabelTask
+	}
+	return controllers.LabelApp
+}
+
 func (p *podsAPI) appShell(w http.ResponseWriter, r *http.Request) {
-	project, app, pod := r.PathValue("project"), r.PathValue("app"), r.PathValue("pod")
+	p.openShell(w, r, shellOwner{kind: "app", name: r.PathValue("app")})
+}
+
+// taskShell opens a shell in the pod of a running Task, to look at what a job
+// does while it runs. Finished runs have no container left to exec into.
+func (p *podsAPI) taskShell(w http.ResponseWriter, r *http.Request) {
+	p.openShell(w, r, shellOwner{kind: "task", name: r.PathValue("task")})
+}
+
+func (p *podsAPI) openShell(w http.ResponseWriter, r *http.Request, owner shellOwner) {
+	project, pod := r.PathValue("project"), r.PathValue("pod")
 	q := r.URL.Query()
 	shell := q.Get("shell")
 	if shell == "" {
@@ -147,7 +173,7 @@ func (p *podsAPI) appShell(w http.ResponseWriter, r *http.Request) {
 
 	s := &shellSession{
 		p: p, pr: pr, ws: ws, r: r,
-		project: project, app: app, pod: pod, container: q.Get("container"),
+		project: project, owner: owner, pod: pod, container: q.Get("container"),
 		shell: shell, command: command, cols: cols, rows: rows,
 	}
 	s.run(r.Context())
@@ -205,11 +231,12 @@ type shellSession struct {
 	ws *wsConn
 	r  *http.Request
 
-	project, app, pod, container string
-	shell                        string
-	debug                        string // the toolbox container of a debug shell
-	command                      []string
-	cols, rows                   int
+	project, pod, container string
+	owner                   shellOwner
+	shell                   string
+	debug                   string // the toolbox container of a debug shell
+	command                 []string
+	cols, rows              int
 
 	rec *recording
 }
@@ -264,10 +291,16 @@ func (s *shellSession) run(ctx context.Context) {
 	}
 
 	started := p.now()
-	s.rec, err = p.rec.start(recordingMeta{
-		User: email, Project: s.project, App: s.app, Pod: s.pod, Container: s.container,
+	meta := recordingMeta{
+		User: email, Project: s.project, Kind: s.owner.kind, Pod: s.pod, Container: s.container,
 		Shell: s.shell, DebugContainer: s.debug, IP: clientIP(s.r), Started: started,
-	}, s.cols, s.rows)
+	}
+	if s.owner.kind == "task" {
+		meta.Task = s.owner.name
+	} else {
+		meta.App = s.owner.name
+	}
+	s.rec, err = p.rec.start(meta, s.cols, s.rows)
 	if err != nil {
 		p.cfg.Logger.Error("shell: cannot start the recording", "err", err)
 		s.fail("Shell sessions are recorded, and the recording could not be started. Nothing was run.")
@@ -276,6 +309,9 @@ func (s *shellSession) run(ctx context.Context) {
 	detail := fmt.Sprintf("container %s, %s, recording %s", s.container, s.shell, s.rec.meta.ID)
 	if s.debug != "" {
 		detail = fmt.Sprintf("container %s, debug via %s, recording %s", s.container, s.debug, s.rec.meta.ID)
+	}
+	if s.owner.kind == "task" {
+		detail += ", task " + s.owner.name
 	}
 	p.audit(s.r, email, "pod.exec", s.target(), detail)
 	_ = s.ws.json(map[string]any{
@@ -302,20 +338,35 @@ func (s *shellSession) run(ctx context.Context) {
 	p.audit(s.r, email, "pod.exec.end", s.target(), detail)
 }
 
-// resolve finds the pod as the user and checks it is a running replica of
-// the App; it returns nil and the reason otherwise.
+// resolve finds the pod as the user and checks that it belongs to the App (a
+// replica) or the Task (its run, which must not have finished), and that the
+// container runs; it returns nil and the reason otherwise.
 func (s *shellSession) resolve(ctx context.Context, b podBackend) (*corev1.Pod, string) {
 	ctx, cancel := context.WithTimeout(ctx, kubeTimeout)
 	defer cancel()
-	if err := b.app(ctx, s.project, s.app); err != nil {
-		return nil, kubeMessage(err, appNotFound(s.project, s.app))
+	o := s.owner
+	notFound := fmt.Sprintf("Replica %q not found. It may have been replaced; pick a current one.", s.pod)
+	notOurs := fmt.Sprintf("Replica %q is not part of app %q.", s.pod, o.name)
+	if o.kind == "task" {
+		task, err := b.task(ctx, s.project, o.name)
+		if err != nil {
+			return nil, kubeMessage(err, targetNotFound("task", s.project, o.name))
+		}
+		if task.Status.Phase.Finished() {
+			return nil, fmt.Sprintf("Run %q has finished (%s), so there is no container to open a shell in. Its logs stay in Task detail.",
+				o.name, strings.ToLower(string(task.Status.Phase)))
+		}
+		notFound = fmt.Sprintf("Pod %q of run %q not found. A retry starts a new pod; pick the current one.", s.pod, o.name)
+		notOurs = fmt.Sprintf("Pod %q is not part of run %q.", s.pod, o.name)
+	} else if err := b.app(ctx, s.project, o.name); err != nil {
+		return nil, kubeMessage(err, appNotFound(s.project, o.name))
 	}
 	pod, err := b.getPod(ctx, s.project, s.pod)
 	if err != nil {
-		return nil, kubeMessage(err, fmt.Sprintf("Replica %q not found. It may have been replaced; pick a current one.", s.pod))
+		return nil, kubeMessage(err, notFound)
 	}
-	if pod.Labels[controllers.LabelApp] != s.app {
-		return nil, fmt.Sprintf("Replica %q is not part of app %q.", s.pod, s.app)
+	if pod.Labels[o.label()] != o.name {
+		return nil, notOurs
 	}
 	if s.container == "" && len(pod.Spec.Containers) > 0 {
 		s.container = pod.Spec.Containers[0].Name
@@ -329,8 +380,13 @@ func (s *shellSession) resolve(ctx context.Context, b podBackend) (*corev1.Pod, 
 		}
 		if cs.State.Running == nil {
 			why := "it is not running"
-			if w := cs.State.Waiting; w != nil && w.Reason != "" {
-				why = "it is waiting (" + w.Reason + ")"
+			switch st := cs.State; {
+			case st.Waiting != nil && st.Waiting.Reason != "":
+				why = "it is waiting (" + st.Waiting.Reason + ")"
+			case st.Terminated != nil && o.kind == "task":
+				why = fmt.Sprintf("the run's command has finished (exit code %d)", st.Terminated.ExitCode)
+			case st.Terminated != nil && st.Terminated.Reason != "":
+				why = "it has stopped (" + st.Terminated.Reason + ")"
 			}
 			return nil, fmt.Sprintf("Cannot open a shell in %s: %s.", s.container, why)
 		}

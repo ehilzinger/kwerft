@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { Terminal as XTerm } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import "@xterm/xterm/css/xterm.css";
-import { shellURL, type ShellKind } from "../pods";
+import { shellURL, type ShellKind, type ShellOwner } from "../pods";
 import "../styles/pods.css";
 
 // A shell in a container: xterm.js (bundled, so the CSP stays 'self') on a
@@ -10,7 +10,8 @@ import "../styles/pods.css";
 // the session and ends it after a while without input. See api_shell.go for
 // the protocol: binary frames carry the terminal, text frames JSON events.
 
-export type ShellTarget = { project: string; app: string; pod: string; containers: string[] };
+// A replica of an App, or the pod of a running Task (the same dialog serves both).
+export type ShellTarget = ShellOwner & { containers: string[] };
 
 type Started = { pod: string; container: string; shell: string; recording: string; idleSeconds: number; maxSeconds: number };
 type Status =
@@ -163,7 +164,7 @@ function Term({ target, shell, container, onStatus }: { target: ShellTarget; she
       if (disposed) return;
       fit.fit();
       onStatus({ s: "connecting" });
-      ws = new WebSocket(shellURL(target.project, target.app, target.pod, { shell, container, cols: term.cols, rows: term.rows }));
+      ws = new WebSocket(shellURL(target, { shell, container, cols: term.cols, rows: term.rows }));
       ws.binaryType = "arraybuffer";
       ws.onmessage = (ev) => {
         if (typeof ev.data !== "string") {
@@ -207,7 +208,7 @@ function Term({ target, shell, container, onStatus }: { target: ShellTarget; she
       ws?.close();
       term.dispose();
     };
-  }, [target.project, target.app, target.pod, shell, container, onStatus]);
+  }, [target.project, target.app, target.task, target.pod, shell, container, onStatus]);
 
   return <div className="shell-term" ref={el} />;
 }

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { lazy, Suspense, useState } from "react";
 import { Link, getRouteApi, useNavigate } from "@tanstack/react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ApiError, api } from "../api";
@@ -6,6 +6,7 @@ import { Dialog } from "../components/Dialog";
 import { Icon } from "../components/Icon";
 import { TaskStatus, phaseOfTask } from "../components/TaskStatus";
 import { duration, jobs, prettyDuration, type Task } from "../jobs";
+import { podsApi, type Replicas } from "../pods";
 import { abilities, ago, sizes, words, type EnvVar } from "../workloads";
 import { errorText } from "./Apps";
 import { RunNowDialog, type RunSource } from "./RunNowDialog";
@@ -14,6 +15,9 @@ import "../styles/workloads.css";
 import "../styles/jobs.css";
 
 const route = getRouteApi("/authed/jobs/$project/tasks/$name");
+
+// xterm.js is large: load it with the first shell, not with the console.
+const ShellDialog = lazy(() => import("../components/Terminal").then((m) => ({ default: m.ShellDialog })));
 
 export function TaskDetail() {
   const { project, name } = route.useParams();
@@ -27,7 +31,16 @@ export function TaskDetail() {
     queryFn: () => jobs.task(project, name),
     refetchInterval: (query) => (query.state.data && phaseOfTask(query.state.data.status) !== "succeeded" && phaseOfTask(query.state.data.status) !== "failed" ? 3000 : 15000),
   });
-  const [dialog, setDialog] = useState<"cancel" | "delete" | "again">();
+  const [dialog, setDialog] = useState<"cancel" | "delete" | "again" | "shell">();
+  // A shell is possible while the run runs. The pods answer says whether
+  // Kubernetes RBAC lets this user exec (the same query as the logs' pods).
+  const running = q.data !== undefined && phaseOfTask(q.data.status) === "running";
+  const pods = useQuery({
+    queryKey: ["task-pods", project, name],
+    queryFn: () => podsApi.taskPods(project, name),
+    enabled: running,
+    refetchInterval: running ? 5000 : false,
+  });
 
   if (q.isPending) return <section className="view"><p className="loading">Loading {name}…</p></section>;
   if (q.isError) {
@@ -74,6 +87,7 @@ export function TaskDetail() {
         </div>
         <div className="acts">
           {again && <button className="btn" disabled={!can.deploy} title={denied} onClick={() => setDialog("again")}><Icon name="play" />Run again</button>}
+          {running && <ShellButton pod={st.pod} pods={pods.data} onOpen={() => setDialog("shell")} />}
           {!finished && <button className="btn danger" disabled={!can.deploy} title={denied} onClick={() => setDialog("cancel")}>Cancel run</button>}
           <button className="btn danger" disabled={!can.deploy} title={denied} onClick={() => setDialog("delete")}><Icon name="trash" />Delete</button>
         </div>
@@ -140,6 +154,12 @@ export function TaskDetail() {
         <RunNowDialog source={again} onClose={() => setDialog(undefined)}
           initialOverrides={(spec.envOverrides ?? []).filter((e) => e.value !== undefined).map((e) => ({ name: e.name, value: e.value ?? "" }))} />
       )}
+      {dialog === "shell" && st.pod && (
+        <Suspense fallback={null}>
+          <ShellDialog onClose={() => setDialog(undefined)}
+            target={{ project, task: name, pod: st.pod, containers: pods.data?.pods.find((p) => p.name === st.pod)?.containers.map((c) => c.name) ?? [] }} />
+        </Suspense>
+      )}
       {dialog === "cancel" && <CancelDialog task={task} onClose={() => setDialog(undefined)} onDone={(t) => { queryClient.setQueryData(key, t); void queryClient.invalidateQueries({ queryKey: ["tasks"] }); }} />}
       {dialog === "delete" && (
         <DeleteTaskDialog task={task} onClose={() => setDialog(undefined)}
@@ -147,6 +167,15 @@ export function TaskDetail() {
       )}
     </section>
   );
+}
+
+function ShellButton({ pod, pods, onOpen }: { pod?: string; pods?: Replicas; onOpen: () => void }) {
+  const up = pods?.pods.find((p) => p.name === pod)?.containers.some((c) => c.state === "running") ?? false;
+  const why = !pods ? "Checking the run's pod…"
+    : !pods.access.exec ? "Your role cannot open a shell."
+    : !up ? "The run's container is not running yet."
+    : `Shell in ${pod} (recorded)`;
+  return <button className="btn" disabled={!pods?.access.exec || !up} title={why} onClick={onOpen}>Shell</button>;
 }
 
 function EnvTable({ vars, empty }: { vars: EnvVar[]; empty: string }) {
