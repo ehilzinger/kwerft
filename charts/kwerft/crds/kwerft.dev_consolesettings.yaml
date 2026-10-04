@@ -1,0 +1,238 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.20.1
+  name: consolesettings.kwerft.dev
+spec:
+  group: kwerft.dev
+  names:
+    kind: ConsoleSettings
+    listKind: ConsoleSettingsList
+    plural: consolesettings
+    shortNames:
+    - kwset
+    singular: consolesettings
+  scope: Cluster
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .status.consoleDomain
+      name: Console
+      type: string
+    - jsonPath: .spec.appsDomain
+      name: Apps
+      type: string
+    - jsonPath: .spec.tls
+      name: TLS
+      type: string
+    - jsonPath: .status.conditions[?(@.type=="Ready")].status
+      name: Ready
+      type: string
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: |-
+          ConsoleSettings holds the console's own configuration that reconcilers
+          need: its hostname, the apps base domain and how certificates are issued.
+          It is a singleton named "kwerft".
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: |-
+              ConsoleSettingsSpec is what owners and admins choose on the Settings page
+              (or the installer from --domain and --config).
+            properties:
+              appsDomain:
+                description: |-
+                  AppsDomain is the base domain for apps, e.g. apps.example.com. The
+                  deploy wizard suggests <app>.<appsDomain>. With tls dns01, hostnames
+                  one label below it share a wildcard listener and certificate.
+                maxLength: 200
+                pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?\.)+[a-z]([-a-z0-9]*[a-z0-9])?$
+                type: string
+              consoleDomain:
+                description: |-
+                  ConsoleDomain is the console's hostname. Empty falls back to the
+                  --console-domain flag the installer passed. Changing it adds a listener
+                  for the new name; the console moves there once its certificate is
+                  issued (status.consoleDomain).
+                maxLength: 253
+                pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?\.)+[a-z]([-a-z0-9]*[a-z0-9])?$
+                type: string
+              dns01:
+                description: |-
+                  DNS01 configures the solver for tls dns01. Its API token lives in the
+                  Secret kwerft-dns-token (key "token") in kwerft-system, which owners and
+                  admins may write through the console but nobody reads back.
+                properties:
+                  provider:
+                    description: |-
+                      Provider of the DNS zone that contains appsDomain. Only Hetzner (DNS in
+                      the Hetzner Console, Cloud API) for now.
+                    enum:
+                    - hetzner
+                    type: string
+                required:
+                - provider
+                type: object
+              tls:
+                default: http01
+                description: TLS is how app certificates are issued.
+                enum:
+                - http01
+                - dns01
+                type: string
+            type: object
+          status:
+            description: |-
+              ConsoleSettingsStatus is written by the Domain reconciler, which owns the
+              shared Gateway.
+            properties:
+              certificates:
+                description: Certificates the console and the wildcard listener use.
+                items:
+                  description: CertificateState is one certificate the console itself
+                    depends on.
+                  properties:
+                    hostnames:
+                      description: Hostnames the certificate covers.
+                      items:
+                        type: string
+                      type: array
+                    message:
+                      type: string
+                    name:
+                      description: Name of the cert-manager Certificate in kwerft-system.
+                      type: string
+                    notAfter:
+                      format: date-time
+                      type: string
+                    purpose:
+                      description: 'Purpose: console, console-next, console-previous
+                        or apps-wildcard.'
+                      type: string
+                    ready:
+                      description: Ready mirrors the Certificate's Ready condition.
+                      type: boolean
+                    reason:
+                      type: string
+                  required:
+                  - hostnames
+                  - name
+                  - purpose
+                  - ready
+                  type: object
+                type: array
+              conditions:
+                items:
+                  description: Condition contains details for one aspect of the current
+                    state of this API Resource.
+                  properties:
+                    lastTransitionTime:
+                      description: |-
+                        lastTransitionTime is the last time the condition transitioned from one status to another.
+                        This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
+                      format: date-time
+                      type: string
+                    message:
+                      description: |-
+                        message is a human readable message indicating details about the transition.
+                        This may be an empty string.
+                      maxLength: 32768
+                      type: string
+                    observedGeneration:
+                      description: |-
+                        observedGeneration represents the .metadata.generation that the condition was set based upon.
+                        For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
+                        with respect to the current state of the instance.
+                      format: int64
+                      minimum: 0
+                      type: integer
+                    reason:
+                      description: |-
+                        reason contains a programmatic identifier indicating the reason for the condition's last transition.
+                        Producers of specific condition types may define expected values and meanings for this field,
+                        and whether the values are considered a guaranteed API.
+                        The value should be a CamelCase string.
+                        This field may not be empty.
+                      maxLength: 1024
+                      minLength: 1
+                      pattern: ^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$
+                      type: string
+                    status:
+                      description: status of the condition, one of True, False, Unknown.
+                      enum:
+                      - "True"
+                      - "False"
+                      - Unknown
+                      type: string
+                    type:
+                      description: type of condition in CamelCase or in foo.example.com/CamelCase.
+                      maxLength: 316
+                      pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$
+                      type: string
+                  required:
+                  - lastTransitionTime
+                  - message
+                  - reason
+                  - status
+                  - type
+                  type: object
+                type: array
+              consoleDomain:
+                description: |-
+                  ConsoleDomain is the hostname the console is served on now. While a
+                  change waits for its certificate it still names the old hostname.
+                type: string
+              observedGeneration:
+                format: int64
+                type: integer
+              previousConsoleDomain:
+                description: |-
+                  PreviousConsoleDomain redirects to ConsoleDomain for a day after a
+                  switch, so open tabs and bookmarks find the new name.
+                type: string
+              publicAddresses:
+                description: |-
+                  PublicAddresses are the nodes' external IPs: where DNS records for the
+                  console and apps must point.
+                items:
+                  type: string
+                type: array
+              switchedAt:
+                format: date-time
+                type: string
+              wildcardDomain:
+                description: |-
+                  WildcardDomain is "*.<appsDomain>" once the wildcard listener serves
+                  apps (its certificate is issued); empty otherwise.
+                type: string
+            type: object
+        type: object
+        x-kubernetes-validations:
+        - message: the console settings object must be named kwerft
+          rule: self.metadata.name == 'kwerft'
+        - message: tls dns01 needs appsDomain and dns01
+          rule: '!has(self.spec) || !has(self.spec.tls) || self.spec.tls != ''dns01''
+            || (has(self.spec.appsDomain) && size(self.spec.appsDomain) > 0 && has(self.spec.dns01))'
+    served: true
+    storage: true
+    subresources:
+      status: {}

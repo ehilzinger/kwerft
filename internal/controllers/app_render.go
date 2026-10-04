@@ -179,16 +179,22 @@ func (a *appRender) domains() map[string]*kwerftv1ac.DomainApplyConfiguration {
 	return out
 }
 
-// routes returns, per public port, an HTTPS route on the hostname's own
-// listener and a plain-HTTP route that redirects to HTTPS. Keyed by name.
-func (a *appRender) routes() map[string]*gwv1ac.HTTPRouteApplyConfiguration {
+// routes returns, per public port, an HTTPS route on the listener serving the
+// hostname and a plain-HTTP route that redirects to HTTPS. Keyed by name.
+//
+// listeners maps the hostnames this App's project holds (see wonHostnames) to
+// their listener. A hostname the project does not hold gets no route at all:
+// on the shared wildcard listener the Gateway cannot tell projects apart, so
+// this is what keeps one project from serving another's hostname.
+func (a *appRender) routes(listeners map[string]string) map[string]*gwv1ac.HTTPRouteApplyConfiguration {
 	out := map[string]*gwv1ac.HTTPRouteApplyConfiguration{}
 	for _, p := range a.app.Spec.Ports {
-		if p.Public == "" {
+		listener, held := listeners[p.Public]
+		if p.Public == "" || !held {
 			continue
 		}
 		name := fmt.Sprintf("%s-%d", a.app.Name, p.Container)
-		out[name] = a.route(name, ListenerName(p.Public), p.Public, gwv1ac.HTTPRouteRule().
+		out[name] = a.route(name, listener, p.Public, gwv1ac.HTTPRouteRule().
 			WithBackendRefs(gwv1ac.HTTPBackendRef().
 				WithName(gwv1.ObjectName(a.app.Name)).
 				WithPort(gwv1.PortNumber(p.Container))))

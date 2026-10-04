@@ -41,8 +41,10 @@ rules:
   - apiGroups: [gateway.networking.k8s.io]
     resources: [gateways, httproutes]
     verbs: [get, list, watch, create, update, patch, delete]
+  # The apps wildcard: a DNS-01 Issuer and Certificate of Kwerft's own, and
+  # retrying a failed one at once after the DNS token changed (status).
   - apiGroups: [cert-manager.io]
-    resources: [certificates, clusterissuers]
+    resources: [certificates, certificates/status, issuers, clusterissuers]
     verbs: [get, list, watch, create, update, patch, delete]
   - apiGroups: [cilium.io]
     resources: [ciliumnetworkpolicies, ciliumclusterwidenetworkpolicies]

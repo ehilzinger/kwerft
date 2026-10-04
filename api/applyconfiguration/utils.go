@@ -20,6 +20,16 @@ func ForKind(kind schema.GroupVersionKind) interface{} {
 		return &apiv1alpha1.AppSourceApplyConfiguration{}
 	case v1alpha1.SchemeGroupVersion.WithKind("AppVolume"):
 		return &apiv1alpha1.AppVolumeApplyConfiguration{}
+	case v1alpha1.SchemeGroupVersion.WithKind("CertificateState"):
+		return &apiv1alpha1.CertificateStateApplyConfiguration{}
+	case v1alpha1.SchemeGroupVersion.WithKind("ConsoleSettings"):
+		return &apiv1alpha1.ConsoleSettingsApplyConfiguration{}
+	case v1alpha1.SchemeGroupVersion.WithKind("ConsoleSettingsSpec"):
+		return &apiv1alpha1.ConsoleSettingsSpecApplyConfiguration{}
+	case v1alpha1.SchemeGroupVersion.WithKind("ConsoleSettingsStatus"):
+		return &apiv1alpha1.ConsoleSettingsStatusApplyConfiguration{}
+	case v1alpha1.SchemeGroupVersion.WithKind("DNS01Settings"):
+		return &apiv1alpha1.DNS01SettingsApplyConfiguration{}
 	case v1alpha1.SchemeGroupVersion.WithKind("Domain"):
 		return &apiv1alpha1.DomainApplyConfiguration{}
 	case v1alpha1.SchemeGroupVersion.WithKind("DomainSpec"):

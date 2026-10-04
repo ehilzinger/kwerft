@@ -126,10 +126,8 @@ func TestAppRendersDeploymentServiceRouteAndPolicy(t *testing.T) {
 	}
 
 	// HTTPRoute
-	var route gwv1.HTTPRoute
-	if err := k8s.Get(ctx, client.ObjectKey{Namespace: "shop", Name: "api-8080"}, &route); err != nil {
-		t.Fatal(err)
-	}
+	// (once the Domain reconciler has granted the hostname to this project)
+	route := getRoute(t, "shop", "api-8080")
 	if len(route.Spec.Hostnames) != 1 || route.Spec.Hostnames[0] != "api.example.com" {
 		t.Errorf("hostnames = %v", route.Spec.Hostnames)
 	}

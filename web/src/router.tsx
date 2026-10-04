@@ -18,6 +18,7 @@ import { Network } from "./pages/Network";
 import { AccessRecordings, recordingsSearch } from "./pages/AccessRecordings";
 import { AccessAudit, AccessMembers, AccessRoles } from "./pages/Access";
 import { InviteAccept } from "./pages/InviteAccept";
+import { Settings } from "./pages/Settings";
 
 type Context = { queryClient: QueryClient };
 
@@ -102,6 +103,7 @@ const routeTree = root.addChildren([
     createRoute({ getParentRoute: () => authed, path: "/network", component: Network }),
     // Access › Shell recordings (owners and admins); /access itself is Members.
     createRoute({ getParentRoute: () => authed, path: "/access/recordings", component: AccessRecordings, validateSearch: recordingsSearch }),
+    createRoute({ getParentRoute: () => authed, path: "/settings", component: Settings }),
     planned("/monitoring", "Monitoring", "Phase 3", "Alerts with one-click fixes, top consumers, and alert rules routed to email, Slack, webhooks or ntfy."),
     planned("/clusters", "Clusters & nodes", "Phase 5", "Add Hetzner Cloud servers through the API or join dedicated servers with one command; manage more clusters through an outbound agent."),
     // Access tabs; /access/recordings is the Recordings tab's own route.

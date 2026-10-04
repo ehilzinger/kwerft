@@ -242,3 +242,167 @@ lookups() { cat "$BATS_TEST_TMPDIR/lookups"; }
   check_release
   [ -z "$(lookups)" ]
 }
+
+# ---------------------------------------------------------------------------
+# Console settings: the cluster's ConsoleSettings "kwerft" records the console
+# hostname and apps domain; the Settings page edits the same object.
+# ---------------------------------------------------------------------------
+
+@test "config_get_in reads inline mappings" {
+  cfg="$BATS_TEST_TMPDIR/kwerft.yaml"
+  printf 'domain: ops.example.com\ndns: { solver: hetzner, tokenFile: "/root/dns.token" }   # wildcard\nowner: { email: a@example.com }\n' >"$cfg"
+  KWERFT_SOURCED=1 source "$SCRIPT"
+  CONFIG_FILE=$cfg
+  [ "$(config_get_in dns solver)" = "hetzner" ]
+  [ "$(config_get_in dns tokenFile)" = "/root/dns.token" ]
+  [ "$(config_get_in owner solver)" = "" ]
+  [ "$(config_get_in backups solver)" = "" ]
+}
+
+@test "config_get_in reads block mappings" {
+  cfg="$BATS_TEST_TMPDIR/kwerft.yaml"
+  printf 'dns:\n  solver: hetzner   # the only one\n  tokenFile: /root/dns.token\nappsDomain: apps.example.com\nother:\n  solver: nope\n' >"$cfg"
+  KWERFT_SOURCED=1 source "$SCRIPT"
+  CONFIG_FILE=$cfg
+  [ "$(config_get_in dns solver)" = "hetzner" ]
+  [ "$(config_get_in dns tokenFile)" = "/root/dns.token" ]
+  [ "$(config_get appsDomain)" = "apps.example.com" ]
+}
+
+write_config() {
+  token="$BATS_TEST_TMPDIR/dns.token"; printf 'hz-token\n' >"$token"
+  cfg="$BATS_TEST_TMPDIR/kwerft.yaml"
+  printf '%b' "$1" | sed "s|TOKEN|$token|" >"$cfg"
+}
+
+@test "--config with appsDomain and Hetzner DNS is accepted" {
+  write_config 'domain: ops.example.com\nappsDomain: Apps.Example.com\ndns: { solver: hetzner, tokenFile: TOKEN }\n'
+  run "$SCRIPT" --dry-run --platform cloud --config "$cfg"
+  [ "$status" -eq 0 ]
+}
+
+@test "--config dns needs a solver Kwerft knows" {
+  write_config 'appsDomain: apps.example.com\ndns: { solver: route53, tokenFile: TOKEN }\n'
+  run "$SCRIPT" --dry-run --platform cloud --config "$cfg"
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"dns.solver"*"must be hetzner"* ]]
+}
+
+@test "--config dns needs appsDomain" {
+  write_config 'dns: { solver: hetzner, tokenFile: TOKEN }\n'
+  run "$SCRIPT" --dry-run --platform cloud --config "$cfg"
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"needs appsDomain"* ]]
+}
+
+@test "--config dns needs a readable token file" {
+  write_config 'appsDomain: apps.example.com\ndns:\n  solver: hetzner\n  tokenFile: /nonexistent/dns.token\n'
+  run "$SCRIPT" --dry-run --platform cloud --config "$cfg"
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"dns.tokenFile not readable"* ]]
+}
+
+@test "--config appsDomain must be a domain" {
+  write_config 'appsDomain: "apps example"\n'
+  run "$SCRIPT" --dry-run --platform cloud --config "$cfg"
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"appsDomain"*"must be a domain"* ]]
+}
+
+@test "--domain must be a hostname" {
+  run "$SCRIPT" --dry-run --platform cloud --domain "ops example.com"
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"--domain must be a hostname"* ]]
+}
+
+@test "resolve_domain: re-running without --domain keeps what Settings chose" {
+  KWERFT_SOURCED=1 source "$SCRIPT"
+  DOMAIN_FILE="$BATS_TEST_TMPDIR/domain"; echo "203.0.113.24.sslip.io" >"$DOMAIN_FILE"
+  kc() { [[ "$*" == *"{.spec.consoleDomain}"* ]] && printf 'ops.example.com'; return 0; }
+  DOMAIN=""; DOMAIN_EXPLICIT=0; PUBLIC_IP="203.0.113.24"
+  resolve_domain
+  [ "$DOMAIN" = "ops.example.com" ]
+}
+
+@test "resolve_domain: --domain replaces the Settings choice and says so" {
+  KWERFT_SOURCED=1 source "$SCRIPT"
+  kc() { [[ "$*" == *"{.spec.consoleDomain}"* ]] && printf 'ops.example.com'; return 0; }
+  DOMAIN="console.example.net"; DOMAIN_EXPLICIT=1; PUBLIC_IP="203.0.113.24"
+  resolve_domain 2>"$BATS_TEST_TMPDIR/err"
+  [ "$DOMAIN" = "console.example.net" ]
+  [[ "$(<"$BATS_TEST_TMPDIR/err")" == *"moves from ops.example.com (chosen in Settings) to console.example.net"* ]]
+}
+
+# absent PATTERN FILE: bats does not fail a test on `! grep`.
+absent() { [ "$(grep -c -- "$1" "$2")" -eq 0 ]; }
+
+# kc stub for apply_console_settings: logs every call (and what is piped into
+# `apply -f -`) and answers `get` as if the settings exist when EXISTING is set.
+settings_env() {
+  KWERFT_SOURCED=1 source "$SCRIPT"
+  LOG_FILE="$BATS_TEST_TMPDIR/install.log"; : >"$LOG_FILE"
+  DNS_TOKEN_SUM_FILE="$BATS_TEST_TMPDIR/dns-token.sha256"
+  KC_LOG="$BATS_TEST_TMPDIR/kc.log"; : >"$KC_LOG"
+  EXISTING=""
+  kc() {
+    printf 'kc %s\n' "$*" >>"$KC_LOG"
+    if [[ "$*" == *"apply -f -"* ]]; then cat >>"$KC_LOG"; fi
+    if [[ "$*" == "get consolesettings"* ]]; then printf '%s' "$EXISTING"; fi
+    return 0
+  }
+}
+
+@test "apply_console_settings: the first run records the console hostname" {
+  settings_env
+  DOMAIN="203.0.113.24.sslip.io"; DOMAIN_EXPLICIT=0
+  apply_console_settings
+  grep -q "kind: ConsoleSettings" "$KC_LOG"
+  grep -q "consoleDomain: 203.0.113.24.sslip.io" "$KC_LOG"
+  absent "kc patch" "$KC_LOG"
+}
+
+@test "apply_console_settings: a re-run without --domain leaves the hostname alone" {
+  settings_env
+  EXISTING="kwerft"; DOMAIN="ops.example.com"; DOMAIN_EXPLICIT=0
+  apply_console_settings
+  absent "kc patch" "$KC_LOG"
+  absent "kind: ConsoleSettings" "$KC_LOG"
+}
+
+@test "apply_console_settings: --domain on a re-run replaces the hostname" {
+  settings_env
+  EXISTING="kwerft"; DOMAIN="console.example.net"; DOMAIN_EXPLICIT=1
+  apply_console_settings
+  grep -q 'kc patch consolesettings.kwerft.dev kwerft --type merge -p {"spec":{"consoleDomain":"console.example.net"}}' "$KC_LOG"
+}
+
+@test "apply_console_settings: appsDomain alone keeps a certificate per hostname" {
+  settings_env
+  EXISTING="kwerft"; DOMAIN="ops.example.com"; APPS_DOMAIN="apps.example.com"
+  apply_console_settings
+  grep -q '"appsDomain":"apps.example.com","tls":"http01","dns01":null' "$KC_LOG"
+  absent "kwerft-dns-token" "$KC_LOG"
+}
+
+@test "apply_console_settings: Hetzner DNS stores the token and turns on the wildcard" {
+  settings_env
+  token="$BATS_TEST_TMPDIR/dns.token"; printf 'hz-token\n' >"$token"
+  EXISTING="kwerft"; DOMAIN="ops.example.com"; APPS_DOMAIN="apps.example.com"; DNS_SOLVER="hetzner"; DNS_TOKEN_FILE=$token
+  apply_console_settings
+  grep -q "create secret generic kwerft-dns-token --from-file=token=$token" "$KC_LOG"
+  grep -q '"appsDomain":"apps.example.com","tls":"dns01","dns01":{"provider":"hetzner"}' "$KC_LOG"
+  [ "$(grep -c 'kwerft.dev/dns-token-updated-at' "$KC_LOG")" -eq 1 ]
+  # The token itself never lands in the install log.
+  absent "hz-token" "$LOG_FILE"
+
+  # The same token again: stored again, but no retry is triggered.
+  : >"$KC_LOG"
+  apply_console_settings
+  grep -q "kwerft-dns-token" "$KC_LOG"
+  absent 'kwerft.dev/dns-token-updated-at' "$KC_LOG"
+
+  # A new token triggers one.
+  printf 'hz-token-2\n' >"$token"
+  apply_console_settings
+  grep -q 'kwerft.dev/dns-token-updated-at' "$KC_LOG"
+}

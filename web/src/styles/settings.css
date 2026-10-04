@@ -1,0 +1,30 @@
+/* Settings page. Radio options follow the blueprint's setup wizard. */
+.settings { max-width: 920px; }
+.settings .current { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.settings .current .k { display: block; font-size: 11.5px; color: var(--muted); text-transform: uppercase; letter-spacing: .07em; }
+.settings .current .host { font-family: var(--mono); font-size: 14px; color: var(--ink); text-decoration: none; overflow-wrap: anywhere; }
+.settings .current .host:hover { text-decoration: underline; }
+.settings .current > div { margin-right: auto; min-width: 0; }
+.settings .move { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px 10px; align-items: start; }
+.settings .move > p { grid-column: 1 / -1; }
+.settings .move-acts { display: flex; gap: 8px; padding-top: 23px; flex-wrap: wrap; }
+.settings .stack.tight { gap: 8px; }
+.settings .inline-check { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.settings .inline-check span { font-size: 12.5px; }
+.settings .warn-text { color: var(--warn); }
+
+.radio { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.radio .opt { grid-template-columns: auto 1fr; column-gap: 10px; }
+.radio .opt .r { width: 14px; height: 14px; border-radius: 50%; border: 1.5px solid var(--faint); margin-top: 3px; grid-row: span 2; }
+.radio .opt[aria-pressed="true"] .r { border: 4px solid var(--accent); }
+.radio .opt > span:not(.r) { grid-column: 2; }
+
+.consequences { margin: 0; padding-left: 18px; display: grid; gap: 6px; font-size: 13px; color: var(--ink-2); }
+.holders { display: grid; gap: 8px; }
+.holders .row b { font-size: 13px; }
+
+@media (max-width: 760px) {
+  .radio { grid-template-columns: 1fr; }
+  .settings .move { grid-template-columns: 1fr; }
+  .settings .move-acts { padding-top: 0; }
+}

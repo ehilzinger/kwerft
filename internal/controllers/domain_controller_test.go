@@ -107,11 +107,35 @@ func TestGatewayHasHTTPAndConsoleListeners(t *testing.T) {
 	if l := listener(gw, httpListener); l == nil || l.Port != 80 {
 		t.Errorf("http listener = %+v", l)
 	}
-	l := listener(gw, consoleListener)
+	l := listener(gw, ConsoleListenerName(testConsoleDomain))
 	if l == nil || l.Hostname == nil || string(*l.Hostname) != testConsoleDomain || l.TLS == nil ||
-		string(l.TLS.CertificateRefs[0].Name) != consoleSecret {
-		t.Errorf("console listener = %+v", l)
+		string(l.TLS.CertificateRefs[0].Name) != consoleSecretName(testConsoleDomain) {
+		t.Fatalf("console listener = %+v", l)
 	}
+	if ns := l.AllowedRoutes.Namespaces; ns == nil || *ns.From != gwv1.NamespacesFromSame {
+		t.Errorf("console listener admits %+v, want only its own namespace", ns)
+	}
+
+	// The console's routes come from the reconciler, not Helm.
+	route := getRoute(t, GatewayNamespace, consoleRoute)
+	if len(route.Spec.Hostnames) != 1 || string(route.Spec.Hostnames[0]) != testConsoleDomain ||
+		string(*route.Spec.ParentRefs[0].SectionName) != ConsoleListenerName(testConsoleDomain) ||
+		string(route.Spec.Rules[0].BackendRefs[0].Name) != ConsoleService {
+		t.Errorf("console route = %+v", route.Spec)
+	}
+	redirect := getRoute(t, GatewayNamespace, consoleRedirectRoute)
+	if string(*redirect.Spec.ParentRefs[0].SectionName) != httpListener || redirect.Spec.Rules[0].Filters[0].RequestRedirect == nil {
+		t.Errorf("console redirect route = %+v", redirect.Spec)
+	}
+}
+
+func getRoute(t *testing.T, ns, name string) *gwv1.HTTPRoute {
+	t.Helper()
+	var route gwv1.HTTPRoute
+	eventually(t, func() error {
+		return k8s.Get(context.Background(), client.ObjectKey{Namespace: ns, Name: name}, &route)
+	})
+	return &route
 }
 
 func TestAppPublicPortGetsDomainHTTPSListenerAndRedirect(t *testing.T) {

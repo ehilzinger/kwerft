@@ -1,6 +1,6 @@
 import { useState, type FormEvent } from "react";
 import { useNavigate } from "@tanstack/react-router";
-import { useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { ApiError, api } from "../api";
 import { Field } from "../components/Field";
 import { Icon } from "../components/Icon";
@@ -16,6 +16,13 @@ const steps: { id: Step | "domains" | "hetzner"; title: string; note: string }[]
 
 export function Setup() {
   const [step, setStep] = useState<Step>("token");
+  const status = useQuery({ queryKey: ["setup"], queryFn: api.setupStatus });
+  const domain = status.data?.consoleDomain;
+  // The DNS hint follows the console setting: a temporary sslip.io name needs
+  // a real one later, in Settings, where the apps domain is set too.
+  const domainNote = !domain ? "Later, in Settings"
+    : domain.endsWith(".sslip.io") ? `Temporary ${domain} · your own in Settings`
+    : `Console at ${domain} · apps domain in Settings`;
   return (
     <div className="setup">
       <aside>
@@ -27,7 +34,7 @@ export function Setup() {
             return (
               <li key={s.id} className={`${state} ${later ? "later" : ""}`} aria-current={state === "cur" ? "step" : undefined}>
                 <span className="dot">{state === "done" ? "✓" : i + 1}</span>
-                <div><b>{s.title}</b><small>{s.note}</small></div>
+                <div><b>{s.title}</b><small>{s.id === "domains" ? domainNote : s.note}</small></div>
               </li>
             );
           })}

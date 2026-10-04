@@ -136,6 +136,8 @@ func main() {
 		KubeCache:     kubeCache,
 		RecordingsDir: filepath.Join(*dataDir, "recordings"),
 		DebugImage:    *debugImage,
+
+		ActiveConsoleDomain: activeConsoleDomain(mgr, *dev),
 	})
 
 	go func() {
@@ -180,7 +182,7 @@ func cleanSessions(ctx context.Context, log *slog.Logger, st *store.Store) {
 // not-ready (so `helm --wait` fails) instead of passing silently.
 func waitUntilReady(ctx context.Context, log *slog.Logger, mgr ctrl.Manager, ready *atomic.Bool) {
 	types := []client.Object{&kwerftv1.Project{}, &kwerftv1.App{}, &kwerftv1.Domain{},
-		&kwerftv1.Volume{}, &kwerftv1.Task{}, &kwerftv1.Schedule{}}
+		&kwerftv1.Volume{}, &kwerftv1.Task{}, &kwerftv1.Schedule{}, &kwerftv1.ConsoleSettings{}}
 	for _, obj := range types {
 		for {
 			_, err := mgr.GetCache().GetInformer(ctx, obj, cache.BlockUntilSynced(false))
@@ -227,6 +229,7 @@ func newManager(log *slog.Logger, leaderElect bool, domains *controllers.DomainR
 		return nil, err
 	}
 	domains.Client = mgr.GetClient()
+	domains.APIReader = mgr.GetAPIReader()
 	if err := domains.SetupWithManager(mgr); err != nil {
 		return nil, err
 	}

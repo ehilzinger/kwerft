@@ -71,7 +71,7 @@ func (a *api) accountGet(w http.ResponseWriter, r *http.Request) {
 		"recoveryCodesLeft": f.RecoveryCodes,
 		"sessions":          sessions,
 		// What this console can offer; the page explains what's missing.
-		"available": map[string]bool{"totp": a.mfa.sealer != nil, "passkeys": a.mfa.webauthn != nil},
+		"available": map[string]bool{"totp": a.mfa.sealer != nil, "passkeys": a.passkeyRP() != nil},
 	})
 }
 

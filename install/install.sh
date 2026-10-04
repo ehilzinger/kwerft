@@ -35,6 +35,7 @@ GATEWAY_API_VERSION="v1.6.2"            # only used when k3s does not ship the C
 TRAEFIK_CHART_VERSION="41.6.1"
 VM_STACK_CHART_VERSION="0.95.0"
 VLOGS_CHART_VERSION="0.13.10"
+HETZNER_WEBHOOK_CHART_VERSION="0.9.0"   # cert-manager DNS-01 for Hetzner DNS (Cloud API), 2026-08-19
 KWERFT_CHART_REPO="oci://ghcr.io/ehilzinger/charts/kwerft"
 KWERFT_IMAGE_REPO="ghcr.io/ehilzinger/kwerft"   # the chart's image.repository; checked before installing
 
@@ -47,13 +48,14 @@ readonly STATE_DIR="/var/lib/kwerft"
 readonly CONF_DIR="/etc/kwerft"
 SETUP_TOKEN_FILE="$CONF_DIR/setup-token"  # not readonly so tests can point it elsewhere
 readonly LOG_DIR="/var/log/kwerft"
-readonly LOG_FILE="$LOG_DIR/install.log"
+LOG_FILE="$LOG_DIR/install.log"           # not readonly so tests can point it elsewhere
 readonly KUBECONFIG_PATH="/etc/rancher/k3s/k3s.yaml"
 readonly WG_PORT=51871
 readonly POD_CIDR="10.42.0.0/16"
 readonly SERVICE_CIDR="10.43.0.0/16"
 readonly TEMP_DOMAIN_SUFFIX=".sslip.io"   # wildcard DNS: <ip>.sslip.io resolves to <ip>
 DOMAIN_FILE="$STATE_DIR/domain"           # not readonly so tests can point it elsewhere
+DNS_TOKEN_SUM_FILE="$STATE_DIR/dns-token.sha256"  # likewise; tells a changed DNS token from the same one
 
 # Options (flags override KWERFT_* environment variables).
 DOMAIN="${KWERFT_DOMAIN:-}"
@@ -69,6 +71,10 @@ JOIN_ROLE="${KWERFT_JOIN_ROLE:-worker}"
 KWERFT_CHART="${KWERFT_CHART:-}"
 IMAGE="${KWERFT_IMAGE:-}"
 IMAGE_ARCHIVE="${KWERFT_IMAGE_ARCHIVE:-}"
+DOMAIN_EXPLICIT=0       # 1: the console hostname came from --domain, KWERFT_DOMAIN or --config
+APPS_DOMAIN=""          # --config appsDomain
+DNS_SOLVER=""           # --config dns.solver (hetzner)
+DNS_TOKEN_FILE=""       # --config dns.tokenFile
 MODE="install"
 DRY_RUN=0
 ASSUME_YES=0
@@ -196,6 +202,27 @@ parse_args() {
   if [[ -n "$CONFIG_FILE" ]]; then
     [[ -z "$DOMAIN" ]] && DOMAIN=$(config_get domain)
     [[ -z "$ACME_EMAIL" ]] && ACME_EMAIL=$(config_get email)
+    APPS_DOMAIN=$(lower "$(config_get appsDomain)")
+    DNS_SOLVER=$(config_get_in dns solver)
+    DNS_TOKEN_FILE=$(config_get_in dns tokenFile)
+  fi
+  # A hostname given now is explicit: it replaces what Settings chose. Without
+  # one, resolve_domain keeps the cluster's setting.
+  if [[ -n "$DOMAIN" ]]; then
+    DOMAIN_EXPLICIT=1
+    DOMAIN=$(lower "${DOMAIN%.}")
+    valid_hostname "$DOMAIN" || die $EXIT_USAGE "--domain must be a hostname like ops.example.com, got '$DOMAIN'"
+  fi
+  if [[ -n "$APPS_DOMAIN" ]] && ! valid_hostname "$APPS_DOMAIN"; then
+    die $EXIT_USAGE "appsDomain in $CONFIG_FILE must be a domain like apps.example.com, got '$APPS_DOMAIN'"
+  fi
+  case "$DNS_SOLVER" in
+    ""|hetzner) ;;
+    *) die $EXIT_USAGE "dns.solver in $CONFIG_FILE must be hetzner (Hetzner DNS through the Cloud API), got '$DNS_SOLVER'" ;;
+  esac
+  if [[ -n "$DNS_SOLVER" ]]; then
+    [[ -n "$APPS_DOMAIN" ]] || die $EXIT_USAGE "dns in $CONFIG_FILE needs appsDomain: the DNS-01 certificate is the wildcard *.<appsDomain>"
+    [[ -n "$DNS_TOKEN_FILE" && -r "$DNS_TOKEN_FILE" ]] || die $EXIT_USAGE "dns.tokenFile not readable: '$DNS_TOKEN_FILE'"
   fi
   return 0
 }
@@ -204,6 +231,44 @@ parse_args() {
 # handed to Kwerft as a Secret; the installer only needs a few top-level keys.
 config_get() {
   sed -n -E "s/^$1:[[:space:]]*['\"]?([^'\"#]*)['\"]?[[:space:]]*(#.*)?$/\1/p" "$CONFIG_FILE" | head -n1 | sed -E 's/[[:space:]]+$//'
+}
+
+# Reads `key` of the top-level mapping `parent`, written either inline
+# (dns: { solver: hetzner, tokenFile: /root/dns.token }) or as a block:
+#   dns:
+#     solver: hetzner
+config_get_in() {
+  awk -v parent="$1" -v key="$2" -v q="'" '
+    function clean(v) {
+      sub(/[[:space:]]+#.*$/, "", v)
+      gsub("^[[:space:]\"" q "]+|[[:space:]\"" q "]+$", "", v)
+      return v
+    }
+    $0 ~ "^" parent ":[[:space:]]*[{]" {
+      line = $0
+      sub("^" parent ":[[:space:]]*[{]", "", line)
+      sub(/[}][[:space:]]*(#.*)?$/, "", line)
+      n = split(line, parts, ",")
+      for (i = 1; i <= n; i++) {
+        if (match(parts[i], "^[[:space:]]*" key "[[:space:]]*:")) { print clean(substr(parts[i], RLENGTH + 1)); exit }
+      }
+      exit
+    }
+    $0 ~ "^" parent ":[[:space:]]*(#.*)?$" { inside = 1; next }
+    inside && /^[^[:space:]#]/ { exit }
+    inside && $0 ~ "^[[:space:]]+" key "[[:space:]]*:" {
+      v = $0
+      sub("^[[:space:]]+" key "[[:space:]]*:", "", v)
+      print clean(v)
+      exit
+    }
+  ' "$CONFIG_FILE"
+}
+
+lower() { printf '%s' "$1" | tr '[:upper:]' '[:lower:]'; }
+
+valid_hostname() {
+  [[ ${#1} -le 253 && "$1" =~ ^([a-z0-9]([-a-z0-9]*[a-z0-9])?\.)+[a-z]([-a-z0-9]*[a-z0-9])?$ ]]
 }
 
 # ---------------------------------------------------------------------------
@@ -281,10 +346,20 @@ detect_addresses() {
   PRIVATE_IP=${PRIVATE_CIDR%/*}
 }
 
-# Picks the console hostname: --domain (or the config file) first, then the one
-# saved by a previous run — so re-running without flags never changes it — and
-# finally a temporary <ip>.sslip.io name for trying Kwerft before DNS exists.
+# Picks the console hostname: --domain (or KWERFT_DOMAIN, or the config file)
+# first; then the cluster's console setting, which the Settings page changes,
+# so re-running without flags never undoes a change made there; then the file
+# a run before ConsoleSettings existed saved; and finally a temporary
+# <ip>.sslip.io name for trying Kwerft before DNS exists.
 resolve_domain() {
+  local current
+  current=$(cluster_setting '{.spec.consoleDomain}')
+  if (( DOMAIN_EXPLICIT )) && [[ -n "$current" && "$current" != "$DOMAIN" ]]; then
+    warn "The console moves from $current (chosen in Settings) to $DOMAIN (--domain)."
+  fi
+  if [[ -z "$DOMAIN" ]]; then
+    DOMAIN=$current
+  fi
   if [[ -z "$DOMAIN" && -s "$DOMAIN_FILE" ]]; then
     DOMAIN=$(<"$DOMAIN_FILE")
   fi
@@ -292,6 +367,12 @@ resolve_domain() {
     DOMAIN="${PUBLIC_IP}${TEMP_DOMAIN_SUFFIX}"
   fi
   return 0
+}
+
+# cluster_setting prints a field (jsonpath) of the ConsoleSettings "kwerft",
+# or nothing before Kubernetes or Kwerft exist.
+cluster_setting() {
+  kc get consolesettings.kwerft.dev kwerft -o jsonpath="$1" 2>/dev/null || true
 }
 
 is_temp_domain() { [[ "$DOMAIN" == *"$TEMP_DOMAIN_SUFFIX" ]]; }
@@ -546,6 +627,7 @@ stage_ingress_tls() {
     --set config.kind=ControllerConfiguration \
     --set config.enableGatewayAPI=true \
     >>"$LOG_FILE" 2>&1 || die $EXIT_PLATFORM "cert-manager installation failed"
+  install_dns_webhook
 
   # Traefik binds 80/443 directly on every node (hostNetwork DaemonSet). This
   # works identically on cloud and dedicated servers; a Hetzner Load Balancer
@@ -595,7 +677,30 @@ EOF
     -f "$STATE_DIR/values/traefik.yaml" \
     >>"$LOG_FILE" 2>&1 || die $EXIT_PLATFORM "Traefik installation failed"
   mark_system_namespace traefik
-  echo "Traefik · cert-manager · Gateway API $gateway_api"
+  echo "Traefik · cert-manager · Hetzner DNS-01 · Gateway API $gateway_api"
+}
+
+# Hetzner's cert-manager webhook solves DNS-01 through Hetzner DNS (Cloud API),
+# for the apps wildcard certificate (Settings or --config appsDomain + dns).
+# Installed always, so Settings can turn DNS-01 on without the installer.
+#
+# Its chart lets the webhook read every Secret in the cluster. It only reads
+# the token (one Get per challenge), which Kwerft keeps in kwerft-system next
+# to its namespaced DNS-01 Issuer, so the cluster-wide binding is replaced by
+# "get" on that one Secret. (A Helm upgrade recreates the cluster-wide
+# binding; every run removes it again.)
+install_dns_webhook() {
+  local release=cert-manager-webhook-hetzner
+  helmk repo add hcloud https://charts.hetzner.cloud --force-update >>"$LOG_FILE" 2>&1
+  helmk upgrade --install "$release" hcloud/cert-manager-webhook-hetzner --version "$HETZNER_WEBHOOK_CHART_VERSION" \
+    --namespace cert-manager --wait --timeout 10m \
+    >>"$LOG_FILE" 2>&1 || die $EXIT_PLATFORM "Hetzner DNS webhook for cert-manager failed to install"
+  kc create namespace kwerft-system --dry-run=client -o yaml | kc apply -f - >/dev/null
+  kc -n kwerft-system create role "$release:dns-token" --verb=get --resource=secrets --resource-name=kwerft-dns-token \
+    --dry-run=client -o yaml | kc apply -f - >>"$LOG_FILE" 2>&1
+  kc -n kwerft-system create rolebinding "$release:dns-token" --role="$release:dns-token" --serviceaccount="cert-manager:$release" \
+    --dry-run=client -o yaml | kc apply -f - >>"$LOG_FILE" 2>&1
+  kc delete clusterrolebinding "$release:read-secrets" --ignore-not-found >>"$LOG_FILE" 2>&1
 }
 
 stage_observability() {
@@ -706,6 +811,7 @@ stage_kwerft() {
   helmk show crds "$ref" ${version_args[@]+"${version_args[@]}"} 2>>"$LOG_FILE" \
     | kc apply --server-side --force-conflicts -f - >>"$LOG_FILE" 2>&1 \
     || die $EXIT_KWERFT "Kwerft CRDs failed to apply (chart: $ref)"
+  apply_console_settings
   helmk upgrade --install kwerft "$ref" ${version_args[@]+"${version_args[@]}"} \
     --namespace kwerft-system --wait --timeout 10m --skip-crds \
     --set console.domain="$DOMAIN" \
@@ -713,8 +819,45 @@ stage_kwerft() {
     --set platform="$PLATFORM" \
     "${image_args[@]}" \
     >>"$LOG_FILE" 2>&1 || die $EXIT_KWERFT "Kwerft installation failed (chart: $ref)"
-  printf '%s\n' "$DOMAIN" >"$DOMAIN_FILE"
+  printf '%s\n' "$DOMAIN" >"$DOMAIN_FILE"   # fallback; the cluster setting is the record
   echo "control plane ${IMAGE:-$KWERFT_VERSION} ready"
+}
+
+# apply_console_settings records the console hostname, and the apps domain
+# from --config, in the ConsoleSettings "kwerft" that the console's Settings
+# page edits and its reconcilers apply. Precedence: a hostname given to this
+# run replaces the setting; without one the setting stays as it is (the
+# first run creates it). An apps domain or DNS-01 solver in --config likewise
+# replaces what Settings chose; without them it is left alone.
+apply_console_settings() {
+  if [[ -z "$(cluster_setting '{.metadata.name}')" ]]; then
+    printf 'apiVersion: kwerft.dev/v1alpha1\nkind: ConsoleSettings\nmetadata:\n  name: kwerft\nspec:\n  consoleDomain: %s\n' "$DOMAIN" \
+      | kc apply -f - >>"$LOG_FILE" 2>&1 || die $EXIT_KWERFT "Could not save the console settings"
+  elif (( DOMAIN_EXPLICIT )); then
+    kc patch consolesettings.kwerft.dev kwerft --type merge -p "{\"spec\":{\"consoleDomain\":\"$DOMAIN\"}}" \
+      >>"$LOG_FILE" 2>&1 || die $EXIT_KWERFT "Could not save the console hostname"
+  fi
+  [[ -n "$APPS_DOMAIN" ]] || return 0
+
+  local spec="{\"appsDomain\":\"$APPS_DOMAIN\",\"tls\":\"http01\",\"dns01\":null}"
+  if [[ "$DNS_SOLVER" == "hetzner" ]]; then
+    # The token file stays where it is; the cluster gets a copy in the Secret
+    # only owners and admins may write (Settings) and nobody may read.
+    kc -n kwerft-system create secret generic kwerft-dns-token --from-file=token="$DNS_TOKEN_FILE" \
+      --dry-run=client -o yaml | kc apply -f - >>"$LOG_FILE" 2>&1 \
+      || die $EXIT_KWERFT "Could not store the DNS API token from $DNS_TOKEN_FILE"
+    spec="{\"appsDomain\":\"$APPS_DOMAIN\",\"tls\":\"dns01\",\"dns01\":{\"provider\":\"hetzner\"}}"
+    # A changed token makes the console retry a failed wildcard certificate.
+    local sum
+    sum=$(sha256sum "$DNS_TOKEN_FILE" | awk '{print $1}')
+    if [[ "$sum" != "$(cat "$DNS_TOKEN_SUM_FILE" 2>/dev/null || true)" ]]; then
+      kc annotate consolesettings.kwerft.dev kwerft --overwrite "kwerft.dev/dns-token-updated-at=$(date -u +%FT%TZ)" \
+        >>"$LOG_FILE" 2>&1 || die $EXIT_KWERFT "Could not save the console settings"
+      printf '%s\n' "$sum" >"$DNS_TOKEN_SUM_FILE"
+    fi
+  fi
+  kc patch consolesettings.kwerft.dev kwerft --type merge -p "{\"spec\":$spec}" \
+    >>"$LOG_FILE" 2>&1 || die $EXIT_KWERFT "Could not save the apps domain"
 }
 
 stage_handoff() {
@@ -791,10 +934,24 @@ print_summary() {
   else
     printf '  Open        %shttps://%s%s and sign in\n' "$C_ACC" "$DOMAIN" "$C_0"
   fi
+  local active apps tls
+  active=$(cluster_setting '{.status.consoleDomain}')
+  if [[ -n "$active" && "$active" != "$DOMAIN" ]]; then
+    printf '  %s!%s The console moves to %s once its certificate is issued; until then it is at https://%s\n' "$C_WARN" "$C_0" "$DOMAIN" "$active"
+  fi
+  apps=$(cluster_setting '{.spec.appsDomain}')
+  tls=$(cluster_setting '{.spec.tls}')
+  if [[ -n "$apps" ]]; then
+    if [[ "$tls" == "dns01" ]]; then
+      printf '  Apps        *.%s (wildcard certificate via Hetzner DNS) · DNS: *.%s → %s\n' "$apps" "$apps" "$PUBLIC_IP"
+    else
+      printf '  Apps        <app>.%s (a certificate per hostname) · DNS: *.%s → %s\n' "$apps" "$apps" "$PUBLIC_IP"
+    fi
+  fi
   printf '  Log         %s\n\n' "$LOG_FILE"
   if is_temp_domain; then
     printf '%s!%s %s is a temporary hostname from the public sslip.io service.\n' "$C_WARN" "$C_0" "$DOMAIN"
-    printf '  To use your own, point an A record at %s and re-run with --domain ops.example.com\n\n' "$PUBLIC_IP"
+    printf '  To use your own, point an A record at %s and change it under Settings in the console,\n  or re-run with --domain ops.example.com\n\n' "$PUBLIC_IP"
   fi
   printf '%sDone in %dm %02ds.%s Re-run the same command any time to repair or upgrade.\n' "$C_OK" $((secs / 60)) $((secs % 60)) "$C_0"
 }

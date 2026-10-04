@@ -94,7 +94,11 @@ func runWithCluster(m *testing.M) int {
 	defer cancel()
 
 	// The chart's RBAC: console roles, and the console's own ClusterRole bound
-	// to a test user standing in for its service account.
+	// to a test user standing in for its service account. Some roles live in
+	// the console's namespace.
+	if err := admin.Create(ctx, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: controllers.GatewayNamespace}}); err != nil {
+		return fail("create console namespace", err)
+	}
 	if err := applyChartRBAC(ctx, admin); err != nil {
 		return fail("apply chart RBAC", err)
 	}
@@ -169,6 +173,10 @@ func applyChartRBAC(ctx context.Context, c client.Client) error {
 				obj = &rbacv1.ClusterRole{}
 			case head.Kind == "ClusterRoleBinding" && f.bindings:
 				obj = &rbacv1.ClusterRoleBinding{}
+			case head.Kind == "Role" && f.bindings:
+				obj = &rbacv1.Role{}
+			case head.Kind == "RoleBinding" && f.bindings:
+				obj = &rbacv1.RoleBinding{}
 			default:
 				continue
 			}
@@ -228,7 +236,7 @@ type console struct {
 
 // newConsole runs the API against the test cluster and signs in an owner, a
 // developer and a viewer, each with their own cookies.
-func newConsole(t *testing.T) *console {
+func newConsole(t *testing.T, opts ...func(*Config)) *console {
 	t.Helper()
 	requireCluster(t)
 	ctx := context.Background()
@@ -237,11 +245,15 @@ func newConsole(t *testing.T) *console {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = st.Close() })
-	srv := httptest.NewServer(Handler(Config{
+	cfg := Config{
 		UI: fstest.MapFS{"index.html": {Data: []byte("ui")}}, Logger: slog.New(slog.DiscardHandler),
 		Store: st, SetupTokens: setup.NewStaticTokenSource(testToken, time.Hour), InsecureCookies: true,
 		Kube: cluster.imp, KubeCache: cluster.cache,
-	}))
+	}
+	for _, o := range opts {
+		o(&cfg)
+	}
+	srv := httptest.NewServer(Handler(cfg))
 	t.Cleanup(srv.Close)
 
 	const pw = "a long test password"

@@ -9,7 +9,9 @@ package v1alpha1
 // Gateway. Apps create a Domain for each public port automatically; the
 // Domain reconciler gives it a Gateway listener and a certificate.
 type DomainSpecApplyConfiguration struct {
-	// Hostname, lowercase, e.g. api.example.com. Wildcards come with DNS-01.
+	// Hostname, lowercase, e.g. api.example.com. Fixed once created: a
+	// Domain's claim and listener belong to one hostname. Hostnames one label
+	// below the apps domain share the wildcard listener when it has DNS-01.
 	Hostname *string `json:"hostname,omitempty"`
 }
 
