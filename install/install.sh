@@ -674,10 +674,11 @@ EOF
 # for the apps wildcard certificate (Settings or --config appsDomain + dns).
 # Installed always, so Settings can turn DNS-01 on without the installer.
 #
-# Its chart lets the webhook read every Secret in the cluster. It only needs
-# the token, which Kwerft keeps in kwerft-system next to its namespaced DNS-01
-# Issuer, so the cluster-wide binding is replaced by one in kwerft-system.
-# (A Helm upgrade recreates the cluster-wide binding; every run removes it.)
+# Its chart lets the webhook read every Secret in the cluster. It only reads
+# the token (one Get per challenge), which Kwerft keeps in kwerft-system next
+# to its namespaced DNS-01 Issuer, so the cluster-wide binding is replaced by
+# "get" on that one Secret. (A Helm upgrade recreates the cluster-wide
+# binding; every run removes it again.)
 install_dns_webhook() {
   local release=cert-manager-webhook-hetzner
   helmk repo add hcloud https://charts.hetzner.cloud --force-update >>"$LOG_FILE" 2>&1
@@ -685,8 +686,9 @@ install_dns_webhook() {
     --namespace cert-manager --wait --timeout 10m \
     >>"$LOG_FILE" 2>&1 || die $EXIT_PLATFORM "Hetzner DNS webhook for cert-manager failed to install"
   kc create namespace kwerft-system --dry-run=client -o yaml | kc apply -f - >/dev/null
-  kc -n kwerft-system create rolebinding "$release:read-secrets" \
-    --clusterrole="$release:read-secrets" --serviceaccount="cert-manager:$release" \
+  kc -n kwerft-system create role "$release:dns-token" --verb=get --resource=secrets --resource-name=kwerft-dns-token \
+    --dry-run=client -o yaml | kc apply -f - >>"$LOG_FILE" 2>&1
+  kc -n kwerft-system create rolebinding "$release:dns-token" --role="$release:dns-token" --serviceaccount="cert-manager:$release" \
     --dry-run=client -o yaml | kc apply -f - >>"$LOG_FILE" 2>&1
   kc delete clusterrolebinding "$release:read-secrets" --ignore-not-found >>"$LOG_FILE" 2>&1
 }
