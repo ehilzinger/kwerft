@@ -7,11 +7,13 @@ type Props = {
   /** Buttons for the footer; the dialog renders a form, so a submit button submits. */
   actions: ReactNode;
   onSubmit?: (e: FormEvent) => void;
+  /** Room for a longer form. */
+  wide?: boolean;
 };
 
 // A modal dialog on the native <dialog> element: focus trap, Escape and the
 // backdrop come from the browser. Mount it to open it.
-export function Dialog({ title, onClose, children, actions, onSubmit }: Props) {
+export function Dialog({ title, onClose, children, actions, onSubmit, wide }: Props) {
   const ref = useRef<HTMLDialogElement>(null);
   // Set while the dialog is closed by unmounting rather than by the user. The
   // close event arrives later (it is queued), and in development StrictMode
@@ -28,7 +30,7 @@ export function Dialog({ title, onClose, children, actions, onSubmit }: Props) {
     };
   }, []);
   return (
-    <dialog ref={ref} className="dlg" aria-labelledby="dlg-title"
+    <dialog ref={ref} className={wide ? "dlg wide" : "dlg"} aria-labelledby="dlg-title"
       onClose={() => {
         if (unmounting.current) unmounting.current = false;
         else onClose();

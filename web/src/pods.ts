@@ -105,7 +105,7 @@ export type LogEvent =
   | { type: "line"; line: LogLine }
   | { type: "status"; pod: string; state: "streaming" | "waiting" | "ended" | "error"; message?: string }
   | { type: "dropped"; lines: number }
-  | { type: "end"; reason: "complete" | "idle" | "maxDuration" | "signedOut"; message?: string };
+  | { type: "end"; reason: "complete" | "idle" | "maxDuration" | "signedOut" | "gone"; message?: string };
 
 export type LogQuery = { pod?: string; container?: string; follow?: boolean; tail?: number; since?: number; previous?: boolean };
 

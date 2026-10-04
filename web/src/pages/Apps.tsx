@@ -8,6 +8,7 @@ import { CreateProjectDialog } from "../components/CreateProjectDialog";
 import { Dialog } from "../components/Dialog";
 import { Icon } from "../components/Icon";
 import { abilities, ago, hostOf, workloads, type AppSummary, type Project } from "../workloads";
+import { repoLabel } from "../builds";
 import "../styles/workloads.css";
 
 const POLL = 5000;
@@ -116,7 +117,7 @@ export function Apps() {
           ) : all.length === 0 || (project && selected?.apps === 0) ? (
             <div className="empty">
               <h2>No apps {project ? `in ${project}` : "yet"}</h2>
-              <p>Deploy a container image from any registry. Building from a Git repository on every push follows in Phase 2.</p>
+              <p>Deploy a container image from any registry, or a Git repository that Kwerft builds on every push.</p>
               {can.deploy && deployButton}
               {project && selected && selected.apps === 0 && can.manageProjects && (
                 <button className="btn ghost danger" onClick={() => setDeleting(selected)}>Delete project {project}</button>
@@ -145,7 +146,7 @@ function isProblem(a: AppSummary) {
 }
 
 function Row({ app: a, onOpen }: { app: AppSummary; onOpen: () => void }) {
-  const source = a.source.type === "git" ? `git · ${a.source.repository?.replace(/^https?:\/\//, "").replace(/\.git$/, "")}@${a.source.branch || "main"}` : a.image;
+  const source = a.source.type === "git" ? `git · ${repoLabel(a.source.repository ?? "")}@${a.source.branch || "main"}` : a.image;
   return (
     <tr className="click" onClick={onOpen}>
       <td>

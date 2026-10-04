@@ -6,9 +6,15 @@ import { CreateProjectDialog } from "../components/CreateProjectDialog";
 import { Field } from "../components/Field";
 import { Icon } from "../components/Icon";
 import { VolumeMounts, checkMounts, volumesOf, type Mount } from "../components/VolumeMounts";
-import { HOST_RE, NAME_RE, abilities, sizes, toYAML, workloads, type AppSpec, type Size } from "../workloads";
+import { HOST_RE, NAME_RE, abilities, sizes, toYAML, workloads, type AppSpec, type GitSource, type Size } from "../workloads";
 import { settingsApi, underWildcard } from "../settings";
+import {
+  branchProblem, buildsApi, gitApi, normalizeRepository, notOffered, repoPathProblem, repositoryProblem, shortSha, suggestConnection,
+  type CheckQuery, type CheckResult, type Connection,
+} from "../builds";
+import { Toggle } from "../components/LogViewer";
 import "../styles/workloads.css";
+import "../styles/builds.css";
 
 const route = getRouteApi("/authed/apps/new");
 
@@ -23,8 +29,16 @@ const steps: { id: Step; title: string }[] = [
 type Form = {
   name: string;
   project: string;
+  source: "image" | "git";
   image: string;
   pullSecret: string;
+  repo: string;
+  branch: string;
+  connection: string; // "" = public repository
+  builder: "dockerfile" | "railpack";
+  dockerfile: string;
+  path: string;
+  autoDeploy: boolean;
   size: Exclude<Size, "custom">;
   replicas: string;
   hc: "none" | "http" | "tcp";
@@ -54,10 +68,24 @@ function parseEnv(text: string): { vars: { name: string; value: string }[]; bad?
   return { vars };
 }
 
+export function gitSourceOf(f: Pick<Form, "repo" | "branch" | "connection" | "builder" | "dockerfile" | "path" | "autoDeploy">): GitSource {
+  return {
+    repository: normalizeRepository(f.repo),
+    branch: f.branch.trim() || "main",
+    path: f.path.trim() || "/",
+    builder: f.builder,
+    ...(f.builder === "dockerfile" ? { dockerfile: f.dockerfile.trim() || "Dockerfile" } : {}),
+    ...(f.connection ? { connection: f.connection } : {}),
+    autoDeploy: f.autoDeploy,
+  };
+}
+
 function specOf(f: Form): AppSpec {
   const port = Number(f.port);
   const spec: AppSpec = {
-    source: { image: { ref: f.image.trim(), ...(f.pullSecret.trim() ? { pullSecret: f.pullSecret.trim() } : {}) } },
+    source: f.source === "git"
+      ? { git: gitSourceOf(f) }
+      : { image: { ref: f.image.trim(), ...(f.pullSecret.trim() ? { pullSecret: f.pullSecret.trim() } : {}) } },
     replicas: Number(f.replicas),
     size: f.size,
     env: parseEnv(f.env).vars,
@@ -73,7 +101,19 @@ function specOf(f: Form): AppSpec {
 function check(f: Form): Problem | undefined {
   if (!NAME_RE.test(f.name) || f.name.length > 63) return { step: "source", field: "name", message: "Use lowercase letters, digits and dashes, starting with a letter." };
   if (!f.project) return { step: "source", field: "project", message: "Choose a project." };
-  if (!f.image.trim()) return { step: "source", field: "image", message: "Enter an image, like ghcr.io/acme/api:1.4.2." };
+  if (f.source === "image" && !f.image.trim()) return { step: "source", field: "image", message: "Enter an image, like ghcr.io/acme/api:1.4.2." };
+  if (f.source === "git") {
+    const repo = repositoryProblem(normalizeRepository(f.repo));
+    if (repo) return { step: "source", field: "repo", message: repo };
+    const branch = branchProblem(f.branch.trim());
+    if (branch) return { step: "source", field: "branch", message: branch };
+    if (f.builder === "dockerfile") {
+      const df = repoPathProblem(f.dockerfile.trim()) || (f.dockerfile.trim().endsWith("/") ? "Name the Dockerfile itself, like Dockerfile." : "");
+      if (df) return { step: "source", field: "dockerfile", message: df };
+    }
+    const path = repoPathProblem(f.path.trim());
+    if (path) return { step: "source", field: "path", message: path };
+  }
   const n = Number(f.replicas);
   if (f.replicas.trim() === "" || !Number.isInteger(n) || n < 0) return { step: "runtime", field: "replicas", message: "Enter a whole number, 0 or more." };
   const env = parseEnv(f.env);
@@ -97,6 +137,9 @@ function check(f: Form): Problem | undefined {
 function locate(field: string | undefined): { step: Step; field: string } | undefined {
   if (!field) return undefined;
   if (field === "name") return { step: "source", field: "name" };
+  const git = /^spec\.source\.git\.(repository|branch|connection|dockerfile|path)$/.exec(field);
+  if (git) return { step: "source", field: git[1] === "repository" ? "repo" : git[1]! };
+  if (field.startsWith("spec.source.git")) return { step: "source", field: "repo" };
   if (field.startsWith("spec.source")) return { step: "source", field: "image" };
   if (field === "spec.replicas") return { step: "runtime", field: "replicas" };
   if (field.startsWith("spec.env")) return { step: "runtime", field: "env" };
@@ -122,7 +165,9 @@ export function Deploy() {
   const [problem, setProblem] = useState<{ field?: string; message: string }>();
   const [copied, setCopied] = useState(false);
   const [f, setF] = useState<Form>({
-    name: "", project: search.project ?? "", image: "", pullSecret: "", size: "small", replicas: "1",
+    name: "", project: search.project ?? "", source: "image", image: "", pullSecret: "",
+    repo: "", branch: "", connection: "", builder: "dockerfile", dockerfile: "Dockerfile", path: "/", autoDeploy: true,
+    size: "small", replicas: "1",
     hc: "none", hcPath: "/healthz", hcPort: "", env: "", port: "", exposure: "cluster", domain: "", allowFrom: "", egress: "https", mounts: [],
   });
   const set = <K extends keyof Form>(k: K, v: Form[K]) => {
@@ -140,14 +185,30 @@ export function Deploy() {
     : settings.data?.wildcardDomain && underWildcard(domain, appsDomain)
       ? `Covered by the ${settings.data.wildcardDomain} wildcard: no DNS record or certificate to wait for.`
       : `The *.${appsDomain} DNS record covers it; Kwerft gets a Let's Encrypt certificate automatically.`;
-  const form = { ...f, project, domain };
+  // Git connections that may build in this project; the one for the
+  // repository's host is picked until the user chooses.
+  const conns = useQuery({ queryKey: ["git-connections"], queryFn: gitApi.connections, enabled: f.source === "git", retry: false, staleTime: 30_000 });
+  const usable = (conns.data ?? []).filter((c) => c.projects.length === 0 || !project || c.projects.includes(project));
+  const [connTouched, setConnTouched] = useState(false);
+  const connection = connTouched ? f.connection : suggestConnection(normalizeRepository(f.repo), usable, project);
+  const form = { ...f, project, domain, connection };
 
   const deploy = useMutation({
     mutationFn: () => workloads.createApp(project, f.name, specOf(form)),
     onSuccess: async (app) => {
       queryClient.setQueryData(["app", app.metadata.namespace, app.metadata.name], app);
       await queryClient.invalidateQueries({ queryKey: ["apps"] });
-      await navigate({ to: "/apps/$project/$name", params: { project: app.metadata.namespace, name: app.metadata.name } });
+      // A Git app starts with its first build: the branch head. If that does
+      // not work out, the Builds tab offers Build now.
+      let build: string | undefined;
+      if (app.spec.source.git) {
+        try {
+          build = (await buildsApi.buildNow(app.metadata.namespace, app.metadata.name)).name;
+        } catch {
+          /* shown on the Builds tab */
+        }
+      }
+      await navigate({ to: "/apps/$project/$name", params: { project: app.metadata.namespace, name: app.metadata.name }, search: build ? { build } : {} });
     },
     onError: (e) => {
       const msg = e instanceof ApiError ? e.message : "The console could not be reached. Check your connection and try again.";
@@ -223,8 +284,8 @@ export function Deploy() {
         {step === "source" && (
           <>
             <div className="choice" role="group" aria-label="Source">
-              <button type="button" className="opt" aria-pressed="true"><b>Container image</b><span>Any registry, public or private</span></button>
-              <button type="button" className="opt" aria-pressed="false" disabled><b>Git repository</b><span>Built in-cluster, redeployed on every push</span><span className="pill mute nodot">Phase 2</span></button>
+              <button type="button" className="opt" aria-pressed={f.source === "image"} onClick={() => set("source", "image")}><b>Container image</b><span>Any registry, public or private</span></button>
+              <button type="button" className="opt" aria-pressed={f.source === "git"} onClick={() => set("source", "git")}><b>Git repository</b><span>Built in-cluster, redeployed on every push</span></button>
               <button type="button" className="opt" aria-pressed="false" disabled><b>Docker Compose</b><span>Paste a compose file; services become apps</span><span className="pill mute nodot">Later</span></button>
               <button type="button" className="opt" aria-pressed="false" disabled><b>Template</b><span>PostgreSQL, Redis, MinIO, n8n, Plausible…</span><span className="pill mute nodot">Later</span></button>
             </div>
@@ -242,12 +303,19 @@ export function Deploy() {
                 {err("project") ? <span className="field-error" role="alert">{err("project")}</span>
                   : projects.data?.length === 0 ? <span className="hint">No projects yet{can.manageProjects ? "; create one first." : ". Ask an owner or admin to create one."}</span> : null}
               </div>
-              <div className="full">
-                <Field id="d-img" label="Image" className="mono" value={f.image} onChange={(e) => set("image", e.target.value)} placeholder="ghcr.io/acme/invoice-renderer:0.3.0"
-                  autoComplete="off" spellCheck={false} error={err("image")} hint="Pin a version tag or digest rather than latest, so rollbacks mean something." />
-              </div>
-              <Field id="d-cred" label="Registry credential" className="mono" value={f.pullSecret} onChange={(e) => set("pullSecret", e.target.value)} placeholder="None (public image)"
-                autoComplete="off" spellCheck={false} hint="Name of a docker-registry Secret in the project, for private images." />
+              {f.source === "image" ? (
+                <>
+                  <div className="full">
+                    <Field id="d-img" label="Image" className="mono" value={f.image} onChange={(e) => set("image", e.target.value)} placeholder="ghcr.io/acme/invoice-renderer:0.3.0"
+                      autoComplete="off" spellCheck={false} error={err("image")} hint="Pin a version tag or digest rather than latest, so rollbacks mean something." />
+                  </div>
+                  <Field id="d-cred" label="Registry credential" className="mono" value={f.pullSecret} onChange={(e) => set("pullSecret", e.target.value)} placeholder="None (public image)"
+                    autoComplete="off" spellCheck={false} hint="Name of a docker-registry Secret in the project, for private images." />
+                </>
+              ) : (
+                <GitFields f={form} set={(k, v) => set(k, v as never)} err={err} conns={usable} connsError={conns.error} project={project}
+                  onConnection={(v) => { setConnTouched(true); set("connection", v); }} />
+              )}
             </div></div>
           </>
         )}
@@ -335,6 +403,7 @@ export function Deploy() {
             <div className="card">
               <h3>Kwerft will create</h3>
               <div className="list">
+                {spec.source.git && <div className="li"><span className="tag">Build</span><span className="dim">the head of {spec.source.git.branch} with {spec.source.git.builder === "railpack" ? "Railpack" : spec.source.git.dockerfile}; the app starts when it succeeds</span></div>}
                 <div className="li"><span className="tag">Deployment</span><span className="dim">{spec.replicas} replica{spec.replicas === 1 ? "" : "s"}, rolling update</span></div>
                 {spec.ports!.length > 0 && <div className="li"><span className="tag">Service</span><span className="dim">ClusterIP :{spec.ports![0]!.container}</span></div>}
                 {spec.ports![0]?.public && <div className="li"><span className="tag">HTTPRoute</span><span className="dim">{spec.ports![0].public}, HTTPS with redirect</span></div>}
@@ -345,7 +414,7 @@ export function Deploy() {
           </div>
         )}
 
-        {problem && !["name", "project", "image", "replicas", "env", "hcPort", "port", "domain"].includes(problem.field ?? "") && !problem.field?.startsWith("mounts[") && (
+        {problem && !["name", "project", "image", "repo", "branch", "connection", "dockerfile", "path", "replicas", "env", "hcPort", "port", "domain"].includes(problem.field ?? "") && !problem.field?.startsWith("mounts[") && (
           <div className="banner bad" role="alert"><Icon name="alert" /><span>{problem.message}</span></div>
         )}
 
@@ -363,5 +432,125 @@ export function Deploy() {
 
       {creatingProject && <CreateProjectDialog onClose={() => setCreatingProject(false)} onCreated={(p) => set("project", p.name)} />}
     </section>
+  );
+}
+
+type GitForm = Pick<Form, "repo" | "branch" | "connection" | "builder" | "dockerfile" | "path" | "autoDeploy">;
+
+// The Git repository source: repository with a check, branch, connection,
+// how to build, and whether pushes deploy. Shared by the wizard and the
+// app's settings.
+export function GitFields<F extends GitForm>({ f, set, err, conns, connsError, project, onConnection, idPrefix = "d" }: {
+  f: F;
+  set: (k: keyof GitForm, v: string | boolean) => void;
+  err: (field: string) => string | undefined;
+  conns: Connection[];
+  connsError: unknown;
+  project: string;
+  onConnection: (v: string) => void;
+  idPrefix?: string;
+}) {
+  const id = (s: string) => `${idPrefix}-${s}`;
+  const query: CheckQuery = {
+    repository: normalizeRepository(f.repo), branch: f.branch.trim() || undefined, connection: f.connection || undefined,
+    path: f.path.trim() || undefined, dockerfile: f.builder === "dockerfile" ? f.dockerfile.trim() || "Dockerfile" : undefined,
+  };
+  const key = JSON.stringify(query);
+  const [check, setCheck] = useState<{ key: string; result?: CheckResult; error?: string }>();
+  const [checking, setChecking] = useState(false);
+  const shown = check?.key === key ? check : undefined;
+  const branch = f.branch.trim() || "main";
+  const known = conns.some((c) => c.name === f.connection);
+
+  async function runCheck() {
+    const problem = repositoryProblem(query.repository);
+    if (problem) return setCheck({ key, error: problem });
+    setChecking(true);
+    try {
+      setCheck({ key, result: await gitApi.check(query) });
+    } catch (e) {
+      setCheck({ key, error: notOffered(e) ? "This console cannot check repositories yet; the first build will tell." : e instanceof ApiError ? e.message : "The console could not be reached." });
+    } finally {
+      setChecking(false);
+    }
+  }
+
+  return (
+    <>
+      <div className="full">
+        <div className="git-row">
+          <Field id={id("repo")} label="Repository" className="mono" value={f.repo} onChange={(e) => set("repo", e.target.value)}
+            onBlur={() => f.repo.trim() && set("repo", normalizeRepository(f.repo))}
+            placeholder="github.com/acme/invoice-renderer" autoComplete="off" spellCheck={false} error={err("repo")}
+            hint="HTTPS (github.com/acme/api) or SSH (git@github.com:acme/api.git)." />
+          <button type="button" className="btn" onClick={runCheck} disabled={checking || !f.repo.trim()}>{checking ? "Checking…" : "Check"}</button>
+        </div>
+        {shown && <CheckLine check={shown} builder={f.builder} dockerfile={query.dockerfile} branch={branch} onBranch={(b) => set("branch", b)} />}
+      </div>
+      <Field id={id("branch")} label="Branch" className="mono" value={f.branch} onChange={(e) => set("branch", e.target.value)} placeholder="main"
+        autoComplete="off" spellCheck={false} error={err("branch")} />
+      <div className="field">
+        <label htmlFor={id("conn")}>Access</label>
+        <select id={id("conn")} className="input" value={f.connection} onChange={(e) => onConnection(e.target.value)} aria-invalid={!!err("connection")}
+          aria-describedby={`${id("conn")}-note`}>
+          <option value="">Public repository (no credentials)</option>
+          {conns.map((c) => <option key={c.name} value={c.name}>{c.name} · {c.url.replace(/^https:\/\//, "")}{c.owner ? `/${c.owner}` : ""}{c.ready ? "" : " (not ready)"}</option>)}
+          {f.connection && !known && <option value={f.connection}>{f.connection}</option>}
+        </select>
+        {err("connection") ? <span id={`${id("conn")}-note`} className="field-error" role="alert">{err("connection")}</span>
+          : <span id={`${id("conn")}-note`} className="hint">
+            {notOffered(connsError) ? "Private repositories need a Git connection, which this console cannot manage yet."
+              : conns.length === 0 ? `No Git connections${project ? ` for ${project}` : ""} yet. Owners and admins add them in Settings for private repositories.`
+              : "A Git connection clones private repositories and reports build status on commits."}
+          </span>}
+      </div>
+      <div className="field">
+        <label>Build with</label>
+        <div className="seg" role="group" aria-label="Build with">
+          <button type="button" aria-pressed={f.builder === "dockerfile"} onClick={() => set("builder", "dockerfile")}>Dockerfile</button>
+          <button type="button" aria-pressed={f.builder === "railpack"} onClick={() => set("builder", "railpack")}>Railpack</button>
+        </div>
+        <span className="hint">{f.builder === "dockerfile" ? "Builds the repository's Dockerfile with rootless BuildKit." : "Detects the language (Node, Go, Python, …) and builds without a Dockerfile."}</span>
+      </div>
+      {f.builder === "dockerfile" && (
+        <Field id={id("dockerfile")} label="Dockerfile" className="mono" value={f.dockerfile} onChange={(e) => set("dockerfile", e.target.value)} placeholder="Dockerfile"
+          autoComplete="off" spellCheck={false} error={err("dockerfile")} hint="Relative to the directory." />
+      )}
+      <Field id={id("path")} label="Directory" className="mono" value={f.path} onChange={(e) => set("path", e.target.value)} placeholder="/"
+        autoComplete="off" spellCheck={false} error={err("path")} hint="The build context inside the repository, for monorepos." />
+      <div className="field full">
+        <label id={id("push-label")}>On push</label>
+        <span>
+          <Toggle on={f.autoDeploy} onChange={(v) => set("autoDeploy", v)}>
+            {f.autoDeploy ? <>Build and deploy every push to <code>{branch}</code> · pull requests get a build check only</> : "Build only when someone presses Build now"}
+          </Toggle>
+        </span>
+      </div>
+    </>
+  );
+}
+
+function CheckLine({ check, builder, dockerfile, branch, onBranch }: {
+  check: { result?: CheckResult; error?: string }; builder: string; dockerfile?: string; branch: string; onBranch: (b: string) => void;
+}) {
+  const r = check.result;
+  if (!r) return <p className="form-error check-line" role="status">{check.error}</p>;
+  if (!r.ok) {
+    return (
+      <p className="check-line" role="status">
+        <span className="form-error">{r.message}</span>
+        {r.defaultBranch && r.defaultBranch !== branch && <button type="button" className="btn sm" onClick={() => onBranch(r.defaultBranch!)}>Use {r.defaultBranch}</button>}
+      </p>
+    );
+  }
+  return (
+    <p className="check-line" role="status">
+      <span className="ok-text">
+        ✓ {r.connection ? `Access through ${r.connection}` : "Reachable"}
+        {r.head && <> · last commit {shortSha(r.head.sha)} “{r.head.message.split("\n")[0]}”{r.head.author ? ` by ${r.head.author}` : ""}</>}
+      </span>
+      {builder === "dockerfile" && r.dockerfile === true && <span className="ok-text">· {dockerfile} found</span>}
+      {builder === "dockerfile" && r.dockerfile === false && <span className="warn-text">· No {dockerfile} there: fix the path, or build with Railpack.</span>}
+    </p>
   );
 }
