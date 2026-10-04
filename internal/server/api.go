@@ -81,6 +81,7 @@ func (a *api) register(mux *http.ServeMux) {
 	a.registerMembers(mux) // members, invites, roles, audit log
 
 	a.registerWorkloads(mux)
+	a.registerProjectAccess(mux) // Team or Members, and the members (api_project_access.go)
 	a.registerJobs(mux)
 	a.registerPods(mux)
 	a.registerSettings(mux)
@@ -231,6 +232,71 @@ type ctxKey struct{}
 type principal struct {
 	user   *store.User
 	idHash string
+	// mustEnrol: the console requires a second factor and this user has
+	// none; until they set one up, only enrolment endpoints answer.
+	mustEnrol bool
+}
+
+// enrolPatterns are the routes a user who must enrol a second factor may
+// use: see who they are, set up a passkey or authenticator app (and the
+// recovery codes that come with it), and sign out.
+var enrolPatterns = map[string]bool{
+	"GET /api/v1/session":                  true,
+	"DELETE /api/v1/session":               true,
+	"GET /api/v1/account":                  true,
+	"POST /api/v1/account/totp":            true,
+	"POST /api/v1/account/totp/confirm":    true,
+	"POST /api/v1/account/recovery-codes":  true,
+	"POST /api/v1/account/passkeys/begin":  true,
+	"POST /api/v1/account/passkeys/finish": true,
+	"GET /api/v1/sign-in-policy":           true,
+}
+
+// mustEnrol reports whether the console requires a second factor that u has
+// not set up.
+func (a *api) mustEnrol(ctx context.Context, u *store.User) (bool, error) {
+	on, err := a.store.RequireTwoFactor(ctx)
+	if err != nil || !on {
+		return false, err
+	}
+	f, err := a.store.Factors(ctx, u.ID)
+	return !f.Any(), err
+}
+
+// keepsRequiredFactor refuses to remove a user's last second factor while
+// the console requires one; left says whether a factor remains after the
+// removal. On false it has answered.
+func (a *api) keepsRequiredFactor(w http.ResponseWriter, r *http.Request, u *store.User, left func(store.Factors) bool) bool {
+	on, err := a.store.RequireTwoFactor(r.Context())
+	if err != nil {
+		a.internalError(w, r, err)
+		return false
+	}
+	if !on {
+		return true
+	}
+	f, err := a.store.Factors(r.Context(), u.ID)
+	if err != nil {
+		a.internalError(w, r, err)
+		return false
+	}
+	if !left(f) {
+		writeError(w, http.StatusConflict, "This console requires a second factor. Add another passkey or an authenticator app before removing this one.")
+		return false
+	}
+	return true
+}
+
+// sessionJSON is the signed-in user as the UI needs it after sign-in.
+func sessionJSON(u *store.User, mustEnrol bool) map[string]any {
+	out := map[string]any{}
+	for k, v := range userJSON(u) {
+		out[k] = v
+	}
+	if mustEnrol {
+		out["mustEnrol"] = true
+	}
+	return out
 }
 
 func (a *api) startSession(w http.ResponseWriter, r *http.Request, u *store.User) error {
@@ -278,7 +344,19 @@ func (a *api) requireUser(next http.HandlerFunc) http.HandlerFunc {
 				a.setCookie(w, a.cookies.session, c.Value, expires)
 			}
 		}
-		next(w, r.WithContext(context.WithValue(r.Context(), ctxKey{}, &principal{user: u, idHash: idHash})))
+		pr := &principal{user: u, idHash: idHash}
+		if pr.mustEnrol, err = a.mustEnrol(r.Context(), u); err != nil {
+			a.internalError(w, r, err)
+			return
+		}
+		if pr.mustEnrol && !enrolPatterns[r.Pattern] {
+			writeJSON(w, http.StatusForbidden, map[string]string{
+				"error": "This console requires a second factor. Set up a passkey or an authenticator app on your Account page to continue.",
+				"code":  "enrolSecondFactor",
+			})
+			return
+		}
+		next(w, r.WithContext(context.WithValue(r.Context(), ctxKey{}, pr)))
 	}
 }
 
@@ -296,7 +374,8 @@ func (a *api) requireRole(next http.HandlerFunc, roles ...string) http.HandlerFu
 }
 
 func (a *api) sessionGet(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, userJSON(r.Context().Value(ctxKey{}).(*principal).user))
+	pr := principalOf(r)
+	writeJSON(w, http.StatusOK, sessionJSON(pr.user, pr.mustEnrol))
 }
 
 func (a *api) login(w http.ResponseWriter, r *http.Request) {
@@ -333,12 +412,20 @@ func (a *api) login(w http.ResponseWriter, r *http.Request) {
 	if a.secondFactorRequired(w, r, u) {
 		return
 	}
+	// No second factor (secondFactorRequired would have asked for it). If
+	// the console requires one, the session only reaches enrolment until
+	// there is one (requireUser): sent to enrol, never locked out.
+	enrol, err := a.mustEnrol(r.Context(), u)
+	if err != nil {
+		a.internalError(w, r, err)
+		return
+	}
 	if err := a.startSession(w, r, u); err != nil {
 		a.internalError(w, r, err)
 		return
 	}
-	a.audit(r, u.Email, "session.login", u.Email, "")
-	writeJSON(w, http.StatusOK, userJSON(u))
+	a.audit(r, u.Email, "session.login", u.Email, map[bool]string{true: "must set up a second factor"}[enrol])
+	writeJSON(w, http.StatusOK, sessionJSON(u, enrol))
 }
 
 func (a *api) logout(w http.ResponseWriter, r *http.Request) {

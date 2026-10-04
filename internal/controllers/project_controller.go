@@ -3,6 +3,8 @@ package controllers
 import (
 	"context"
 	"fmt"
+	"slices"
+	"strings"
 
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
@@ -25,29 +27,83 @@ const (
 	quotaName       = "kwerft-quota"
 	defaultDenyName = "kwerft-default-deny"
 
-	// ClusterRoles from the chart (roles.yaml) that each project binds for
-	// the console's role groups: reading pods, logs and pod metrics, and
-	// opening a shell. Binding them per namespace keeps every console role
-	// out of the platform's own pods.
+	// ClusterRoles from the chart (roles.yaml) that each project binds:
+	// reading pods, logs and pod metrics, and opening a shell. Binding them
+	// per namespace keeps every console role out of the platform's own pods.
 	PodsReadRole = "kwerft:pods-read"
 	PodsExecRole = "kwerft:pods-exec"
+	// What developers and viewers may do with the project's kwerft.dev
+	// objects (apps, builds, tasks, ...). Owners and admins hold that
+	// cluster-wide already.
+	ProjectDeveloperRole = "kwerft:project-developer"
+	ProjectViewerRole    = "kwerft:project-viewer"
 )
 
-// podAccess lists which console roles get each pod ClusterRole in a project.
-var podAccess = []struct {
-	role  string
-	roles []string
-}{
-	{PodsReadRole, []string{"owner", "admin", "developer", "viewer"}},
-	{PodsExecRole, []string{"owner", "admin", "developer"}},
+// ProjectBinding is one RoleBinding the reconciler keeps in a project
+// namespace: the ClusterRole it binds (also the binding's name) and to whom.
+type ProjectBinding struct {
+	ClusterRole string
+	Subjects    []rbacv1.Subject
+}
+
+func groupSubject(role string) rbacv1.Subject {
+	return rbacv1.Subject{APIGroup: rbacv1.GroupName, Kind: rbacv1.GroupKind, Name: kube.RoleGroup(role)}
+}
+
+func userSubject(email string) rbacv1.Subject {
+	return rbacv1.Subject{APIGroup: rbacv1.GroupName, Kind: rbacv1.UserKind, Name: kube.UserName(email)}
+}
+
+// ProjectBindings says who reaches a project, as RoleBindings in its
+// namespace (docs/phase4.md, "Project access"). Owners and admins always do,
+// through their groups: their cluster-wide role covers the kwerft.dev
+// objects, these bindings add pods, logs and shells. With access Team (the
+// default) the developer and viewer groups are bound too, as before Phase 4;
+// with access Members only the listed users are, each with the role given
+// there, whatever their console role. The access matrix tests
+// (internal/access) and the isolation suite (internal/server) hold this
+// against the chart.
+func ProjectBindings(p *kwerftv1.Project) []ProjectBinding {
+	var dev, view, read, exec []rbacv1.Subject
+	for _, role := range []string{"owner", "admin"} {
+		read = append(read, groupSubject(role))
+		exec = append(exec, groupSubject(role))
+	}
+	if p.Spec.Access == kwerftv1.ProjectAccessMembers {
+		// Sorted, so a reordered list does not rewrite the bindings.
+		members := slices.Clone(p.Spec.Members)
+		slices.SortFunc(members, func(a, b kwerftv1.ProjectMember) int { return strings.Compare(a.User, b.User) })
+		for _, m := range members {
+			s := userSubject(m.User)
+			switch m.Role {
+			case "developer":
+				dev = append(dev, s)
+				exec = append(exec, s)
+			case "viewer":
+				view = append(view, s)
+			default:
+				continue // the CRD allows nothing else
+			}
+			read = append(read, s)
+		}
+	} else {
+		dev = append(dev, groupSubject("developer"))
+		view = append(view, groupSubject("viewer"))
+		read = append(read, groupSubject("developer"), groupSubject("viewer"))
+		exec = append(exec, groupSubject("developer"))
+	}
+	return []ProjectBinding{
+		{ProjectDeveloperRole, dev},
+		{ProjectViewerRole, view},
+		{PodsReadRole, read},
+		{PodsExecRole, exec},
+	}
 }
 
 // ProjectReconciler turns a Project into a namespace with quotas, a Pod
-// Security level, RoleBindings that give the console's roles access to the
-// project's pods (logs, shell), and, when isolated, a default-deny ingress
+// Security level, RoleBindings that give the console's users access to the
+// project (ProjectBindings), and, when isolated, a default-deny ingress
 // policy that each App then opens selectively.
-//
-// TODO(phase-4): RoleBindings for project members.
 type ProjectReconciler struct {
 	client.Client
 }
@@ -123,16 +179,19 @@ func (r *ProjectReconciler) reconcile(ctx context.Context, p *kwerftv1.Project) 
 		return err
 	}
 
-	for _, b := range podAccess {
-		rb := rbacv1ac.RoleBinding(b.role, p.Name).
+	// Subjects is an atomic list, so applying it replaces it whole: a member
+	// removed from the Project, or a switch from Team to Members, takes the
+	// old subjects away.
+	for _, b := range ProjectBindings(p) {
+		rb := rbacv1ac.RoleBinding(b.ClusterRole, p.Name).
 			WithLabels(map[string]string{LabelManagedBy: ManagedByKwerft}).
 			WithOwnerReferences(owner).
-			WithRoleRef(rbacv1ac.RoleRef().WithAPIGroup(rbacv1.GroupName).WithKind("ClusterRole").WithName(b.role))
-		for _, role := range b.roles {
-			rb.WithSubjects(rbacv1ac.Subject().WithAPIGroup(rbacv1.GroupName).WithKind(rbacv1.GroupKind).WithName(kube.RoleGroup(role)))
+			WithRoleRef(rbacv1ac.RoleRef().WithAPIGroup(rbacv1.GroupName).WithKind("ClusterRole").WithName(b.ClusterRole))
+		for _, s := range b.Subjects {
+			rb.WithSubjects(rbacv1ac.Subject().WithAPIGroup(s.APIGroup).WithKind(s.Kind).WithName(s.Name))
 		}
 		if err := apply(ctx, r.Client, rb); err != nil {
-			return fmt.Errorf("apply role binding %s: %w", b.role, err)
+			return fmt.Errorf("apply role binding %s: %w", b.ClusterRole, err)
 		}
 	}
 

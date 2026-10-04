@@ -24,6 +24,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/rest"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -318,6 +319,25 @@ func (c *console) project(t *testing.T, name string) {
 		}
 		if ns.Labels[controllers.LabelProject] != name {
 			return fmt.Errorf("namespace not labelled yet")
+		}
+		return nil
+	})
+	waitForProjectBindings(t, name)
+}
+
+// waitForProjectBindings waits until the Project reconciler has applied the
+// project's current spec, RoleBindings included: developers and viewers
+// reach nothing in the namespace before that.
+func waitForProjectBindings(t *testing.T, name string) {
+	t.Helper()
+	eventually(t, func() error {
+		var p kwerftv1.Project
+		if err := cluster.admin.Get(context.Background(), client.ObjectKey{Name: name}, &p); err != nil {
+			return err
+		}
+		c := meta.FindStatusCondition(p.Status.Conditions, controllers.ConditionReady)
+		if c == nil || c.ObservedGeneration != p.Generation || c.Status != metav1.ConditionTrue {
+			return fmt.Errorf("project %s not reconciled yet: %+v", name, c)
 		}
 		return nil
 	})
@@ -620,8 +640,13 @@ func TestValidationErrorsNameTheField(t *testing.T) {
 	if code := c.dev.do(t, "POST", "/api/v1/projects/checks/apps", map[string]any{"name": "x", "spec": map[string]any{"imagee": 1}}, &e); code != http.StatusBadRequest {
 		t.Errorf("unknown field: %d %+v, want 400", code, e)
 	}
-	if code := c.dev.do(t, "POST", "/api/v1/projects/no-such-project/apps", imageApp("web", "nginx"), &e); code != http.StatusNotFound || !strings.Contains(e.Error, "no-such-project") {
+	if code := c.owner.do(t, "POST", "/api/v1/projects/no-such-project/apps", imageApp("web", "nginx"), &e); code != http.StatusNotFound || !strings.Contains(e.Error, "no-such-project") {
 		t.Errorf("app in a missing project: %d %+v, want 404", code, e)
+	}
+	// Developers hold nothing outside the projects they reach, so Kubernetes
+	// refuses before it looks for the namespace.
+	if code := c.dev.do(t, "POST", "/api/v1/projects/no-such-project/apps", imageApp("web", "nginx"), &e); code != http.StatusForbidden {
+		t.Errorf("developer, app in a missing project: %d %+v, want 403", code, e)
 	}
 	for _, name := range []string{"kube-system", "kwerft-system", "kwerft-builds", "kwerft-observability", "default", "traefik"} {
 		if code := c.owner.do(t, "POST", "/api/v1/projects", map[string]string{"name": name}, &e); code != http.StatusUnprocessableEntity || e.Field != "name" {

@@ -1,7 +1,21 @@
 # Console roles as Kubernetes RBAC. The console impersonates each signed-in
 # user as "kwerft:<email>" in the group "kwerft:role:<role>" (plus
 # system:authenticated), so these bindings decide what every console user may
-# do. Single team, cluster-wide for now; Phase 4 binds per project namespace.
+# do.
+#
+# Two layers (docs/phase4.md, "Project access"):
+#  - Cluster-wide (the ClusterRoleBindings below): owners and admins reach
+#    every kwerft.dev resource in every namespace. Developers and viewers
+#    only read the cluster-scoped kwerft.dev kinds (projects, Git
+#    connections, alert rules, notification channels, console settings,
+#    firewall rules), and developers write alert rules. The console filters
+#    the project list.
+#  - Per project namespace: the Project reconciler binds
+#    kwerft:project-developer, kwerft:project-viewer, kwerft:pods-read and
+#    kwerft:pods-exec (internal/controllers/project_controller.go) to the
+#    role groups (Project access Team, the default) or to the listed users
+#    kwerft:<email> (access Members). Nothing namespaced (apps, builds,
+#    pods, logs, ...) reaches a developer or viewer any other way.
 #
 # Nobody gets Secrets through this path. Developers can point an App at a
 # Secret by name; the pod reads it, the user never does.
@@ -34,34 +48,63 @@ metadata:
   name: kwerft:developer
   labels: {{- include "kwerft.labels" . | nindent 4 }}
 rules:
-  # Workloads: deploy, change, roll back, restart, scale, delete.
-  - apiGroups: [kwerft.dev]
-    resources: [apps, domains, tasks, schedules, volumes]
-    verbs: [get, list, watch, create, update, patch, delete]
-  # Builds: start one ("Build now") and cancel it (the cancel annotation is a
-  # patch; the spec is immutable). No update, no delete: Kwerft prunes them.
-  - apiGroups: [kwerft.dev]
-    resources: [builds]
-    verbs: [create, patch]
   # Alert rules from Kwerft's built-in conditions. Custom expressions
   # (spec.expr) are owners' and admins': RBAC cannot see a field, so the
   # console refuses developers any write that creates, changes or deletes a
-  # Custom rule (internal/server/api_alerts.go). Users reach Kubernetes only
-  # through the console.
+  # Custom rule, or a rule watching projects they do not reach
+  # (internal/server/api_alerts.go). Users reach Kubernetes only through the
+  # console.
   - apiGroups: [kwerft.dev]
     resources: [alertrules]
     verbs: [create, update, patch, delete]
-  # Everything else Kwerft defines (projects, builds, gitconnections,
-  # notificationchannels, ...): read only. Git connections and notification
-  # channels are owners' and admins' (kwerft.dev "*").
+  # The cluster-scoped kinds: read only. Git connections and notification
+  # channels are owners' and admins' to write (kwerft.dev "*"). Never "*"
+  # here: bound cluster-wide, a rule on "*" would reach every project's
+  # namespaced objects too.
   - apiGroups: [kwerft.dev]
-    resources: ["*"]
+    resources: [projects, gitconnections, alertrules, notificationchannels, consolesettings, firewallrules]
     verbs: [get, list, watch]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
   name: kwerft:viewer
+  labels: {{- include "kwerft.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [kwerft.dev]
+    resources: [projects, gitconnections, alertrules, notificationchannels, consolesettings, firewallrules]
+    verbs: [get, list, watch]
+---
+# A developer inside one project. Never bound cluster-wide: the Project
+# reconciler binds it in each project namespace (Team: the group
+# kwerft:role:developer; Members: each member with role developer).
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: kwerft:project-developer
+  labels: {{- include "kwerft.labels" . | nindent 4 }}
+rules:
+  # Workloads: deploy, change, roll back, restart, scale, delete; and the
+  # project's traffic rules.
+  - apiGroups: [kwerft.dev]
+    resources: [apps, domains, tasks, schedules, volumes, trafficrules]
+    verbs: [get, list, watch, create, update, patch, delete]
+  # Builds: start one ("Build now") and cancel it (the cancel annotation is a
+  # patch; the spec is immutable). No update, no delete: Kwerft prunes them.
+  - apiGroups: [kwerft.dev]
+    resources: [builds]
+    verbs: [create, patch]
+  # Everything else Kwerft keeps in a project (builds, ...):
+  # read only. "*" is safe here: a RoleBinding confines it to the namespace.
+  - apiGroups: [kwerft.dev]
+    resources: ["*"]
+    verbs: [get, list, watch]
+---
+# A viewer inside one project: read. Bound like kwerft:project-developer.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: kwerft:project-viewer
   labels: {{- include "kwerft.labels" . | nindent 4 }}
 rules:
   - apiGroups: [kwerft.dev]
@@ -126,8 +169,9 @@ subjects:
 ---
 # Pods of a project: read them, their logs and their CPU/memory (metrics-server).
 # Not bound cluster-wide: the Project reconciler binds it in each project
-# namespace to all four role groups, so no console role reaches the pods or
-# logs of kube-system or kwerft-system.
+# namespace to the owner and admin groups and to whoever else reaches the
+# project (Team: the developer and viewer groups; Members: every member), so
+# no console role reaches the pods or logs of kube-system or kwerft-system.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
@@ -142,7 +186,8 @@ rules:
     verbs: [get, list]
 ---
 # A shell in a project's containers (the console records every session).
-# Bound per project namespace to owner, admin and developer, never viewer.
+# Bound per project namespace to owner, admin and developer (Team: the
+# group; Members: members with role developer), never viewer.
 # Exec over WebSocket is an HTTP GET, which Kubernetes authorizes as "get"
 # and, for the upgrade, also as "create"; exec over SPDY is a POST ("create").
 # Both verbs, so the console can use WebSocket and fall back to SPDY.

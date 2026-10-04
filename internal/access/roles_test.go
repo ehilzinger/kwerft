@@ -8,9 +8,12 @@ import (
 	"testing"
 
 	rbacv1 "k8s.io/api/rbac/v1"
+	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/yaml"
 
+	kwerftv1 "github.com/ehilzinger/kwerft/api/v1alpha1"
+	"github.com/ehilzinger/kwerft/internal/controllers"
 	"github.com/ehilzinger/kwerft/internal/kube"
 	"github.com/ehilzinger/kwerft/internal/store"
 )
@@ -71,42 +74,87 @@ func allows(rules []rbacv1.PolicyRule, c Check) bool {
 	return false
 }
 
-// TestMatrixAgreesWithChartRoles holds every Kubernetes-enforced row of the
-// matrix against the chart's cluster-wide roles. Pod rows (logs, exec) are
-// bound per project namespace by the Project reconciler; the envtest suite in
-// internal/server checks those against a real API server
-// (TestRoleMatrixMatchesKubernetes).
-func TestMatrixAgreesWithChartRoles(t *testing.T) {
+// identity is how a console user reaches Kubernetes.
+type identity struct {
+	user  string
+	group string
+}
+
+func consoleUser(email, role string) identity {
+	return identity{user: kube.UserName(email), group: kube.RoleGroup(role)}
+}
+
+func (id identity) is(s rbacv1.Subject) bool {
+	return (s.Kind == rbacv1.UserKind && s.Name == id.user) || (s.Kind == rbacv1.GroupKind && s.Name == id.group)
+}
+
+// rbac evaluates the chart's roles plus one project's RoleBindings, as the
+// API server would for an identity: cluster-wide rules apply everywhere, the
+// project's only in its namespace.
+type rbac struct {
+	t        *testing.T
+	roles    map[string]rbacv1.ClusterRole
+	bindings []rbacv1.ClusterRoleBinding
+	project  []controllers.ProjectBinding
+}
+
+func newRBAC(t *testing.T, p *kwerftv1.Project) *rbac {
 	roles, bindings := chartRBAC(t)
-	rulesFor := func(role string) []rbacv1.PolicyRule {
-		var out []rbacv1.PolicyRule
-		for _, b := range bindings {
-			for _, s := range b.Subjects {
-				if s.Kind == rbacv1.GroupKind && s.Name == kube.RoleGroup(role) {
-					cr, ok := roles[b.RoleRef.Name]
-					if !ok {
-						t.Fatalf("binding %s names missing ClusterRole %s", b.Name, b.RoleRef.Name)
-					}
-					out = append(out, cr.Rules...)
-				}
-			}
-		}
-		return out
+	return &rbac{t: t, roles: roles, bindings: bindings, project: controllers.ProjectBindings(p)}
+}
+
+func (r *rbac) role(name string) []rbacv1.PolicyRule {
+	cr, ok := r.roles[name]
+	if !ok {
+		r.t.Fatalf("binding names missing ClusterRole %s", name)
 	}
+	return cr.Rules
+}
+
+func (r *rbac) clusterRules(id identity) []rbacv1.PolicyRule {
+	var out []rbacv1.PolicyRule
+	for _, b := range r.bindings {
+		if slices.ContainsFunc(b.Subjects, id.is) {
+			out = append(out, r.role(b.RoleRef.Name)...)
+		}
+	}
+	return out
+}
+
+func (r *rbac) projectRules(id identity) []rbacv1.PolicyRule {
+	var out []rbacv1.PolicyRule
+	for _, b := range r.project {
+		if slices.ContainsFunc(b.Subjects, id.is) {
+			out = append(out, r.role(b.ClusterRole)...)
+		}
+	}
+	return out
+}
+
+func (r *rbac) allowed(id identity, c Check) bool {
+	if allows(r.clusterRules(id), c) {
+		return true
+	}
+	return c.Namespaced && allows(r.projectRules(id), c)
+}
+
+// TestMatrixAgreesWithChartRoles holds every Kubernetes-enforced row of the
+// matrix against the chart's roles and the RoleBindings the Project
+// reconciler keeps in a Team project. The envtest suite in internal/server
+// asks a real API server the same (TestRoleMatrixMatchesKubernetes).
+func TestMatrixAgreesWithChartRoles(t *testing.T) {
+	r := newRBAC(t, &kwerftv1.Project{})
 	checked := 0
 	for _, role := range Roles {
-		rules := rulesFor(role)
-		if len(rules) == 0 {
+		id := consoleUser(role+"@example.com", role)
+		if len(r.clusterRules(id)) == 0 {
 			t.Errorf("the chart binds nothing to group %s", kube.RoleGroup(role))
 		}
 		for _, p := range Matrix {
 			for _, c := range p.Kube {
-				if c.Group == "" && c.Resource == "pods" {
-					continue // per project namespace, see above
-				}
 				want := p.Grants[role].Level != No
-				if got := allows(rules, c); got != want {
-					t.Errorf("%s / %q: chart allows %s %s.%s/%s = %v, matrix says %v",
+				if got := r.allowed(id, c); got != want {
+					t.Errorf("%s / %q: RBAC allows %s %s.%s/%s = %v, matrix says %v",
 						role, p.Label, c.Verb, c.Resource, c.Group, c.Subresource, got, want)
 				}
 				checked++
@@ -115,6 +163,103 @@ func TestMatrixAgreesWithChartRoles(t *testing.T) {
 	}
 	if checked == 0 {
 		t.Fatal("no Kubernetes checks were evaluated")
+	}
+}
+
+// TestMembersProjectsFollowTheProjectRole: in a project with access Members,
+// a member's project role replaces their console role for everything in the
+// namespace, developers and viewers who are not listed reach nothing there,
+// and owners and admins are unaffected. Cluster-scoped rows keep following
+// the console role.
+func TestMembersProjectsFollowTheProjectRole(t *testing.T) {
+	r := newRBAC(t, &kwerftv1.Project{Spec: kwerftv1.ProjectSpec{
+		Access: kwerftv1.ProjectAccessMembers,
+		Members: []kwerftv1.ProjectMember{
+			{User: "promoted@example.com", Role: Developer}, // a console viewer
+			{User: "reader@example.com", Role: Viewer},      // a console developer
+		},
+	}})
+	for _, tc := range []struct {
+		who                    string
+		id                     identity
+		consoleRole, inProject string // inProject "" = reaches nothing namespaced
+	}{
+		{"owner", consoleUser("o@example.com", Owner), Owner, Owner},
+		{"admin", consoleUser("a@example.com", Admin), Admin, Admin},
+		{"viewer listed as developer", consoleUser("promoted@example.com", Viewer), Viewer, Developer},
+		{"developer listed as viewer", consoleUser("reader@example.com", Developer), Developer, Viewer},
+		{"developer not listed", consoleUser("outsider@example.com", Developer), Developer, ""},
+		{"viewer not listed", consoleUser("bystander@example.com", Viewer), Viewer, ""},
+	} {
+		for _, p := range Matrix {
+			for _, c := range p.Kube {
+				role := tc.consoleRole
+				if c.Namespaced {
+					role = tc.inProject
+				}
+				want := role != "" && p.Grants[role].Level != No
+				if got := r.allowed(tc.id, c); got != want {
+					t.Errorf("%s / %q: RBAC allows %s %s.%s/%s = %v, want %v",
+						tc.who, p.Label, c.Verb, c.Resource, c.Group, c.Subresource, got, want)
+				}
+			}
+		}
+	}
+}
+
+// namespacedKinds are the plurals of every namespaced kwerft.dev CRD.
+func namespacedKinds(t *testing.T) []string {
+	t.Helper()
+	files, err := filepath.Glob(filepath.Join("..", "..", "charts", "kwerft", "crds", "*.yaml"))
+	if err != nil || len(files) == 0 {
+		t.Fatalf("no CRDs: %v", err)
+	}
+	var out []string
+	for _, f := range files {
+		raw, err := os.ReadFile(f)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var crd apiextensionsv1.CustomResourceDefinition
+		if err := yaml.Unmarshal(raw, &crd); err != nil {
+			t.Fatal(err)
+		}
+		if crd.Spec.Scope == apiextensionsv1.NamespaceScoped {
+			out = append(out, crd.Spec.Names.Plural)
+		}
+	}
+	return out
+}
+
+// TestNothingNamespacedIsClusterWideForDevelopersAndViewers: the bindings
+// that apply in every namespace never reach a namespaced kwerft.dev kind,
+// pods, logs or Secrets for developers and viewers — including CRDs added
+// later. Only the Project reconciler's per-namespace bindings do.
+func TestNothingNamespacedIsClusterWideForDevelopersAndViewers(t *testing.T) {
+	r := newRBAC(t, &kwerftv1.Project{})
+	kinds := namespacedKinds(t)
+	if !slices.Contains(kinds, "apps") || !slices.Contains(kinds, "builds") {
+		t.Fatalf("namespaced kinds %v lack apps or builds", kinds)
+	}
+	verbs := []string{"get", "list", "watch", "create", "update", "patch", "delete", "deletecollection"}
+	for _, role := range []string{Developer, Viewer} {
+		rules := r.clusterRules(consoleUser(role+"@example.com", role))
+		var checks []Check
+		for _, k := range kinds {
+			for _, v := range verbs {
+				checks = append(checks, Check{Group: "kwerft.dev", Resource: k, Verb: v})
+			}
+		}
+		for _, v := range verbs {
+			checks = append(checks,
+				Check{Resource: "pods", Verb: v}, Check{Resource: "secrets", Verb: v},
+				Check{Resource: "pods", Subresource: "log", Verb: v}, Check{Resource: "pods", Subresource: "exec", Verb: v})
+		}
+		for _, c := range checks {
+			if allows(rules, c) {
+				t.Errorf("%s: a cluster-wide binding allows %s %s.%s/%s", role, c.Verb, c.Resource, c.Group, c.Subresource)
+			}
+		}
 	}
 }
 
@@ -148,13 +293,19 @@ func TestMatrixIsComplete(t *testing.T) {
 	if got := RolesWith(ManageMembers); !slices.Equal(got, []string{Owner, Admin}) {
 		t.Errorf("RolesWith(members) = %v", got)
 	}
+	if got := RolesWith(ProjectAccess); !slices.Equal(got, []string{Owner, Admin}) {
+		t.Errorf("RolesWith(project-access) = %v", got)
+	}
+	if got := RolesWith(RequireTwoFactor); !slices.Equal(got, []string{Owner}) {
+		t.Errorf("RolesWith(require-2fa) = %v", got)
+	}
 }
 
 // TestDevelopersCannotRewriteBuilds: developers start and cancel builds, but
 // a Build is history (and a revision's provenance): no update or delete.
 func TestDevelopersCannotRewriteBuilds(t *testing.T) {
 	roles, _ := chartRBAC(t)
-	dev := roles["kwerft:developer"].Rules
+	dev := roles[controllers.ProjectDeveloperRole].Rules
 	for _, verb := range []string{"create", "patch"} {
 		if !allows(dev, Check{Group: "kwerft.dev", Resource: "builds", Verb: verb}) {
 			t.Errorf("developers cannot %s builds", verb)

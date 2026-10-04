@@ -23,7 +23,7 @@ import (
 //
 //   - Every query carries a namespace filter that VictoriaMetrics joins into
 //     each series selector (extra_filters[]), built from the projects the user
-//     may list. Owners and admins are unconfined: they also see the
+//     reaches (scope.go). Owners and admins are unconfined: they also see the
 //     platform's namespaces and the nodes.
 //   - A per-app chart first reads the App as the user (impersonation), and
 //     is confined to that App's namespace whatever the role.
@@ -61,27 +61,20 @@ func unconfined(p *principal) bool {
 }
 
 // metricsScope is what the signed-in user's queries may see: everything for
-// owners and admins, otherwise the namespaces of the projects they can list.
+// owners and admins, otherwise the namespaces of the projects they reach
+// (scope.go).
 func (a *api) metricsScope(w http.ResponseWriter, r *http.Request) (metrics.Scope, bool) {
-	c, p, ctx, cancel, err := a.userClient(r)
-	defer cancel()
-	if err != nil {
-		a.internalError(w, r, err)
-		return metrics.Scope{}, false
-	}
+	p := principalOf(r)
 	if unconfined(p) {
 		return metrics.Unconfined(), true
 	}
-	var projects kwerftv1.ProjectList
-	if err := a.list(ctx, c, &projects); err != nil {
-		a.kubeError(w, r, p, "metrics.scope", "", "No projects found.", err)
+	ctx, cancel := context.WithTimeout(r.Context(), kubeTimeout)
+	defer cancel()
+	scope, ok := a.requestScope(w, r, ctx, p, "metrics.scope")
+	if !ok {
 		return metrics.Scope{}, false
 	}
-	names := make([]string, 0, len(projects.Items))
-	for _, pr := range projects.Items {
-		names = append(names, pr.Name) // a Project's namespace has its name
-	}
-	return metrics.Namespaces(names...), true
+	return metrics.Namespaces(scope.namespaces()...), true
 }
 
 // metricsRange reads ?range= (default 1h) and ?step= (optional).

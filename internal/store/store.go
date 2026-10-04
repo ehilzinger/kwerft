@@ -161,6 +161,14 @@ var migrations = []string{
 	CREATE UNIQUE INDEX invites_open_email ON invites(email) WHERE accepted_at IS NULL AND revoked_at IS NULL;
 	CREATE INDEX audit_actor ON audit(actor, id);
 	CREATE INDEX audit_action ON audit(action, id);`,
+	// Console-wide settings that are about sign-in rather than the cluster,
+	// such as "require two-factor sign-in" (see policy.go).
+	`CREATE TABLE settings (
+		org_id TEXT NOT NULL,
+		key    TEXT NOT NULL,
+		value  TEXT NOT NULL,
+		PRIMARY KEY (org_id, key)
+	);`,
 }
 
 func (s *Store) migrate(ctx context.Context) error {

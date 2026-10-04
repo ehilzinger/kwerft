@@ -33,8 +33,9 @@ import (
 // The access rule of api_workloads.go holds here too: every write and every
 // read of a single object goes through impersonation, so Kubernetes RBAC
 // decides; the polled lists (volumes, tasks, schedules, domains) may come from
-// the informer cache and leave out env values and commands (a Task summary
-// names its env overrides, not their values).
+// the informer cache, confined to the user's project scope (scope.go), and
+// leave out env values and commands (a Task summary names its env overrides,
+// not their values).
 
 func (a *api) registerJobs(mux *http.ServeMux) {
 	read := func(h http.HandlerFunc) http.HandlerFunc { return a.requireUser(a.requireKube(h)) }
@@ -165,8 +166,12 @@ func (a *api) volumeList(w http.ResponseWriter, r *http.Request) {
 		a.internalError(w, r, err)
 		return
 	}
+	scope, ok := a.requestScope(w, r, ctx, p, "volume.list")
+	if !ok {
+		return
+	}
 	var list kwerftv1.VolumeList
-	if err := a.list(ctx, c, &list, inProject(r)...); err != nil {
+	if err := a.scopedList(ctx, c, scope, &list, inProject(r)...); err != nil {
 		a.kubeError(w, r, p, "volume.list", "", "No volumes found.", err)
 		return
 	}
@@ -402,8 +407,12 @@ func (a *api) taskList(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	scope, ok := a.requestScope(w, r, ctx, p, "task.list")
+	if !ok {
+		return
+	}
 	var list kwerftv1.TaskList
-	if err := a.list(ctx, c, &list, opts...); err != nil {
+	if err := a.scopedList(ctx, c, scope, &list, opts...); err != nil {
 		a.kubeError(w, r, p, "task.list", "", "No tasks found.", err)
 		return
 	}
@@ -726,13 +735,17 @@ func (a *api) scheduleList(w http.ResponseWriter, r *http.Request) {
 		a.internalError(w, r, err)
 		return
 	}
+	scope, ok := a.requestScope(w, r, ctx, p, "schedule.list")
+	if !ok {
+		return
+	}
 	var list kwerftv1.ScheduleList
-	if err := a.list(ctx, c, &list, inProject(r)...); err != nil {
+	if err := a.scopedList(ctx, c, scope, &list, inProject(r)...); err != nil {
 		a.kubeError(w, r, p, "schedule.list", "", "No schedules found.", err)
 		return
 	}
 	var tasks kwerftv1.TaskList
-	if err := a.list(ctx, c, &tasks, append(inProject(r), client.HasLabels{controllers.LabelSchedule})...); err != nil {
+	if err := a.scopedList(ctx, c, scope, &tasks, append(inProject(r), client.HasLabels{controllers.LabelSchedule})...); err != nil {
 		a.kubeError(w, r, p, "schedule.list", "", "No tasks found.", err)
 		return
 	}
@@ -1082,8 +1095,12 @@ func (a *api) domainList(w http.ResponseWriter, r *http.Request) {
 		a.internalError(w, r, err)
 		return
 	}
+	scope, ok := a.requestScope(w, r, ctx, p, "domain.list")
+	if !ok {
+		return
+	}
 	var list kwerftv1.DomainList
-	if err := a.list(ctx, c, &list, inProject(r)...); err != nil {
+	if err := a.scopedList(ctx, c, scope, &list, inProject(r)...); err != nil {
 		a.kubeError(w, r, p, "domain.list", "", "No domains found.", err)
 		return
 	}

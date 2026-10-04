@@ -98,8 +98,8 @@ func TestPodRolesFollowKubernetesRBAC(t *testing.T) {
 	}
 
 	// The console's own identity can create these bindings: it holds "bind"
-	// on the two ClusterRoles, so the escalation check passes even though it
-	// cannot read metrics itself.
+	// on the project ClusterRoles, so the escalation check passes even though
+	// it cannot read metrics itself.
 	ctx := context.Background()
 	if err := cluster.admin.Create(ctx, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "bind-check"}}); err != nil {
 		t.Fatal(err)
@@ -108,7 +108,7 @@ func TestPodRolesFollowKubernetesRBAC(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, role := range []string{controllers.PodsReadRole, controllers.PodsExecRole} {
+	for _, role := range []string{controllers.PodsReadRole, controllers.PodsExecRole, controllers.ProjectDeveloperRole, controllers.ProjectViewerRole} {
 		rb := &rbacv1.RoleBinding{
 			ObjectMeta: metav1.ObjectMeta{Name: role, Namespace: "bind-check"},
 			RoleRef:    rbacv1.RoleRef{APIGroup: rbacv1.GroupName, Kind: "ClusterRole", Name: role},
