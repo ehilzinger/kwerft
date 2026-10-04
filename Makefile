@@ -32,6 +32,11 @@ build: dist-stub ## Build bin/kwerft (run `make web` first for the real UI)
 image: ## Build the container image
 	docker build --build-arg VERSION=$(VERSION) --build-arg COMMIT=$(COMMIT) -t $(IMAGE) .
 
+RELEASE_VERSION ?= 0.0.0-dryrun
+.PHONY: release-dry-run
+release-dry-run: web ## Build release artifacts into dist/release without publishing (RELEASE_VERSION=0.2.0)
+	hack/release.sh dry-run $(RELEASE_VERSION) dist/release
+
 ## --- code generation ---------------------------------------------------
 
 .PHONY: generate
@@ -58,7 +63,7 @@ lint: dist-stub ## gofmt, go vet, web typecheck
 
 .PHONY: test-install
 test-install: ## shellcheck + bats for the installer
-	shellcheck install/install.sh install/join.sh hack/dev-server.sh
+	shellcheck install/install.sh install/join.sh hack/dev-server.sh hack/release.sh
 	bats install/test
 
 .PHONY: helm-lint
