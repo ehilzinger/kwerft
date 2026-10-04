@@ -878,7 +878,9 @@ stage_handoff() {
       create_setup_token
       state="token ready" ;;
     complete)
-      rm -f "$SETUP_TOKEN_FILE"   # used up; nothing left to protect
+      # Used up or no longer needed; nothing left to protect.
+      rm -f "$SETUP_TOKEN_FILE"
+      kc -n kwerft-system delete secret kwerft-setup-token --ignore-not-found >/dev/null 2>&1 || true
       state="setup complete" ;;
     pending)
       state="token ready" ;;
@@ -896,6 +898,9 @@ stage_handoff() {
 #   complete  Kwerft consumed the token (it deletes the Secret once the owner exists)
 setup_token_state() {
   if [[ -n "$CONFIG_FILE" ]]; then echo config; return; fi
+  # The console knows best: once an owner exists, setup is over for good —
+  # even if the token file and Secret are gone (a re-run after a re-run).
+  if console_setup_complete; then echo complete; return; fi
   local expires
   expires=$(kc -n kwerft-system get secret kwerft-setup-token \
     -o jsonpath='{.data.expires}' 2>/dev/null | base64 -d 2>/dev/null || true)
@@ -907,6 +912,16 @@ setup_token_state() {
   [[ -s "$SETUP_TOKEN_FILE" ]] || { echo missing; return; }
   # Both timestamps are fixed-width UTC (%FT%TZ), so string order is time order.
   if [[ "$expires" > "$(date -u +%FT%TZ)" ]]; then echo pending; else echo expired; fi
+}
+
+# console_setup_complete asks the running console, through the API server's
+# service proxy (no ports to open, no TLS to trust), whether an owner exists.
+# Unreachable or not yet ready counts as "no": the token logic below decides.
+console_setup_complete() {
+  local body
+  body=$(kc get --raw "/api/v1/namespaces/kwerft-system/services/kwerft:http/proxy/api/v1/setup" \
+    --request-timeout=10s 2>/dev/null || true)
+  [[ "$body" == *'"complete":true'* ]]
 }
 
 create_setup_token() {

@@ -120,6 +120,19 @@ setup_state_env() {
 }
 secret_expires() { printf '%s' "$1" | base64; }
 
+@test "setup_token_state: the console saying setup is complete wins" {
+  setup_state_env
+  # No token file and no Secret: a re-run after a re-run once setup was done.
+  kc() { if [[ "$*" == *"/proxy/api/v1/setup"* ]]; then echo '{"complete":true}'; else return 1; fi; }
+  [ "$(setup_token_state)" = "complete" ]
+}
+
+@test "setup_token_state: a console without an owner falls back to the token" {
+  setup_state_env
+  kc() { if [[ "$*" == *"/proxy/api/v1/setup"* ]]; then echo '{"complete":false}'; else return 1; fi; }
+  [ "$(setup_token_state)" = "missing" ]
+}
+
 @test "setup_token_state: first install has no token" {
   setup_state_env
   kc() { return 1; }
