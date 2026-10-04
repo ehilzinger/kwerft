@@ -115,6 +115,7 @@ func (rc *recorder) start(meta recordingMeta, width, height int) (*recording, er
 	if err := os.MkdirAll(rc.dir, 0o700); err != nil {
 		return nil, err
 	}
+	meta.Started = meta.Started.UTC()
 	rc.prune(meta.Started)
 	var b [4]byte
 	_, _ = rand.Read(b[:])

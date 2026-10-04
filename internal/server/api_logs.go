@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"slices"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -247,8 +248,10 @@ func (s *logStream) container(pod *corev1.Pod) string {
 
 // hasLogs reports whether the container has started at least once (or, for
 // previous=1, has a previous instance), so a log request can succeed. The
-// reason comes back when it cannot.
-func (s *logStream) hasLogs(pod *corev1.Pod) (bool, string) {
+// reason comes back when it cannot. live asks whether there is something to
+// follow: a running container; one that stopped has said all it will in the
+// backlog, and following it would only end at once.
+func (s *logStream) hasLogs(pod *corev1.Pod, live bool) (bool, string) {
 	name := s.container(pod)
 	for _, cs := range pod.Status.ContainerStatuses {
 		if cs.Name != name {
@@ -261,7 +264,13 @@ func (s *logStream) hasLogs(pod *corev1.Pod) (bool, string) {
 			return false, "This container has not restarted, so there is no previous container."
 		}
 		switch {
-		case cs.State.Running != nil, cs.State.Terminated != nil:
+		case cs.State.Running != nil:
+			return true, ""
+		case live && cs.State.Terminated != nil:
+			return false, strings.TrimSuffix("Stopped: "+cs.State.Terminated.Reason, ": ")
+		case live && cs.State.Waiting != nil:
+			return false, "Waiting: " + cs.State.Waiting.Reason
+		case cs.State.Terminated != nil:
 			return true, ""
 		case cs.State.Waiting != nil && cs.LastTerminationState.Terminated != nil:
 			return true, "" // between restarts: the last run's logs are still there
@@ -318,7 +327,7 @@ func (s *logStream) backlog(ctx context.Context, pods []corev1.Pod) (map[string]
 	var wg sync.WaitGroup
 	for i := range pods {
 		pod := &pods[i]
-		if ok, why := s.hasLogs(pod); !ok {
+		if ok, why := s.hasLogs(pod, false); !ok {
 			results[i].status = &logStatus{Pod: pod.Name, State: "waiting", Message: why}
 			continue
 		}
@@ -441,7 +450,7 @@ func (s *logStream) follow(ctx context.Context, pods []corev1.Pod, last map[stri
 		if active[pod.Name] || denied[pod.Name] || len(active) >= s.lim.maxPods {
 			return
 		}
-		if ok, why := s.hasLogs(pod); !ok {
+		if ok, why := s.hasLogs(pod, true); !ok {
 			if reported[pod.Name] != why {
 				reported[pod.Name] = why
 				_ = s.out.event("status", logStatus{Pod: pod.Name, State: "waiting", Message: why})
