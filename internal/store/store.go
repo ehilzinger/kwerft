@@ -115,6 +115,31 @@ var migrations = []string{
 		ip     TEXT NOT NULL,
 		detail TEXT NOT NULL
 	);`,
+	// Second factors (see mfa.go). TOTP secrets are sealed with the data key;
+	// last_step is the newest accepted time step, so a code works only once.
+	`CREATE TABLE totp (
+		user_id    TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+		secret     TEXT NOT NULL,
+		confirmed  INTEGER NOT NULL DEFAULT 0,
+		last_step  INTEGER NOT NULL DEFAULT 0,
+		created_at INTEGER NOT NULL
+	);
+	CREATE TABLE recovery_codes (
+		user_id   TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+		code_hash TEXT NOT NULL,
+		used_at   INTEGER,
+		PRIMARY KEY (user_id, code_hash)
+	);
+	CREATE TABLE passkeys (
+		id            TEXT PRIMARY KEY,
+		user_id       TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+		credential_id BLOB NOT NULL UNIQUE,
+		name          TEXT NOT NULL,
+		credential    TEXT NOT NULL,
+		created_at    INTEGER NOT NULL,
+		last_used_at  INTEGER NOT NULL DEFAULT 0
+	);
+	CREATE INDEX passkeys_user ON passkeys(user_id);`,
 }
 
 func (s *Store) migrate(ctx context.Context) error {
