@@ -7,10 +7,12 @@ import (
 	"io/fs"
 	"log/slog"
 	"net/http"
+	"net/netip"
 	"path"
 	"strings"
 	"time"
 
+	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/ehilzinger/kwerft/internal/git"
@@ -46,6 +48,14 @@ type Config struct {
 	// DataKey (32 bytes) encrypts secrets at rest, such as TOTP seeds. Without
 	// it, authenticator apps cannot be set up or checked.
 	DataKey []byte
+	// DataKeyPrevious are older data keys that still open values (a
+	// rotation in progress, KWERFT_DATA_KEY_PREVIOUS); the console re-seals
+	// them with DataKey at start-up (api_datakey.go).
+	DataKeyPrevious [][]byte
+	// DataKeySecret is the Secret holding the data key, which rotation in
+	// Settings rewrites with the System identity; empty disables rotation
+	// there.
+	DataKeySecret types.NamespacedName
 	// PasskeyOrigins are the browser origins passkeys are accepted from; empty
 	// means https://<ConsoleDomain>. The relying party ID is ConsoleDomain, and
 	// passkeys are off when that is empty.
@@ -81,6 +91,10 @@ type Config struct {
 	// api_metrics.go); nil turns the metrics endpoints off.
 	Metrics *metrics.Client
 
+	// TrustedProxy reports whether a TCP peer is Traefik, whose X-Real-Ip
+	// names the client (see clientip.go); nil trusts loopback only.
+	TrustedProxy func(netip.Addr) bool
+
 	// ActiveConsoleDomain returns the hostname the console is served on now
 	// (ConsoleSettings.status, which Settings can change); nil or "" means
 	// ConsoleDomain. Passkeys follow it.
@@ -100,6 +114,12 @@ type Config struct {
 	logsHook func(*logSearchAPI)
 	// gitHook lets tests adjust the Git API (limits); see api_git.go.
 	gitHook func(*gitAPI)
+	// ssoHook lets tests replace the single sign-on settings source and the
+	// provider's HTTP client; see api_sso.go.
+	ssoHook func(*ssoAPI)
+	// dataKeyHook lets tests replace where rotated data keys are stored; see
+	// api_datakey.go.
+	dataKeyHook func(*dataKeyAPI)
 	// alertsHook lets tests point the alerts API at fake Alertmanager and
 	// VictoriaMetrics servers and fake notification targets; see
 	// api_alerts.go. Production uses the in-cluster services
@@ -152,7 +172,7 @@ func Handler(cfg Config) http.Handler {
 
 	mux.Handle("/", spa(cfg.UI))
 
-	return logRequests(cfg.Logger, securityHeaders(mux))
+	return logRequests(cfg.Logger, securityHeaders(withClientIP(cfg.TrustedProxy, mux)))
 }
 
 // spa serves static files and falls back to index.html for client-side routes.

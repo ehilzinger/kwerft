@@ -96,6 +96,8 @@ func ForKind(kind schema.GroupVersionKind) interface{} {
 		return &apiv1alpha1.ScheduleStatusApplyConfiguration{}
 	case v1alpha1.SchemeGroupVersion.WithKind("SlackSettings"):
 		return &apiv1alpha1.SlackSettingsApplyConfiguration{}
+	case v1alpha1.SchemeGroupVersion.WithKind("SSOSettings"):
+		return &apiv1alpha1.SSOSettingsApplyConfiguration{}
 	case v1alpha1.SchemeGroupVersion.WithKind("TaskOnSuccess"):
 		return &apiv1alpha1.TaskOnSuccessApplyConfiguration{}
 	case v1alpha1.SchemeGroupVersion.WithKind("TaskSpec"):

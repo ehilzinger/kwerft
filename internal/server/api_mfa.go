@@ -50,6 +50,7 @@ type mfa struct {
 
 type pendingLogin struct {
 	userID    string
+	via       string // how the first step went: "password" or "single sign-on (…)"
 	expires   time.Time
 	failures  int
 	assertion *webauthn.SessionData // set when the passkey prompt starts
@@ -76,7 +77,7 @@ func newMFA(cfg Config, now func() time.Time) *mfa {
 		m.issuer = "Kwerft " + d // tells several consoles apart in the app
 	}
 	if len(cfg.DataKey) > 0 {
-		s, err := auth.NewSealer(cfg.DataKey)
+		s, err := auth.NewSealer(cfg.DataKey, cfg.DataKeyPrevious...)
 		if err != nil {
 			cfg.Logger.Error("data key unusable: authenticator apps are off", "err", err)
 		}
@@ -187,13 +188,29 @@ func (a *api) registerMFA(mux *http.ServeMux) {
 // second factor it parks the sign-in behind a short-lived cookie, tells the UI
 // which methods to offer and reports true; no session exists yet.
 func (a *api) secondFactorRequired(w http.ResponseWriter, r *http.Request, u *store.User) bool {
-	f, err := a.store.Factors(r.Context(), u.ID)
+	methods, err := a.pendingSecondFactor(r.Context(), w, u, "password")
 	if err != nil {
 		a.internalError(w, r, err)
 		return true
 	}
-	if !f.Any() {
+	if len(methods) == 0 {
 		return false
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"secondFactor": methods})
+	return true
+}
+
+// pendingSecondFactor parks a sign-in whose first step (via: the password or
+// a single sign-on) succeeded behind the pending cookie, if the user has a
+// second factor, and returns the methods to offer; none means the sign-in is
+// complete. Single sign-on (api_sso.go) uses it as the password does.
+func (a *api) pendingSecondFactor(ctx context.Context, w http.ResponseWriter, u *store.User, via string) ([]string, error) {
+	f, err := a.store.Factors(ctx, u.ID)
+	if err != nil {
+		return nil, err
+	}
+	if !f.Any() {
+		return nil, nil
 	}
 	methods := []string{}
 	if f.Passkeys > 0 {
@@ -208,11 +225,10 @@ func (a *api) secondFactorRequired(w http.ResponseWriter, r *http.Request, u *st
 	token, now := auth.NewToken(), a.now()
 	a.mfa.mu.Lock()
 	a.mfa.prune(now)
-	a.mfa.pending[auth.HashToken(token)] = &pendingLogin{userID: u.ID, expires: now.Add(pendingTTL)}
+	a.mfa.pending[auth.HashToken(token)] = &pendingLogin{userID: u.ID, via: via, expires: now.Add(pendingTTL)}
 	a.mfa.mu.Unlock()
 	a.setCookie(w, a.mfa.cookies.pending, token, now.Add(pendingTTL))
-	writeJSON(w, http.StatusOK, map[string]any{"secondFactor": methods})
-	return true
+	return methods, nil
 }
 
 // pendingFor resolves the pending cookie to the user who entered a correct
@@ -281,9 +297,14 @@ func (a *api) secondFactorFailed(w http.ResponseWriter, r *http.Request, hash st
 	writeJSON(w, http.StatusUnauthorized, map[string]string{"error": msg, "field": "code"})
 }
 
-// finishLogin turns a pending sign-in into a session.
-func (a *api) finishLogin(w http.ResponseWriter, r *http.Request, hash string, u *store.User, how string) {
+// finishLogin turns a pending sign-in into a session; factor names the
+// second factor for the audit log.
+func (a *api) finishLogin(w http.ResponseWriter, r *http.Request, hash string, u *store.User, factor string) {
 	a.mfa.mu.Lock()
+	how := "password + " + factor
+	if p := a.mfa.pending[hash]; p != nil && p.via != "" {
+		how = p.via + " + " + factor
+	}
 	delete(a.mfa.pending, hash)
 	a.mfa.mu.Unlock()
 	a.clearCookie(w, a.mfa.cookies.pending)
@@ -319,7 +340,7 @@ func (a *api) loginTOTP(w http.ResponseWriter, r *http.Request) {
 		a.secondFactorFailed(w, r, hash, u, methodTOTP, msg)
 		return
 	}
-	a.finishLogin(w, r, hash, u, "password + authenticator app")
+	a.finishLogin(w, r, hash, u, "authenticator app")
 }
 
 func (a *api) loginRecovery(w http.ResponseWriter, r *http.Request) {
@@ -350,7 +371,7 @@ func (a *api) loginRecovery(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	a.audit(r, u.Email, "account.recovery_code_used", u.Email, fmt.Sprintf("%d left", f.RecoveryCodes))
-	a.finishLogin(w, r, hash, u, "password + recovery code")
+	a.finishLogin(w, r, hash, u, "recovery code")
 }
 
 // checkTOTP verifies a code from the user's authenticator app and uses up its
@@ -384,7 +405,17 @@ func totpContext(userID string) string { return "totp:" + userID }
 // confirmIdentity asks for proof beyond the session cookie before changes to
 // how an account signs in: the password or, if set up, a current code from
 // the authenticator app. It answers the request itself on failure.
+//
+// An account made through single sign-on has no password; a sign-in within
+// the last ten minutes stands in for it (or a current authenticator code).
 func (a *api) confirmIdentity(w http.ResponseWriter, r *http.Request, u *store.User, secret string) bool {
+	if u.PasswordHash == "" && strings.TrimSpace(secret) == "" {
+		if a.freshSession(r) {
+			return true
+		}
+		writeFieldError(w, "password", "This account signs in with single sign-on. Sign out and in again, then confirm within 10 minutes.")
+		return false
+	}
 	if strings.TrimSpace(secret) == "" {
 		writeFieldError(w, "password", "Enter your password to confirm this change.")
 		return false

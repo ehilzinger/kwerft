@@ -421,8 +421,7 @@ func (s *logSearchAPI) tail(w http.ResponseWriter, r *http.Request) {
 
 // streamSessionAlive: the session still exists and the role is unchanged.
 func (a *api) streamSessionAlive(ctx context.Context, pr *principal) bool {
-	_, u, err := a.store.SessionByHash(ctx, pr.idHash, a.now())
-	return err == nil && u.Role == pr.user.Role
+	return a.stillValid(ctx, pr)
 }
 
 // ---- history of Task and Build logs ------------------------------------------------

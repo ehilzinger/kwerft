@@ -4,6 +4,10 @@ generated on the first install and looked up on every upgrade, so it never
 changes; "keep" leaves it behind on uninstall, because without it every user
 would have to set up their authenticator app again. Back it up together with
 the database.
+
+Settings › Data key rotates it: the console writes a new "key" (keeping the
+old one as "previous" until every secret is re-sealed), so the lookup below
+keeps whatever the Secret holds now.
 */ -}}
 {{- $name := printf "%s-data-key" (include "kwerft.fullname" .) }}
 {{- $existing := lookup "v1" "Secret" .Release.Namespace $name }}
@@ -18,3 +22,6 @@ metadata:
 type: Opaque
 data:
   key: {{ dig "data" "key" (randBytes 32 | b64enc) $existing }}
+  {{- with dig "data" "previous" "" $existing }}
+  previous: {{ . }}
+  {{- end }}

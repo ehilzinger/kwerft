@@ -7,6 +7,7 @@ package kube
 import (
 	"fmt"
 	"net/http"
+	"net/url"
 	"sync"
 	"time"
 
@@ -172,6 +173,26 @@ func (i *Impersonator) RESTConfig(email, role string) (*rest.Config, error) {
 	cfg := rest.CopyConfig(i.cfg)
 	cfg.Impersonate = rest.ImpersonationConfig{UserName: UserName(email), Groups: []string{RoleGroup(role), Authenticated}}
 	return cfg, nil
+}
+
+// Upstream returns the API server's URL and a round tripper that sends
+// requests with the console's credentials and the user's Impersonate-*
+// headers, for the Kubernetes proxy (internal/server/kubeproxy.go). Callers
+// must remove every Impersonate-* and Authorization header a client sent:
+// the round trippers leave a request alone that already carries them.
+func (i *Impersonator) Upstream(email, role string) (*url.URL, http.RoundTripper, error) {
+	if err := checkIdentity(email, role); err != nil {
+		return nil, nil, err
+	}
+	host, _, err := rest.DefaultServerUrlFor(i.cfg)
+	if err != nil {
+		return nil, nil, err
+	}
+	base := i.http.Transport
+	if base == nil {
+		base = http.DefaultTransport
+	}
+	return host, transport.NewImpersonatingRoundTripper(impersonation(email, role), base), nil
 }
 
 // Self returns a clientset with the console's own identity, without

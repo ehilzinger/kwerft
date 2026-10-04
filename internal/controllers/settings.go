@@ -53,6 +53,16 @@ const (
 	DNSTokenSecret = "kwerft-dns-token"
 	DNSTokenKey    = "token"
 
+	// OIDCSecret holds the single sign-on client secret (key
+	// "clientSecret", ConsoleSettings.spec.sso). Like the DNS token, Kwerft
+	// creates it empty, owners and admins may patch it, and only the
+	// console's own identity reads it.
+	OIDCSecret    = "kwerft-oidc-client"
+	OIDCSecretKey = "clientSecret"
+	// AnnotationOIDCSecretUpdated records on ConsoleSettings when the client
+	// secret was last written, so Settings can tell whether one is set.
+	AnnotationOIDCSecretUpdated = "kwerft.dev/oidc-secret-updated-at"
+
 	// AnnotationDNSTokenUpdated is set on ConsoleSettings when the console
 	// writes a new token, so a failed wildcard certificate is retried at once
 	// instead of after cert-manager's backoff.
@@ -412,26 +422,32 @@ func (r *DomainReconciler) retryAfterNewToken(ctx context.Context, s *kwerftv1.C
 	_ = r.Patch(ctx, cert, patch)
 }
 
-// ensureTokenSecret creates the empty token Secret, so owners and admins can
-// set the token with "patch" alone: their role cannot create Secrets, and no
-// role can read this one.
+// ensureTokenSecret creates the empty write-only Secrets of the settings —
+// the DNS token and the single sign-on client secret — so owners and admins
+// can set them with "patch" alone: their role cannot create Secrets, and no
+// role can read these.
 func (r *DomainReconciler) ensureTokenSecret(ctx context.Context) error {
 	reader := r.APIReader
 	if reader == nil {
 		reader = r.Client
 	}
-	var sec corev1.Secret
-	err := reader.Get(ctx, client.ObjectKey{Namespace: GatewayNamespace, Name: DNSTokenSecret}, &sec)
-	if !apierrors.IsNotFound(err) {
-		return err
-	}
-	sec = corev1.Secret{
-		ObjectMeta: metav1.ObjectMeta{Name: DNSTokenSecret, Namespace: GatewayNamespace,
-			Labels: map[string]string{LabelManagedBy: ManagedByKwerft}},
-		Type: corev1.SecretTypeOpaque,
-	}
-	if err := r.Create(ctx, &sec); err != nil && !apierrors.IsAlreadyExists(err) {
-		return err
+	for _, name := range []string{DNSTokenSecret, OIDCSecret} {
+		var sec corev1.Secret
+		err := reader.Get(ctx, client.ObjectKey{Namespace: GatewayNamespace, Name: name}, &sec)
+		if !apierrors.IsNotFound(err) {
+			if err != nil {
+				return err
+			}
+			continue
+		}
+		sec = corev1.Secret{
+			ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: GatewayNamespace,
+				Labels: map[string]string{LabelManagedBy: ManagedByKwerft}},
+			Type: corev1.SecretTypeOpaque,
+		}
+		if err := r.Create(ctx, &sec); err != nil && !apierrors.IsAlreadyExists(err) {
+			return err
+		}
 	}
 	return nil
 }

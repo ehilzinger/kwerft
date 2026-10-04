@@ -10,13 +10,16 @@ import { isTemporaryHost, settingsApi, type CertificateState, type DNSCheck, typ
 import "../styles/workloads.css";
 import "../styles/settings.css";
 import { GitConnectionsCard } from "./GitConnections";
+import { DataKeyCard, SSOCard } from "./SettingsIdentity";
 
 const unreachable = "The console could not be reached. Check your connection and try again.";
 const errText = (e: unknown) => (e instanceof ApiError ? e.message : unreachable);
 
 // Settings: where the console lives, the base domain for apps, how their
-// certificates are issued, and Git connections (GitConnections.tsx). Owners
-// and admins change them; everyone else sees them read-only.
+// certificates are issued, Git connections (GitConnections.tsx), single
+// sign-on and the data key (SettingsIdentity.tsx). Owners and admins change
+// them; everyone else sees them read-only. Single sign-on is for owners and
+// admins only, the data key for owners.
 export function Settings() {
   const session = useQuery({ queryKey: ["session"], queryFn: api.session });
   const canEdit = session.data?.role === "owner" || session.data?.role === "admin";
@@ -32,7 +35,7 @@ export function Settings() {
       <div className="ph">
         <div>
           <h1>Settings</h1>
-          <p>Where the console and your apps live, how their certificates are issued, and access to Git hosts</p>
+          <p>Where the console and your apps live, how their certificates are issued, access to Git hosts, and sign-in</p>
         </div>
       </div>
       {!canEdit && session.data && (
@@ -47,6 +50,8 @@ export function Settings() {
           {settings.data.manageRecords && <DNSRecordsCard s={settings.data} />}
           <CertificatesCard s={settings.data} />
           <GitConnectionsCard canEdit={canEdit} />
+          {canEdit && <SSOCard />}
+          {session.data?.role === "owner" && <DataKeyCard />}
           <section className="card">
             <h2>Hetzner Cloud API</h2>
             <div className="bd">

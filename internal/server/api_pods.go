@@ -519,6 +519,5 @@ func (s *slots) acquire(user string) func() {
 // and whether their role is unchanged: a stream was authorized for the role
 // it started with.
 func (p *podsAPI) sessionAlive(ctx context.Context, pr *principal) bool {
-	_, u, err := p.store.SessionByHash(ctx, pr.idHash, p.now())
-	return err == nil && u.Role == pr.user.Role
+	return p.stillValid(ctx, pr)
 }

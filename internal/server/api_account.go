@@ -64,8 +64,15 @@ func (a *api) accountGet(w http.ResponseWriter, r *http.Request) {
 			"ip": s.IP, "userAgent": s.UserAgent,
 		})
 	}
+	identities, err := a.identitiesJSON(ctx, u.ID)
+	if err != nil {
+		a.internalError(w, r, err)
+		return
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"user":              userJSON(u),
+		"hasPassword":       u.PasswordHash != "",
+		"identities":        identities,
 		"totp":              f.TOTP,
 		"passkeys":          passkeys,
 		"recoveryCodesLeft": f.RecoveryCodes,
@@ -116,7 +123,14 @@ func (a *api) accountPassword(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusTooManyRequests, "Too many attempts. Wait 15 minutes and try again.")
 		return
 	}
-	if ok, err := auth.VerifyPassword(u.PasswordHash, req.Current); err != nil || !ok {
+	if u.PasswordHash == "" {
+		// A single sign-on account sets its first password: a recent
+		// sign-in stands in for the current one.
+		if !a.freshSession(r) {
+			writeFieldError(w, "current", "Sign out and in again with single sign-on, then set a password within 10 minutes.")
+			return
+		}
+	} else if ok, err := auth.VerifyPassword(u.PasswordHash, req.Current); err != nil || !ok {
 		a.audit(r, u.Email, "account.confirm_failed", u.Email, "password")
 		writeFieldError(w, "current", "That is not your current password.")
 		return
