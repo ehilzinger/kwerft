@@ -176,7 +176,8 @@ func cleanSessions(ctx context.Context, log *slog.Logger, st *store.Store) {
 // informers after winning leader election, and a missing CRD must keep the pod
 // not-ready (so `helm --wait` fails) instead of passing silently.
 func waitUntilReady(ctx context.Context, log *slog.Logger, mgr ctrl.Manager, ready *atomic.Bool) {
-	types := []client.Object{&kwerftv1.Project{}, &kwerftv1.App{}, &kwerftv1.Domain{}}
+	types := []client.Object{&kwerftv1.Project{}, &kwerftv1.App{}, &kwerftv1.Domain{},
+		&kwerftv1.Volume{}, &kwerftv1.Task{}, &kwerftv1.Schedule{}}
 	for _, obj := range types {
 		for {
 			_, err := mgr.GetCache().GetInformer(ctx, obj, cache.BlockUntilSynced(false))
@@ -224,6 +225,15 @@ func newManager(log *slog.Logger, leaderElect bool, domains *controllers.DomainR
 	}
 	domains.Client = mgr.GetClient()
 	if err := domains.SetupWithManager(mgr); err != nil {
+		return nil, err
+	}
+	if err := (&controllers.VolumeReconciler{Client: mgr.GetClient()}).SetupWithManager(mgr); err != nil {
+		return nil, err
+	}
+	if err := (&controllers.TaskReconciler{Client: mgr.GetClient(), APIReader: mgr.GetAPIReader()}).SetupWithManager(mgr); err != nil {
+		return nil, err
+	}
+	if err := (&controllers.ScheduleReconciler{Client: mgr.GetClient()}).SetupWithManager(mgr); err != nil {
 		return nil, err
 	}
 	return mgr, nil

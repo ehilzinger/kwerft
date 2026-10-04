@@ -1,0 +1,12 @@
+# Task pods (one-off and scheduled jobs) run below Apps, which have the default
+# priority 0: among pods using more memory than they requested, the kubelet
+# evicts a job before a service, and a pending job never preempts anything.
+apiVersion: scheduling.k8s.io/v1
+kind: PriorityClass
+metadata:
+  name: kwerft-batch
+  labels: {{- include "kwerft.labels" . | nindent 4 }}
+value: -100
+preemptionPolicy: Never
+globalDefault: false
+description: Kwerft Tasks (one-off and scheduled jobs); below Apps, never preempts.

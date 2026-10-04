@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -87,6 +88,9 @@ func TestMain(m *testing.M) {
 		GatewayClass:  "traefik",
 		ClusterIssuer: "letsencrypt",
 	}).SetupWithManager(mgr))
+	must((&VolumeReconciler{Client: mgr.GetClient()}).SetupWithManager(mgr))
+	must((&TaskReconciler{Client: mgr.GetClient(), APIReader: mgr.GetAPIReader(), Now: testClock.Now}).SetupWithManager(mgr))
+	must((&ScheduleReconciler{Client: mgr.GetClient(), Now: testClock.Now}).SetupWithManager(mgr))
 
 	ctx, cancel := context.WithCancel(context.Background())
 	go func() { _ = mgr.Start(ctx) }()
@@ -96,6 +100,22 @@ func TestMain(m *testing.M) {
 	_ = env.Stop()
 	os.Exit(code)
 }
+
+// testClock is the Task and Schedule reconcilers' clock: real time plus an
+// offset that tests move forward to make runs due.
+var testClock = &offsetClock{}
+
+type offsetClock struct{ offset atomic.Int64 }
+
+func (c *offsetClock) Now() time.Time { return time.Now().Add(time.Duration(c.offset.Load())) }
+
+// Advance moves the clock forward by d.
+func (c *offsetClock) Advance(d time.Duration) { c.offset.Add(int64(d)) }
+
+// Reset returns to real time. Schedule tests start with it: a Schedule's
+// creation time is real, so an offset left by an earlier test would make a
+// run due at once.
+func (c *offsetClock) Reset() { c.offset.Store(0) }
 
 func moduleDir(mod string) (string, error) {
 	out, err := exec.Command("go", "list", "-m", "-f", "{{.Dir}}", mod).Output()
