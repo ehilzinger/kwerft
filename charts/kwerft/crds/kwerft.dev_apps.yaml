@@ -63,9 +63,17 @@ spec:
                   type: string
                 type: array
               command:
+                description: |-
+                  Command replaces the image's entrypoint, one argument per item:
+                  ["sh", "-c", "echo hi"], not ["sh -c echo hi"].
                 items:
                   type: string
                 type: array
+                x-kubernetes-validations:
+                - message: the program (first item) contains whitespace; give each
+                    argument its own item, e.g. ["echo", "hi"], or use ["sh", "-c",
+                    "..."]
+                  rule: size(self) == 0 || !self[0].matches('[[:space:]]')
               egress:
                 default: https
                 description: Egress controls outbound traffic to the internet.

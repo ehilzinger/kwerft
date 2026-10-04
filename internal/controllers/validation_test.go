@@ -143,4 +143,21 @@ func TestCELRejectsInvalidSpecs(t *testing.T) {
 		}
 		expectInvalid(t, k8s.Create(ctx, s), "at most 52 characters")
 	})
+
+	t.Run("a command whose program contains whitespace", func(t *testing.T) {
+		// What a one-line "echo hi" typed into a one-argument-per-line field became.
+		spec := imageTask("busybox")
+		spec.Command = []string{"echo hi"}
+		expectInvalid(t, k8s.Create(ctx, task("one-arg", spec)), "the program (first item) contains whitespace")
+		a := app("one-arg")
+		a.Spec.Command = []string{"sh -c date"}
+		expectInvalid(t, k8s.Create(ctx, a), "the program (first item) contains whitespace")
+	})
+	t.Run("spaces in later arguments are fine", func(t *testing.T) {
+		spec := imageTask("busybox")
+		spec.Command = []string{"sh", "-c", "echo hi && date"}
+		if err := k8s.Create(ctx, task("sh-c", spec)); err != nil {
+			t.Fatal(err)
+		}
+	})
 }

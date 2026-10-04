@@ -56,10 +56,10 @@ test: dist-stub ## Run Go tests, incl. controller tests against a real API serve
 	KUBEBUILDER_ASSETS="$$($(SETUP_ENVTEST) use $(ENVTEST_K8S) --bin-dir $(CURDIR)/bin/envtest -p path)" $(GO) test ./...
 
 .PHONY: lint
-lint: dist-stub ## gofmt, go vet, web typecheck
+lint: dist-stub ## gofmt, go vet, web typecheck and unit tests
 	@files=$$(gofmt -l . | grep -vE '^(web/node_modules|\.claude/worktrees|dist)/'); test -z "$$files" || { echo "$$files"; exit 1; }
 	$(GO) vet ./...
-	cd web && npm run typecheck
+	cd web && npm run typecheck && npm test
 
 .PHONY: test-install
 test-install: ## shellcheck + bats for the installer

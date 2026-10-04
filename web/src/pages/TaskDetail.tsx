@@ -13,6 +13,7 @@ import { RunNowDialog, type RunSource } from "./RunNowDialog";
 import { TaskLogs } from "./TaskLogs";
 import "../styles/workloads.css";
 import "../styles/jobs.css";
+import { formatCommand } from "../shellwords";
 
 const route = getRouteApi("/authed/jobs/$project/tasks/$name");
 
@@ -117,7 +118,7 @@ export function TaskDetail() {
               <dt>Started</dt><dd>{st.startTime ? new Date(st.startTime).toLocaleString() : <span className="dim">not yet</span>}</dd>
               <dt>Finished</dt><dd>{st.completionTime ? new Date(st.completionTime).toLocaleString() : <span className="dim">—</span>}</dd>
               <dt>Image</dt><dd><code>{st.image || spec.source?.image?.ref || (spec.fromApp ? `the image of ${spec.fromApp}` : "—")}</code></dd>
-              {spec.command?.length ? <><dt>Command</dt><dd><code>{spec.command.join(" ")}</code></dd></> : null}
+              {spec.command?.length ? <><dt>Command</dt><dd><code>{formatCommand(spec.command)}</code></dd></> : null}
               <dt>Size</dt><dd>{size ? `${size.label} · ${size.note}` : spec.size === "custom" ? "Custom" : spec.fromApp ? `Same as ${spec.fromApp}` : "Small"}</dd>
               <dt>Timeout</dt><dd>{spec.timeout ? prettyDuration(spec.timeout) : <span className="dim">none</span>}</dd>
               <dt>Retries</dt><dd>{spec.retries ?? 0}</dd>

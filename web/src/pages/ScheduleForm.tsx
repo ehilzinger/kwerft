@@ -10,6 +10,7 @@ import { Icon } from "../components/Icon";
 import { VolumeMounts, checkMounts, mountsOf, volumesOf, type Mount } from "../components/VolumeMounts";
 import { describeCron, jobs, prettyDuration, timeZones, when, type Concurrency, type Schedule, type ScheduleSpec, type TaskSpec } from "../jobs";
 import { NAME_RE, abilities, sizes, toYAML, workloads, type Size } from "../workloads";
+import { CommandSyntaxError, formatCommand, splitCommand } from "../shellwords";
 import { errorText } from "./Apps";
 import { RunsTable } from "./Jobs";
 import { DURATION_RE, RunNowDialog } from "./RunNowDialog";
@@ -29,7 +30,7 @@ type Form = {
   app: string;
   image: string;
   pullSecret: string;
-  command: string; // one argument per line
+  command: string; // one line, split like a shell would (see shellwords.ts)
   env: EnvRow[];
   preset: Preset;
   minute: string;
@@ -80,7 +81,7 @@ function formOf(name: string, project: string, spec: ScheduleSpec): Form {
     app: t.fromApp ?? "",
     image: t.source?.image?.ref ?? "",
     pullSecret: t.source?.image?.pullSecret ?? "",
-    command: (t.command ?? []).join("\n"),
+    command: formatCommand(t.command ?? []),
     env: (t.env ?? []).filter((e) => !e.valueFrom).map((e) => ({ name: e.name, value: e.value ?? "" })),
     ...presetOf(spec.schedule),
     timeZone: spec.timeZone ?? "",
@@ -115,7 +116,7 @@ function specOf(f: Form, base: ScheduleSpec): ScheduleSpec {
     t.source = { image: { ref: f.image.trim(), ...(f.pullSecret.trim() ? { pullSecret: f.pullSecret.trim() } : {}) } };
     delete t.fromApp;
   }
-  const command = f.command.split("\n").map((s) => s.trim()).filter(Boolean);
+  const command = splitCommand(f.command); // check() has rejected bad quoting
   if (command.length) t.command = command;
   else delete t.command;
   t.env = [...envOf(f.env).vars, ...(base.task.env ?? []).filter((e) => e.valueFrom)];
@@ -144,6 +145,12 @@ function check(f: Form, creating: boolean): Problem | undefined {
   }
   if (f.source === "app" && !f.app) return { field: "app", message: "Choose the app whose image and settings the job uses." };
   if (f.source === "image" && !f.image.trim()) return { field: "image", message: "Enter an image, like ghcr.io/acme/ops:1.4.0." };
+  try {
+    splitCommand(f.command);
+  } catch (e) {
+    if (e instanceof CommandSyntaxError) return { field: "command", message: e.message };
+    throw e;
+  }
   const env = envOf(f.env);
   if (env.bad !== undefined) return { field: `env[${env.bad}]`, message: "Use letters, digits, _, - and ., not starting with a digit." };
   if (f.preset === "hourly" && !(Number.isInteger(Number(f.minute)) && Number(f.minute) >= 0 && Number(f.minute) <= 59 && f.minute.trim() !== "")) return { field: "cron", message: "A minute from 0 to 59." };
@@ -168,6 +175,7 @@ function locate(field?: string): string | undefined {
   if (field === "spec.schedule") return "cron";
   if (field === "spec.timeZone") return "timeZone";
   if (field === "spec.task.fromApp") return "app";
+  if (field.startsWith("spec.task.command")) return "command";
   if (field.startsWith("spec.task.source")) return "image";
   const env = /^spec\.task\.env\[(\d+)\]/.exec(field);
   if (env) return `env[${env[1]}]`;
@@ -401,12 +409,10 @@ function ScheduleForm({ schedule, initial: start }: { schedule?: Schedule; initi
                       autoComplete="off" spellCheck={false} />
                   </>
                 )}
-                <div className="field full">
-                  <label htmlFor="s-cmd">Command {f.source === "app" ? "(empty: the app's)" : "(empty: the image's)"}</label>
-                  <textarea id="s-cmd" className="input mono" rows={2} value={f.command} onChange={(e) => set("command", e.target.value)} spellCheck={false}
-                    placeholder={"bin/reindex\n--full"} />
-                  <span className="hint">One argument per line.</span>
-                </div>
+                <div className="full"><Field id="s-cmd" className="mono" label={`Command ${f.source === "app" ? "(empty: the app's)" : "(empty: the image's)"}`}
+                  value={f.command} onChange={(e) => set("command", e.target.value)} spellCheck={false} autoComplete="off"
+                  placeholder="bin/reindex --full" error={err("command")}
+                  hint={`Like in a shell: echo "hi there". For pipes, && or $VARIABLES use sh -c '…'.`} /></div>
                 <div className="field full">
                   <label>Env{f.source === "app" ? " (added to the app's)" : ""}</label>
                   <EnvRows rows={f.env} onChange={(v) => set("env", v)} label="Variable" errorAt={envErr ? { index: envErr[0], message: envErr[1] } : undefined} />

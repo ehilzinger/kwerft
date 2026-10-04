@@ -148,6 +148,9 @@ type AppSpec struct {
 	// +optional
 	Resources *corev1.ResourceRequirements `json:"resources,omitempty"`
 
+	// Command replaces the image's entrypoint, one argument per item:
+	// ["sh", "-c", "echo hi"], not ["sh -c echo hi"].
+	// +kubebuilder:validation:XValidation:rule="size(self) == 0 || !self[0].matches('[[:space:]]')",message="the program (first item) contains whitespace; give each argument its own item, e.g. [\"echo\", \"hi\"], or use [\"sh\", \"-c\", \"...\"]"
 	// +optional
 	Command []string `json:"command,omitempty"`
 

@@ -31,8 +31,10 @@ type TaskSpecApplyConfiguration struct {
 	// Empty means the App's size with FromApp, else small.
 	Size      *string                  `json:"size,omitempty"`
 	Resources *v1.ResourceRequirements `json:"resources,omitempty"`
-	Command   []string                 `json:"command,omitempty"`
-	Env       []v1.EnvVar              `json:"env,omitempty"`
+	// Command replaces the image's entrypoint, one argument per item:
+	// ["sh", "-c", "echo hi"], not ["sh -c echo hi"].
+	Command []string    `json:"command,omitempty"`
+	Env     []v1.EnvVar `json:"env,omitempty"`
 	// EnvOverrides is applied last; set by "run now".
 	EnvOverrides []v1.EnvVar `json:"envOverrides,omitempty"`
 	// Egress controls outbound traffic to the internet. Empty means the
