@@ -150,11 +150,116 @@ the contract between them. Shared, already on main: `api/v1alpha1`
   client's current IP is refused; an applied change rolls back automatically
   unless the console confirms within 60 s (the browser that made the change
   confirms by calling back).
-- Hetzner Cloud Firewall sync and the Cloud API token: Phase 5. Phase 4
-  applies host rules on every node, Cloud or dedicated.
+- ~~Hetzner Cloud Firewall sync for Cloud nodes (label/selector-based
+  firewall named after the cluster) when a Cloud API token is set; dedicated
+  nodes get host rules only.~~ **Moved to Phase 5 (2026-10-04)**, together
+  with the Hetzner Cloud API token setting (write-only Secret
+  `kwerft-hcloud-token`, Settings › Hetzner Cloud API) and the Cloud
+  Firewall client and fake. `FirewallRuleStatus.cloudFirewall` stays unused
+  until then. Phase 4 ships host rules on every node, Cloud and dedicated.
 - **Never apply firewall changes to a real server during development.** The
   coordinator tries it on the test server with a console session open and a
   way back (Hetzner Cloud console) ready.
+
+### As built (W3)
+
+**On the host.** `install.sh` (stage Firewall, also in join mode) writes
+`/etc/nftables.d/kwerft.nft`: table `inet kwerft` with two empty chains
+Kwerft owns, `managed_ssh` and `managed_open`, and the base chain `input`
+(policy drop) in this order: established, loopback, ICMP, Cilium interfaces,
+pods (10.42.0.0/16), the private network, WireGuard (udp/51871), **then**
+`tcp dport 22 jump managed_ssh`, the accept for 22/80/443, and `jump
+managed_open` last. The file declares the managed chains (which does not
+flush them) and then flushes and refills only `input`, all in one `nft -f`
+transaction: re-running the installer neither opens a window without a
+firewall nor drops the console's rules (the old `nft delete table` is gone).
+At boot `nftables.service` loads the baseline with empty managed chains; the
+agent refills them. Consequences: Kwerft can narrow *public* SSH and open
+ports; it cannot touch HTTP(S), the cluster's traffic, or SSH from the
+private network, and an empty or missing managed chain is exactly the
+baseline. `install.sh --reset-firewall` deletes the table **and** writes
+`/var/lib/kwerft/firewall/paused`, which stops the agent from putting the
+console's rules back on that node (delete the file to resume); uninstall
+removes everything under `/var/lib/kwerft`.
+
+**Node agent** (`kwerft node-agent`, DaemonSet `kwerft-node-agent` in the
+chart, `firewall.agent.enabled`): host network, root with only `NET_ADMIN`
+and `SYS_CHROOT`, read-only root filesystem. The image is distroless, so it
+runs the host's own `nft` chrooted into an emptyDir that has the host's
+`/usr` and `/etc/ld.so.cache` mounted read-only (the agent adds the
+merged-/usr `lib`/`bin` links). State in hostPath `/var/lib/kwerft/firewall`.
+Kubernetes access: `get` on ConfigMap `kwerft-firewall`, `get`/`patch` on
+`kwerft-firewall-status` (resourceNames, nothing else). Why a ConfigMap and
+not a FirewallRule watch: the agent then needs no access to kwerft.dev at
+all, and the controller does validation, node scoping and the revision once;
+the agent re-validates everything anyway (only checked CIDRs, ports and rule
+names ever reach nft) and renders the script itself, so a hand-edited
+ConfigMap cannot inject nft statements.
+
+**State machine** (`internal/firewall/agent.go`, ticks every second, reads
+the desired rules every 2 s): a node's rules that take nothing away from
+its confirmed rules (`firewall.Permits`: opening ports, adding SSH sources,
+lifting the narrowing) are applied at once; anything else is applied as
+*pending* and rolled back to the confirmed rules 60 s after it was applied
+unless the desired document says it is confirmed. The timer runs in the
+agent from its own state file, so the rollback happens with the console,
+the controller or the API server down, and after an agent restart. A
+rolled-back revision is never re-applied (not even by a late confirmation);
+"Apply again" makes a new revision. nft runs `--check` first; a refused
+change is dropped and the confirmed rules stay. Status per node in
+`kwerft-firewall-status` (`in-sync`, `pending` with deadline, `rolled-back`,
+`error`, `paused`, `unprepared` = no table / older installer).
+
+**Controller** (`internal/controllers/firewall_controller.go`): creates the
+required rules (label `kwerft.dev/required`: `ssh`, `http`, `https`,
+`wireguard`, `icmp` — port 1 because the type requires one —, and
+`cluster-private` with the pod network and `--private-network`, which
+install.sh passes as `firewall.privateNetwork`), puts their fixed specs back
+if edited (only the SSH rule's sources may change) and recreates them when
+deleted. It validates the other rules (no ICMP, no range over 22/80/443 or
+udp/51871, no CIDRs with host bits, no etcd/API/kubelet port open to
+everyone), renders `desired.json` (revision = hash of the rule set, not of
+the node list, so joining nodes do not trigger confirmations) and marks a
+revision confirmed when an owner/admin confirmed it (annotation
+`kwerft.dev/firewall-confirmed` on the rule `ssh`, refused once a node rolled
+it back) or every reporting agent took it without a pending change. The
+confirmed rule set is snapshotted (`confirmed-rules.json`) for "Roll back
+now". It watches only the status ConfigMap (an informer of its own), not all
+ConfigMaps.
+
+**API** (`internal/server/api_firewall.go`, owners and admins, impersonated,
+audited): `GET /api/v1/firewall`, `POST|PUT|DELETE /api/v1/firewall/rules`,
+`POST /api/v1/firewall/confirm {revision}`, `/rollback` (restore the
+snapshot as the user), `/retry {revision}` (bump
+`kwerft.dev/firewall-attempt`). Lock-out check: narrowing SSH (and retrying
+a narrowing) is refused unless the client's address is inside the sources or
+the private network, and refused outright when the address is loopback,
+link-local or in the pod network (a proxy hid the client). The address comes
+from `clientIP` (X-Real-IP); **W4** restricts trusting that header to
+Traefik, and the check follows (one helper, `firewallAPI.clientAddr`).
+
+**UI**: Network › Server firewall — rules table (required rules marked; SSH
+shows "your IP is covered"), add/edit dialog, an SSH sources dialog with
+"Add my address", the pending banner with a countdown, "Keep these rules"
+and "Roll back now", a rolled-back banner with "Apply again"/"Discard the
+change", and a nodes table with each agent's state.
+
+**Deferred:** Cloud Firewall sync (Phase 5, above); narrowing HTTP(S) (never:
+it is the way back); custom ICMP rules; IPv6-aware warnings when the browser
+uses IPv6 but SSH goes over IPv4 (the check covers the address the console
+sees); NodePorts are answered by Cilium in eBPF before nftables, so host
+rules neither open nor close them.
+
+**Trying it on the test server** (coordinator; the full plan is in the W3
+report): with a root SSH session open and the Hetzner Cloud console (VNC)
+ready, re-run the installer with the branch's image, check `nft list table
+inet kwerft` shows the jumps and the agent pods report `in-sync`; open a
+port (applies at once), then narrow SSH to your address (pending; keep it
+after a new SSH session works), then try a range without your address — the
+console refuses; finally let a pending change expire and watch it roll
+back. Rescue: `install.sh
+--reset-firewall` from the VNC console, or `nft flush chain inet kwerft
+managed_ssh`.
 
 ## Identity (W4)
 

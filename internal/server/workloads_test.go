@@ -167,6 +167,10 @@ func runWithCluster(m *testing.M) int {
 	if err := (&controllers.NotificationChannelReconciler{Client: mgr.GetClient(), APIReader: mgr.GetAPIReader()}).SetupWithManager(mgr); err != nil {
 		return fail("notification channel reconciler", err)
 	}
+	// Server firewall (firewall_test.go): required rules and the agents' ConfigMaps.
+	if err := (&controllers.FirewallReconciler{Client: mgr.GetClient(), APIReader: mgr.GetAPIReader(), PrivateNetwork: "10.0.0.0/16"}).SetupWithManager(mgr); err != nil {
+		return fail("firewall reconciler", err)
+	}
 	go func() { _ = mgr.Start(ctx) }()
 
 	cluster = &testCluster{admin: admin, console: user.Config(), imp: imp, cache: mgr.GetCache()}

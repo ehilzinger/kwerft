@@ -1,0 +1,11 @@
+/* Network › Server firewall */
+.fw-toolbar .push { margin-left: auto; }
+.fw-table .row-acts { text-align: right; white-space: nowrap; }
+.fw-table td .pill + .pill { margin-left: 4px; }
+.fw-rules td:nth-child(4) { min-width: 220px; }
+.fw-rules td:nth-child(6), .fw-rules td:first-child { white-space: nowrap; }
+.fw-banner .form-error { flex-basis: 100%; }
+@media (max-width: 640px) {
+  .fw-toolbar .push { margin-left: 0; }
+}
+.fw-banner .btn + .btn { margin-left: 0; }

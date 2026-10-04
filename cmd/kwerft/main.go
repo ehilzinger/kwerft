@@ -40,6 +40,10 @@ import (
 )
 
 func main() {
+	// `kwerft node-agent` is the firewall DaemonSet (nodeagent.go).
+	if len(os.Args) > 1 && os.Args[1] == "node-agent" {
+		os.Exit(runNodeAgent(os.Args[2:]))
+	}
 	var (
 		listen         = flag.String("listen", ":8080", "HTTP listen address")
 		dataDir        = flag.String("data-dir", "/var/lib/kwerft", "directory for the SQLite store")
@@ -52,6 +56,7 @@ func main() {
 		clusterIssuer  = flag.String("cluster-issuer", "letsencrypt", "cert-manager ClusterIssuer for HTTPS listeners; empty disables certificates")
 		debugImage     = flag.String("debug-image", server.DefaultDebugImage, "toolbox image for debug shells into containers without a shell")
 		dev            = flag.Bool("dev", false, "local development: plain-HTTP cookies and a setup token printed to the log")
+		privateNetwork = flag.String("private-network", "", "the cluster's private network (Cloud Network or vSwitch) as a CIDR, from install.sh; shown in the required firewall rules")
 
 		buildkitImage       = flag.String("buildkit-image", controllers.DefaultBuildKitImage, "rootless BuildKit image for builds (also clones the repository)")
 		railpackImage       = flag.String("railpack-image", controllers.DefaultRailpackImage, "Railpack frontend image (railpack prepare and the BuildKit frontend)")
@@ -68,6 +73,12 @@ func main() {
 	if *platform != "cloud" && *platform != "dedicated" {
 		log.Error("invalid --platform", "value", *platform)
 		os.Exit(2)
+	}
+	if *privateNetwork != "" {
+		if p, err := netip.ParsePrefix(*privateNetwork); err != nil || p.Masked() != p {
+			log.Error("invalid --private-network: want a network like 10.0.0.0/16", "value", *privateNetwork)
+			os.Exit(2)
+		}
 	}
 	if *maxConcurrentBuilds < 1 || *buildTimeout <= 0 {
 		log.Error("invalid build settings", "max-concurrent-builds", *maxConcurrentBuilds, "build-timeout", *buildTimeout)
@@ -120,7 +131,7 @@ func main() {
 		if flows != nil {
 			traffic.Counts = flows
 		}
-		mgr, err = newManager(log, *leaderElect, *metricsListen, traffic, &controllers.DomainReconciler{
+		mgr, err = newManager(log, *leaderElect, *metricsListen, *privateNetwork, traffic, &controllers.DomainReconciler{
 			ConsoleDomain: *consoleDomain,
 			GatewayClass:  *gatewayClass,
 			ClusterIssuer: *clusterIssuer,
@@ -258,7 +269,8 @@ func cleanSessions(ctx context.Context, log *slog.Logger, st *store.Store) {
 func waitUntilReady(ctx context.Context, log *slog.Logger, mgr ctrl.Manager, ready *atomic.Bool) {
 	types := []client.Object{&kwerftv1.Project{}, &kwerftv1.App{}, &kwerftv1.Domain{},
 		&kwerftv1.Volume{}, &kwerftv1.Task{}, &kwerftv1.Schedule{}, &kwerftv1.ConsoleSettings{},
-		&kwerftv1.GitConnection{}, &kwerftv1.Build{}, &kwerftv1.AlertRule{}, &kwerftv1.NotificationChannel{}}
+		&kwerftv1.GitConnection{}, &kwerftv1.Build{}, &kwerftv1.AlertRule{}, &kwerftv1.NotificationChannel{},
+		&kwerftv1.FirewallRule{}}
 	for _, obj := range types {
 		for {
 			_, err := mgr.GetCache().GetInformer(ctx, obj, cache.BlockUntilSynced(false))
@@ -278,7 +290,7 @@ func waitUntilReady(ctx context.Context, log *slog.Logger, mgr ctrl.Manager, rea
 	}
 }
 
-func newManager(log *slog.Logger, leaderElect bool, metricsListen string, traffic *controllers.TrafficRuleReconciler, domains *controllers.DomainReconciler, builds *controllers.BuildReconciler) (ctrl.Manager, error) {
+func newManager(log *slog.Logger, leaderElect bool, metricsListen, privateNetwork string, traffic *controllers.TrafficRuleReconciler, domains *controllers.DomainReconciler, builds *controllers.BuildReconciler) (ctrl.Manager, error) {
 	ctrl.SetLogger(logr.FromSlogHandler(log.Handler()))
 	cfg, err := ctrl.GetConfig()
 	if err != nil {
@@ -353,6 +365,10 @@ func newManager(log *slog.Logger, leaderElect bool, metricsListen string, traffi
 		return nil, err
 	}
 	if err := (&controllers.NotificationChannelReconciler{Client: mgr.GetClient(), APIReader: mgr.GetAPIReader()}).SetupWithManager(mgr); err != nil {
+		return nil, err
+	}
+	// Server firewall (Phase 4): FirewallRules → the node agents' desired rules.
+	if err := (&controllers.FirewallReconciler{Client: mgr.GetClient(), APIReader: mgr.GetAPIReader(), PrivateNetwork: privateNetwork}).SetupWithManager(mgr); err != nil {
 		return nil, err
 	}
 	return mgr, nil

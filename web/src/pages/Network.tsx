@@ -7,6 +7,7 @@ import { words } from "../workloads";
 import { errorText } from "./Apps";
 import { TrafficRules } from "./NetworkTraffic";
 import { settingsApi, type CertificateState } from "../settings";
+import { ServerFirewall } from "./NetworkFirewall";
 import "../styles/workloads.css";
 import "../styles/jobs.css";
 
@@ -34,12 +35,7 @@ export function Network() {
       </div>
       <div className="tabpanel" role="tabpanel" id={`panel-${tab}`} aria-labelledby={`tab-${tab}`}>
         {tab === "rules" && <TrafficRules />}
-        {tab === "firewall" && (
-          <div className="empty">
-            <h2>The server firewall arrives in Phase 4</h2>
-            <p>Edit the host firewall from here, mirrored to the Hetzner Cloud Firewall, with lock-out protection. Until then the installer's baseline applies: SSH, HTTP and HTTPS open; cluster traffic only on the private network.</p>
-          </div>
-        )}
+        {tab === "firewall" && <ServerFirewall />}
         {tab === "domains" && <Domains q={domains} />}
       </div>
     </section>

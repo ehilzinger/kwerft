@@ -230,7 +230,7 @@ Work split and contracts: `docs/phase4.md`.
 - [x] Types: `Project.spec.access`/`members`, `TrafficRule`, `FirewallRule`
 - [ ] W1 Project access: per-project RoleBindings (Team | Members), project scope in every list and search, members UI, isolation test suite, admin 2FA reset, "require 2FA"
 - [x] W2 Traffic rules: TrafficRule → CiliumNetworkPolicy, App/Project policies on Cilium (old NetworkPolicies removed on upgrade), Hubble counts and drops from the relay, "create allow rule", project isolation toggle, plain HTTP only from the Gateway's namespace
-- [ ] W3 Server firewall: FirewallRules through a node agent with lock-out protection and auto-rollback
+- [x] W3 Server firewall: FirewallRules through a node agent (`kwerft node-agent` DaemonSet filling two chains of the installer's nftables table) with lock-out protection and auto-rollback, required rules, Network › Server firewall (try on the test server: `docs/phase4.md` › As built). Hetzner Cloud Firewall sync and the Cloud API token setting moved to Phase 5 (2026-10-04)
 - [x] W4 Identity: OIDC SSO (Google, Entra, Keycloak, generic; fake-issuer tests), API tokens (`kwft_`, hashed, role cap, project scope, expiry), scoped kubeconfig through the `/k8s/` proxy, X-Real-IP only from node addresses, data-key rotation (Settings or by hand). Notes in `docs/phase4.md` › As built
 - [ ] Exit criterion: the isolation suite proves a developer in one project cannot read another project's pods, logs, secrets, metrics, alerts, builds or traffic
 - Moved to Phase 5 (2026-10-04): e2e install runs on Hetzner Cloud, Hetzner Cloud Firewall sync and the Cloud API token setting
@@ -243,7 +243,7 @@ Work split and contracts: `docs/phase3.md`.
 - [x] W1 Metrics: Kwerft's own metrics, recording rules, Traefik metrics, metrics API confined to projects, overview and per-app charts (recording rules and confinement checked against VictoriaMetrics v1.153 locally; on a server: with the exit criterion)
 - [x] W2 Logs: log search over VictoriaLogs confined to projects, history in the App Logs tab, Task/Build logs after their pod is gone
 - [x] W3 Alerting: AlertRule → VMRule, channels (Slack, email, webhook, ntfy) → Alertmanager, default rules, alerts and silences API (one VMAlertmanagerConfig per channel; install.sh turns off the operator's namespace matcher; ntfy through its own templating, no adapter; test sends go straight to the destination)
-- [ ] W4 Alerting UI: alerts, rules, channels; "needs attention" on Overview
+- [x] W4 Alerting UI: alerts, rules, channels; "needs attention" on Overview
 - [x] Exit criterion on the test server (2026-10-04, ntfy.sh instead of Slack — same vmalert → Alertmanager path, different receiver): a crash-looping app deployed at 17:43:20 alerted on the phone at 17:44:17 (57 s), linking to its Logs tab. Needed: crash loops also fire on two restarts within 3 minutes, since Kubernetes reports CrashLoopBackOff only once the back-off is long (first try: ~5 min). Slack itself is still to be tried.
 
 ### Phase 2 checklist

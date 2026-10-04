@@ -1,0 +1,122 @@
+{{- if .Values.firewall.agent.enabled }}
+# The node agent applies FirewallRules on every node (`kwerft node-agent`,
+# internal/firewall): it fills the two chains of the installer's nftables
+# table "inet kwerft" that Kwerft manages, and rolls a change back by itself
+# unless it is confirmed in the console within 60 s. It needs the host's
+# network namespace and CAP_NET_ADMIN, runs the host's own nft (read-only
+# /usr, chrooted: CAP_SYS_CHROOT), keeps its state in
+# /var/lib/kwerft/firewall, and may only read the desired rules and patch
+# its status (two ConfigMaps).
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: kwerft-node-agent
+  namespace: {{ .Release.Namespace }}
+  labels: {{- include "kwerft.labels" . | nindent 4 }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: kwerft-node-agent
+  namespace: {{ .Release.Namespace }}
+  labels: {{- include "kwerft.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: [configmaps]
+    resourceNames: [kwerft-firewall]
+    verbs: [get]
+  - apiGroups: [""]
+    resources: [configmaps]
+    resourceNames: [kwerft-firewall-status]
+    verbs: [get, patch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: kwerft-node-agent
+  namespace: {{ .Release.Namespace }}
+  labels: {{- include "kwerft.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: kwerft-node-agent
+subjects:
+  - kind: ServiceAccount
+    name: kwerft-node-agent
+    namespace: {{ .Release.Namespace }}
+---
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: kwerft-node-agent
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "kwerft.labels" . | nindent 4 }}
+    app.kubernetes.io/component: node-agent
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: kwerft-node-agent
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  updateStrategy:
+    type: RollingUpdate
+    rollingUpdate: { maxUnavailable: 1 }
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: kwerft-node-agent
+        app.kubernetes.io/instance: {{ .Release.Name }}
+        app.kubernetes.io/component: node-agent
+    spec:
+      serviceAccountName: kwerft-node-agent
+      hostNetwork: true
+      dnsPolicy: ClusterFirstWithHostNet
+      # Every node, including tainted control-plane nodes.
+      tolerations:
+        - operator: Exists
+      terminationGracePeriodSeconds: 10
+      containers:
+        - name: agent
+          image: {{ include "kwerft.image" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args: [node-agent, --host-root=/host, --state-dir=/var/lib/kwerft/firewall]
+          env:
+            - name: NODE_NAME
+              valueFrom: { fieldRef: { fieldPath: spec.nodeName } }
+            - name: POD_NAMESPACE
+              valueFrom: { fieldRef: { fieldPath: metadata.namespace } }
+          resources: {{- toYaml .Values.firewall.agent.resources | nindent 12 }}
+          securityContext:
+            # Root, but only these capabilities: nftables needs CAP_NET_ADMIN
+            # in the host's network namespace, chroot CAP_SYS_CHROOT.
+            runAsUser: 0
+            runAsNonRoot: false
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+              add: [NET_ADMIN, SYS_CHROOT]
+            seccompProfile: { type: RuntimeDefault }
+          volumeMounts:
+            # The chroot nft runs in: an empty directory with the host's /usr
+            # and its loader cache, read-only (the agent adds the lib/bin links).
+            - name: chroot
+              mountPath: /host
+            - name: host-usr
+              mountPath: /host/usr
+              readOnly: true
+            - name: host-ld-cache
+              mountPath: /host/etc/ld.so.cache
+              readOnly: true
+            - name: state
+              mountPath: /var/lib/kwerft/firewall
+      volumes:
+        - name: chroot
+          emptyDir: { sizeLimit: 1Mi }
+        - name: host-usr
+          hostPath: { path: /usr, type: Directory }
+        - name: host-ld-cache
+          hostPath: { path: /etc/ld.so.cache, type: File }
+        - name: state
+          hostPath: { path: /var/lib/kwerft/firewall, type: DirectoryOrCreate }
+{{- end }}

@@ -129,6 +129,9 @@ type Config struct {
 	// api_alerts.go. Production uses the in-cluster services
 	// (internal/observability).
 	alertsHook func(*alertsAPI)
+	// firewallHook lets tests set the client address the lock-out check
+	// sees; see api_firewall.go.
+	firewallHook func(*firewallAPI)
 }
 
 // New returns an http.Server ready to ListenAndServe.

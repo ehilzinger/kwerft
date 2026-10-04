@@ -67,6 +67,7 @@ REGISTRIES_FILE="/etc/rancher/k3s/registries.yaml"   # not readonly so tests can
 BUILD_APPARMOR_FILE="/etc/apparmor.d/kwerft-buildkit"  # likewise
 DOMAIN_FILE="$STATE_DIR/domain"           # not readonly so tests can point it elsewhere
 DNS_TOKEN_SUM_FILE="$STATE_DIR/dns-token.sha256"  # likewise; tells a changed DNS token from the same one
+FIREWALL_STATE_DIR="$STATE_DIR/firewall"  # the node agent's state (internal/firewall); likewise
 
 # Options (flags override KWERFT_* environment variables).
 DOMAIN="${KWERFT_DOMAIN:-}"
@@ -152,7 +153,8 @@ Development:
                          hack/dev-server.sh uses both to test unreleased builds
 
 Maintenance:
-  --reset-firewall       Remove Kwerft's host firewall rules (rescue)
+  --reset-firewall       Remove Kwerft's host firewall and pause the console's
+                         firewall rules on this server (rescue)
   --uninstall            Remove Kwerft and k3s from this server
 
 General:
@@ -480,36 +482,63 @@ EOF
 # ---------------------------------------------------------------------------
 # Stage: host firewall baseline
 # Separate nftables table so we never clobber the operator's own rules.
-# Cilium host policies take over fine-grained control once Kwerft runs.
+# The console's node agent (Network → Server firewall) only ever fills the
+# two chains managed_ssh and managed_open, which the base chain jumps to:
+# Kwerft can narrow public SSH and open more ports, never close HTTP(S), the
+# cluster's traffic or SSH from the private network. Empty chains (or a
+# missing table) mean exactly this baseline.
 # ---------------------------------------------------------------------------
-stage_firewall() {
-  mkdir -p /etc/nftables.d
+# firewall_ruleset prints /etc/nftables.d/kwerft.nft. Loading it replaces the
+# base chain in one transaction and keeps what the node agent put in the
+# managed chains (declaring a chain does not flush it), so re-running the
+# installer never opens a window without a firewall.
+firewall_ruleset() {
   local priv_rule="# no private network detected"
   [[ -n "$PRIVATE_CIDR" ]] && priv_rule="ip saddr $(network_of "$PRIVATE_CIDR") accept"
-
-  cat >/etc/nftables.d/kwerft.nft <<EOF
+  cat <<EOF
 # Managed by Kwerft — edit rules in the console (Network → Server firewall).
+# Rescue: install.sh --reset-firewall (removes this table and pauses the
+# console's rules on this node).
 table inet kwerft {
+  # Filled by Kwerft's node agent: narrowed public SSH (sources accept, rest drop).
+  chain managed_ssh {
+  }
+  # Filled by Kwerft's node agent: ports opened in the console.
+  chain managed_open {
+  }
   chain input {
     type filter hook input priority 0; policy drop;
+  }
+}
+flush chain inet kwerft input
+table inet kwerft {
+  chain input {
     ct state established,related accept
     iif lo accept
     meta l4proto { icmp, ipv6-icmp } accept
-    tcp dport { 22, 80, 443 } accept
-    udp dport $WG_PORT accept
     iifname { "cilium_*", "lxc*" } accept
     ip saddr $POD_CIDR accept
     $priv_rule
+    udp dport $WG_PORT accept
+    tcp dport 22 jump managed_ssh
+    tcp dport { 22, 80, 443 } accept
+    jump managed_open
   }
 }
 EOF
+}
+
+stage_firewall() {
+  mkdir -p /etc/nftables.d
+  firewall_ruleset >/etc/nftables.d/kwerft.nft
   if ! grep -q 'include "/etc/nftables.d/\*.nft"' /etc/nftables.conf 2>/dev/null; then
     printf '\ninclude "/etc/nftables.d/*.nft"\n' >>/etc/nftables.conf
   fi
-  nft delete table inet kwerft 2>/dev/null || true
   nft -f /etc/nftables.d/kwerft.nft
   systemctl enable nftables >>"$LOG_FILE" 2>&1
-  echo "nftables: 22, 80, 443 public$([[ -n "$PRIVATE_CIDR" ]] && echo " · cluster ports on $PRIVATE_IFACE only")"
+  local paused=""
+  [[ -e "$FIREWALL_STATE_DIR/paused" ]] && paused=" · console rules paused (--reset-firewall)"
+  echo "nftables: 22, 80, 443 public$([[ -n "$PRIVATE_CIDR" ]] && echo " · cluster ports on $PRIVATE_IFACE only")$paused"
 }
 
 # 10.0.1.3/16 -> 10.0.0.0/16 (nft accepts host bits only with a warning on some versions)
@@ -1133,6 +1162,9 @@ stage_kwerft() {
   else
     image_args=(--set image.tag="$KWERFT_VERSION")
   fi
+  # Shown in the required firewall rule cluster-private (Network → Server firewall).
+  local firewall_args=(--set firewall.privateNetwork="")
+  [[ -n "$PRIVATE_CIDR" ]] && firewall_args=(--set firewall.privateNetwork="$(network_of "$PRIVATE_CIDR")")
   # Helm installs a chart's CRDs only on first install, never on upgrade, so
   # apply them on every run (server-side; Helm no longer touches them).
   helmk show crds "$ref" ${version_args[@]+"${version_args[@]}"} 2>>"$LOG_FILE" \
@@ -1150,7 +1182,7 @@ stage_kwerft() {
     --set acme.email="$ACME_EMAIL" \
     --set platform="$PLATFORM" \
     --set hubble.enabled="$(hubble_enabled)" \
-    "${image_args[@]}" \
+    "${image_args[@]}" "${firewall_args[@]}" \
     --set registry.image.tag="$ZOT_VERSION" \
     --set registry.clusterIP="$REGISTRY_CLUSTER_IP" \
     --set builds.buildkitImage="docker.io/moby/buildkit:${BUILDKIT_VERSION}-rootless" \
@@ -1376,9 +1408,20 @@ stage_join() {
 # ---------------------------------------------------------------------------
 do_reset_firewall() {
   [[ $EUID -eq 0 ]] || die $EXIT_PREFLIGHT "Run as root (sudo)."
+  reset_firewall
+  say "Kwerft host firewall removed, and the console's firewall rules are paused on this node."
+  say "Run the installer again to restore the baseline. To let the console manage this node's"
+  say "firewall again, delete $FIREWALL_STATE_DIR/paused."
+}
+
+# reset_firewall removes Kwerft's table and pauses the node agent here: it
+# must not put back console rules (say, an SSH narrowing that locked the
+# operator out) once this rescue ran.
+reset_firewall() {
   nft delete table inet kwerft 2>/dev/null || true
   rm -f /etc/nftables.d/kwerft.nft "$STATE_DIR/stages/firewall.done"
-  say "Kwerft host firewall removed. Run the installer again to restore the baseline."
+  mkdir -p "$FIREWALL_STATE_DIR"
+  : >"$FIREWALL_STATE_DIR/paused"
 }
 
 do_uninstall() {
