@@ -167,6 +167,7 @@ Exit codes: 0 ok · 2 usage · 10 preflight · 20 network/DNS · 30 Kubernetes �
 - **Identity:** the API reaches Kubernetes as user `kwerft:<email>` in groups `kwerft:role:<role>` and `system:authenticated`; the console's service account may impersonate only those groups (never `system:masters`). Writes and single-object reads go through impersonation; only the polled list views (Projects, Apps, which omit env) read the informer cache — per-project roles in Phase 4 must filter them.
 - **Roles (single team, cluster-wide for now):** owner and admin manage everything in kwerft.dev; developer writes Apps, Domains, Tasks, Schedules and Volumes and reads the rest; viewer reads. No role reaches Secrets through the API. Per-project RoleBindings come in Phase 4.
 - **Sign-in:** argon2id passwords; optional TOTP, passkeys (also passwordless) and single-use recovery codes, which exist only while a TOTP app or passkey does. Adding a factor needs the password again. Sessions are `__Host-` HttpOnly cookies, 7 days idle / 30 days absolute; same-origin check on every write; rate limits on setup tokens, passwords and second factors.
+- **Pods, logs, shells:** pods, logs and pod metrics are readable by every role; exec is for owner, admin and developer. Both are bound **per project namespace** by the Project reconciler (`kwerft:pods-read`, `kwerft:pods-exec`), never cluster-wide, so no role reaches `kube-system` or `kwerft-system` pods. Shell WebSockets require an Origin naming this console and a valid session before the upgrade; 15 min idle, 1 h maximum, 3 shells per user. Sessions are recorded as asciinema v2 (output only — keystrokes are not recorded because unechoed input is mostly passwords), 0600 on the data volume, kept 90 days, 64 MiB per session; owners and admins download them, audited. Logs stream over SSE with caps (16 KiB lines, 200 lines/s, 15 min idle, 2 h maximum). Verified on the test server (2026-10-04).
 - **Secrets at rest:** TOTP seeds in SQLite are encrypted (AES-GCM) with `KWERFT_DATA_KEY` from the Secret `kwerft-data-key`, which the chart creates once and keeps across upgrades and uninstalls. Back it up together with the database.
 - Kubernetes API on the private network only; external `kubectl` through Kwerft's proxy with short-lived scoped kubeconfigs.
 - k3s secrets encryption; developers write but cannot read secrets unless granted.
@@ -195,9 +196,10 @@ Exit codes: 0 ok · 2 usage · 10 preflight · 20 network/DNS · 30 Kubernetes �
 - [x] Workload API acting as the user; Kubernetes roles for owner/admin/developer/viewer
 - [x] Apps UI: list, detail, settings, deploy wizard, projects, restart, scale, rollback
 - [x] Volume, Task and Schedule reconcilers; `kwerft-batch` PriorityClass
-- [ ] Jobs API and UI (Tasks, Schedules, Volumes; run now from an App or Schedule)
-- [ ] Logs (live), shell (recorded), replicas table in App detail
-- [ ] Domain endpoints in the API
+- [x] Jobs API and UI (Tasks, Schedules, Volumes; run now from an App or Schedule; cancel keeps the record)
+- [x] Logs (live, SSE), shell (recorded), replicas table in App detail; Task logs in Task detail
+- [x] Domains: read-only list in the API and the Network → Domains & TLS tab
+- [ ] Recordings list on the Access page (API exists); shells for Tasks
 - [ ] Not yet: admin reset of a member's second factors, data-key rotation, a per-org "require 2FA" setting (Phase 4); shared storage for pending logins before running more than one replica
 
 ### Phase 0 checklist
