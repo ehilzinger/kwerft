@@ -52,8 +52,18 @@ mention them in the commit message.
 - Registry: zot, Service `kwerft-registry` in `kwerft-system`, port 5000,
   plain HTTP. Image names use `registry.kwerft.internal:5000` (k3s
   `/etc/rancher/k3s/registries.yaml` mirror on every node, written by the
-  installer and join script). Ingress to zot only from `kwerft-builds` pods
-  and the nodes.
+  installer and join script). Ingress to zot only from `kwerft-builds` pods,
+  the console's own pod and the nodes. The Service has the fixed ClusterIP
+  `builds.RegistryClusterIP` (10.43.0.50), which the nodes' mirror points
+  at; cluster DNS does not know `registry.kwerft.internal`, so build pods map
+  it with `hostAliases` to that address (BuildKit pushes to the name in the
+  image reference; its registry config needs `http = true` for it). zot keeps
+  `buildcache`, the newest 20 tags and tags pulled within 90 days per
+  repository.
+- Build namespace (chart): Pod Security `privileged`, a LimitRange (default
+  request 500m / 1Gi, limit 3Gi, max 6Gi per container) and a ResourceQuota;
+  a NetworkPolicy denies all ingress and allows egress to DNS, zot (5000)
+  and the internet only.
 - Labels: Build Jobs and pods carry `kwerft.dev/build=<build name>` and
   `kwerft.dev/project=<namespace>`.
 - Controller flags (W2 implements, W1 passes from the chart's values, pinned

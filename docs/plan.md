@@ -22,6 +22,8 @@ the same plan in long form.
 | DNS records (2026-10-04) | **Kwerft keeps A/AAAA records for the console hostname and `*.<appsDomain>` only (Settings switch, `--config dns.records`)** | One wildcard record covers every app, whatever the certificate method, so app deploys never write DNS and developers cannot place records in the zone. RRsets Kwerft creates carry `kwerft.dev/managed-by` and `kwerft.dev/instance` (kube-system UID) labels; records without them are never changed (reported as conflicts), a reinstalled server takes over the old installation's records, and the old one yields. Turning it off leaves the records. Per-Domain records for custom hostnames: later, opt-in. |
 | DNS-01 provider (2026-10-04) | **Hetzner DNS through the Cloud API, official `hetzner/cert-manager-webhook-hetzner` (0.9.0)** | The old DNS Console API (dns.hetzner.com) was shut down in May 2026; zones now live in the Cloud API and use a Cloud project token. The webhook's chart may read every Secret; the installer narrows it to the one token Secret. |
 | Test servers (2026-10-04) | **Hetzner Cloud now, a dedicated server later** | The e2e harness runs on Cloud servers with a test-project API token stored as a GitHub secret; the dedicated-server run follows when one is available. Deferred to Phase 4 (2026-10-04): until then releases are checked by hand on the test server. |
+| Build registry (2026-10-04) | **zot (`zot-minimal`, no extensions) in the Kwerft chart; nodes pull `registry.kwerft.internal:5000` through a k3s mirror to a fixed ClusterIP (`10.43.0.50`)** | One Deployment, PVC, Service and policy are simpler than a second release, and zot upgrades with Kwerft. containerd on the host cannot resolve cluster DNS, so `registries.yaml` names the ClusterIP, which Cilium's socket load balancer serves to host processes on every node. Not a NodePort: Cilium answers NodePorts in eBPF before the nftables host firewall, which would publish an unauthenticated registry. Plain HTTP inside the cluster (WireGuard between nodes); a CiliumNetworkPolicy admits only build pods, the console and the nodes (`host`, `remote-node`), which a Kubernetes NetworkPolicy cannot name. Retention per App repository: `buildcache`, the newest 20 tags and every tag pulled within 90 days. The installer restarts k3s only when `registries.yaml` changed and never edits a file it did not write. |
+| Build tools (2026-10-04) | **Rootless BuildKit (`moby/buildkit:<v>-rootless`) and the Railpack frontend image (`ghcr.io/railwayapp/railpack-frontend`, which carries the `railpack` CLI at `/railpack`)**, pinned in `install.sh` | Builds run in `kwerft-builds`, the only namespace with Pod Security `privileged` (rootless BuildKit needs seccomp and AppArmor `Unconfined`); a LimitRange and ResourceQuota cap them, and a NetworkPolicy allows DNS, zot and the internet (no private ranges, no metadata service, nothing in the cluster). |
 
 ## Principles
 
@@ -79,7 +81,7 @@ Memory, measured 2026-10-04 on an idle Hetzner Cloud server (8 GB, Ubuntu
 | VictoriaMetrics stack, VictoriaLogs, Vector, node-exporter | 550 MB | 625 MB |
 | CoreDNS, metrics-server, local-path | — | 45 MB |
 | Kwerft | 150 MB | 13 MB |
-| zot registry (Phase 2) | 60 MB | — |
+| zot registry (Phase 2) | 60 MB | 55–60 MB RSS (`zot-minimal` v2.1.21 measured locally, idle and after pushes; limit 512 MiB) |
 | **Platform total** | **≈ 1.9 GB** | **≈ 2.4 GB** (host: 3.0 GB used incl. OS) |
 
 Plus 1–2 GB per running build. Recommended server: 8 GB. k3s dominates;
@@ -94,6 +96,7 @@ Stages, each idempotent and recorded in `/var/lib/kwerft/stages/`:
 2. **System** — packages, kernel modules, sysctls, swap off, chrony, unattended-upgrades, optional SSH hardening.
 3. **Firewall** — own `inet kwerft` nftables table: 22/80/443 public, cluster traffic only from the private network and pods.
 4. **Kubernetes** — k3s server from `/etc/rancher/k3s/config.yaml` (no flannel, no kube-proxy, no bundled Traefik/servicelb).
+   **Registry mirror** — `/etc/rancher/k3s/registries.yaml` maps `registry.kwerft.internal:5000` to zot's ClusterIP; k3s restarts only when the file changed (also on joined nodes).
 5. **Helm**, **Network** (Cilium), **Ingress & TLS** (Gateway API CRDs, cert-manager, Traefik), **Observability**.
 6. **Kwerft** — Helm chart from the checkout or the OCI registry; `--config` becomes the `kwerft-bootstrap` Secret.
 7. **Handoff** — DNS check, single-use setup token (hash only in the cluster), summary.
@@ -222,7 +225,7 @@ Exit codes: 0 ok · 2 usage · 10 preflight · 20 network/DNS · 30 Kubernetes �
 Work split and contracts: `docs/phase2.md`.
 
 - [x] Types: `GitConnection`, `Build` source snapshot and numbering, revisions record build and commit; `internal/builds`
-- [ ] W1 Registry & infrastructure: zot, k3s registry mirror, `kwerft-builds` namespace and policies, installer/join, pins
+- [x] W1 Registry & infrastructure: zot, k3s registry mirror, `kwerft-builds` namespace and policies, installer/join, pins (on a server: with the exit criterion)
 - [ ] W2 Build engine: Build reconciler (BuildKit rootless, Dockerfile, Railpack, cache in zot, queue, cancel, timeout, retention); Git apps deploy their latest build
 - [ ] W3 Git connections (GitHub token/App, GitLab, Gitea, generic, deploy keys), webhooks, "Build now", commit checks
 - [ ] W4 Console: deploy wizard and settings for Git apps, Builds tab with live logs, Git connections page
@@ -311,6 +314,7 @@ scripts: `hack/spike-mac/`.
 - **Single node is a single point of failure** — say so in the UI; etcd snapshots to Object Storage from day one.
 - **Overhead on small servers** — measured at ≈ 2.4 GB; hold it in CI; `--lite` profile for 4 GB servers.
 - **Builds and Tasks compete with apps for memory** — Jobs with limits, one build at a time on small nodes, Tasks in the lower `kwerft-batch` priority class, optional build node pool.
+- **Registry retention vs. long-running revisions** — zot deletes a tag that is neither among the newest 20 nor pulled for 90 days, even if a pod still runs it (it was pulled when the pod started); a rescheduled pod then cannot pull. Values are in the chart (`registry.retention`); before the beta, tag images that a revision uses (e.g. a kept `rev-*` pattern) or have the App reconciler re-pull them.
 - **Cloud vs. dedicated asymmetry** — Robot cannot create servers on demand; vSwitch ↔ Cloud Network coupling is per network zone; otherwise WireGuard over public IPs (requires the console to open node ports per joiner — Phase 5).
 - **Firewall lock-out** — caller-IP check, auto-revert timer, `install.sh --reset-firewall`.
 - **Apple `container` is young** — `container k8s` is experimental and cannot survive a restart, `container machine run` loses argument quoting, and the XPC API is not a public contract; pin the supported `container` version in the app, drive it only through the CLI's JSON output, and keep desired state outside the local cluster.
