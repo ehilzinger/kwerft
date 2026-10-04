@@ -40,3 +40,64 @@ securityContext:
   allowPrivilegeEscalation: false
   readOnlyRootFilesystem: true
   capabilities: { drop: [ALL] }
+
+# In-cluster registry (zot) for images built from Git. Images are named
+# registry.kwerft.internal:5000/<project>/<app>; every node's containerd
+# reaches that name through the k3s mirror the installer writes to
+# /etc/rancher/k3s/registries.yaml, which points at registry.clusterIP.
+# install.sh sets the image tag and the address from the pins at its top.
+registry:
+  enabled: true
+  image:
+    repository: ghcr.io/project-zot/zot-minimal   # no extensions: no UI, search or sync
+    tag: v2.1.21
+    pullPolicy: IfNotPresent
+  # Fixed, because a node's containerd cannot resolve cluster DNS names; the
+  # host reaches ClusterIPs through Cilium's socket load balancer. Must be
+  # inside the service CIDR (10.43.0.0/16) and match REGISTRY_CLUSTER_IP in
+  # install.sh. Cannot change after the first install (ClusterIPs are fixed).
+  clusterIP: 10.43.0.50
+  storage:
+    size: 20Gi
+    storageClass: ""           # empty = cluster default (local-path)
+  # Garbage collection removes unreferenced blobs `gcDelay` after they were
+  # last used; retention removes tags. Per repository (one per App) zot keeps
+  # the BuildKit layer cache (`buildcache`), the `keep-…` tags the console
+  # sets on images App revisions run, the newest `keepNewest` tags and
+  # every tag pulled within `keepPulledWithin` (a node starting a pod pulls
+  # it). Untagged manifests go after `untaggedDelay`.
+  gc:
+    delay: 2h                  # longer than a build may run (builds.timeout)
+    interval: 6h
+  retention:
+    keepNewest: 20
+    keepPulledWithin: 2160h    # 90 days
+    untaggedDelay: 24h
+  resources:
+    requests: { cpu: 20m, memory: 48Mi }
+    limits: { memory: 512Mi }
+
+# Builds from Git run as Jobs in the namespace kwerft-builds (rootless
+# BuildKit, so Pod Security "privileged" there and only there). The images
+# and limits below become the controller's build flags.
+builds:
+  enabled: true
+  buildkitImage: docker.io/moby/buildkit:v0.33.1-rootless
+  railpackImage: ghcr.io/railwayapp/railpack-frontend:v0.40.1   # contains the railpack CLI at /railpack
+  maxConcurrent: 1             # --max-concurrent-builds
+  timeout: 30m                 # --build-timeout
+  # AppArmor profile for build containers, loaded on every node by install.sh
+  # (allows the user namespaces rootless BuildKit needs). Empty: unconfined,
+  # which Ubuntu 24.04+ refuses unless kernel.apparmor_restrict_unprivileged_userns=0.
+  appArmorProfile: kwerft-buildkit
+  # Defaults for build containers that set no resources of their own, and
+  # the most all builds together may claim.
+  limitRange:
+    defaultRequest: { cpu: 500m, memory: 1Gi }
+    default: { memory: 3Gi }
+    max: { memory: 6Gi }
+  quota:
+    pods: "10"
+    requests.cpu: "6"
+    requests.memory: 8Gi
+    limits.memory: 16Gi

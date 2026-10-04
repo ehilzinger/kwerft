@@ -70,6 +70,7 @@ type buildRun struct {
 	cache         string // builds.CacheRef
 	buildkitImage string
 	railpackImage string
+	appArmor      string // Localhost profile for the build container; "" = unconfined
 	registryIP    string
 	timeout       time.Duration
 
@@ -305,11 +306,17 @@ func (r *buildRun) prepareContainer() *corev1ac.ContainerApplyConfiguration {
 		)
 }
 
-// buildContainer runs rootless BuildKit. It needs seccomp and AppArmor
-// unconfined (to create user namespaces and mounts) and may escalate
-// privileges (newuidmap is setuid); kwerft-builds is the only namespace that
-// allows this. The workspace is read-only here.
+// buildContainer runs rootless BuildKit. It needs seccomp unconfined and an
+// AppArmor profile that allows user namespaces (the installer's
+// "kwerft-buildkit": unconfined plus userns, since Ubuntu restricts user
+// namespaces for unconfined processes), and may escalate privileges
+// (newuidmap is setuid); kwerft-builds is the only namespace that allows
+// this. The workspace is read-only here.
 func (r *buildRun) buildContainer() *corev1ac.ContainerApplyConfiguration {
+	apparmor := corev1ac.AppArmorProfile().WithType(corev1.AppArmorProfileTypeUnconfined)
+	if r.appArmor != "" {
+		apparmor = corev1ac.AppArmorProfile().WithType(corev1.AppArmorProfileTypeLocalhost).WithLocalhostProfile(r.appArmor)
+	}
 	return corev1ac.Container().
 		WithName(builds.ContainerBuild).
 		WithImage(r.buildkitImage).
@@ -329,7 +336,7 @@ func (r *buildRun) buildContainer() *corev1ac.ContainerApplyConfiguration {
 		WithResources(requirements(buildCPURequest, buildMemoryRequest, buildCPULimit, buildMemoryLimit)).
 		WithSecurityContext(corev1ac.SecurityContext().
 			WithSeccompProfile(corev1ac.SeccompProfile().WithType(corev1.SeccompProfileTypeUnconfined)).
-			WithAppArmorProfile(corev1ac.AppArmorProfile().WithType(corev1.AppArmorProfileTypeUnconfined))).
+			WithAppArmorProfile(apparmor)).
 		WithTerminationMessagePolicy(corev1.TerminationMessageFallbackToLogsOnError).
 		WithVolumeMounts(
 			corev1ac.VolumeMount().WithName("workspace").WithMountPath("/workspace").WithReadOnly(true),

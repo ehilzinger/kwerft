@@ -50,6 +50,7 @@ func main() {
 		railpackImage       = flag.String("railpack-image", controllers.DefaultRailpackImage, "Railpack frontend image (railpack prepare and the BuildKit frontend)")
 		maxConcurrentBuilds = flag.Int("max-concurrent-builds", 1, "builds running at once in the cluster; more wait in a queue")
 		buildTimeout        = flag.Duration("build-timeout", controllers.DefaultBuildTimeout, "a build running longer fails")
+		buildAppArmor       = flag.String("build-apparmor-profile", "kwerft-buildkit", "AppArmor profile (loaded on every node) build containers run under; empty runs them unconfined")
 	)
 	flag.Parse()
 
@@ -98,6 +99,7 @@ func main() {
 			RailpackImage:       *railpackImage,
 			MaxConcurrentBuilds: *maxConcurrentBuilds,
 			Timeout:             *buildTimeout,
+			AppArmorProfile:     *buildAppArmor,
 		})
 		if err != nil {
 			log.Error("cannot start controllers", "err", err)

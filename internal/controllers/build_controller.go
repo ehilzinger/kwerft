@@ -54,8 +54,12 @@ type BuildReconciler struct {
 	// not cache Secrets.
 	APIReader client.Reader
 
-	BuildKitImage       string
-	RailpackImage       string
+	BuildKitImage string
+	RailpackImage string
+	// AppArmorProfile is the Localhost profile build containers run under
+	// (install.sh loads "kwerft-buildkit" on every node); empty runs them
+	// unconfined, which Ubuntu's user-namespace restriction refuses.
+	AppArmorProfile     string
 	MaxConcurrentBuilds int
 	Timeout             time.Duration
 
@@ -371,6 +375,7 @@ func (r *BuildReconciler) prepare(ctx context.Context, b *kwerftv1.Build) (*buil
 		cache:         builds.CacheRef(b.Namespace, b.Spec.App),
 		buildkitImage: orDefault(r.BuildKitImage, DefaultBuildKitImage),
 		railpackImage: orDefault(r.RailpackImage, DefaultRailpackImage),
+		appArmor:      r.AppArmorProfile,
 		timeout:       r.timeout(),
 		contextDir:    cleanRepoPath(src.Path),
 		dockerfile:    cleanRepoPath(orDefault(src.Dockerfile, "Dockerfile")),

@@ -1,0 +1,82 @@
+{{- if .Values.builds.enabled }}
+{{- $b := .Values.builds }}
+# Builds from Git run here as Jobs (internal/builds.Namespace), which also
+# holds the GitConnection credentials. Rootless BuildKit needs seccomp and
+# AppArmor "Unconfined", which only the "privileged" Pod Security level
+# allows — on this namespace and nowhere else; the controller writes the
+# build pods (non-root, no privilege escalation). Not a system namespace
+# (no kwerft.dev/system label): build pods may reach no app.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: kwerft-builds
+  labels:
+    {{- include "kwerft.labels" . | nindent 4 }}
+    app.kubernetes.io/component: builds
+    pod-security.kubernetes.io/enforce: privileged
+    pod-security.kubernetes.io/enforce-version: latest
+---
+# Defaults for containers that set no resources (a forgotten limit must not
+# let one build take the node), and a ceiling per container.
+apiVersion: v1
+kind: LimitRange
+metadata:
+  name: builds
+  namespace: kwerft-builds
+  labels: {{- include "kwerft.labels" . | nindent 4 }}
+spec:
+  limits:
+    - type: Container
+      defaultRequest: {{- toYaml $b.limitRange.defaultRequest | nindent 8 }}
+      default: {{- toYaml $b.limitRange.default | nindent 8 }}
+      max: {{- toYaml $b.limitRange.max | nindent 8 }}
+---
+# What all running builds together may claim (--max-concurrent-builds is the
+# first limit; this one holds even if a queue misbehaves).
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: builds
+  namespace: kwerft-builds
+  labels: {{- include "kwerft.labels" . | nindent 4 }}
+spec:
+  hard: {{- toYaml $b.quota | nindent 4 }}
+---
+# No ingress at all (logs are read through the API server). Egress: DNS, the
+# registry, and the internet — clone, base images, package downloads — but
+# nothing else in the cluster: Cilium never matches CIDR rules against pods,
+# nodes or the API server, and the excepted ranges keep private networks
+# and the cloud metadata service out.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: builds
+  namespace: kwerft-builds
+  labels: {{- include "kwerft.labels" . | nindent 4 }}
+spec:
+  podSelector: {}
+  policyTypes: [Ingress, Egress]
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels: { kubernetes.io/metadata.name: kube-system }
+          podSelector:
+            matchLabels: { k8s-app: kube-dns }
+      ports:
+        - { protocol: UDP, port: 53 }
+        - { protocol: TCP, port: 53 }
+    - to:
+        - namespaceSelector:
+            matchLabels: { kubernetes.io/metadata.name: {{ .Release.Namespace }} }
+          podSelector:
+            matchLabels: {{- include "kwerft.registry.selectorLabels" . | nindent 14 }}
+      ports:
+        - { protocol: TCP, port: 5000 }
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except: [10.0.0.0/8, 100.64.0.0/10, 172.16.0.0/12, 192.168.0.0/16, 169.254.0.0/16]
+        - ipBlock:
+            cidr: ::/0
+            except: ["fc00::/7", "fe80::/10"]
+{{- end }}

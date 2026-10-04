@@ -36,6 +36,11 @@ TRAEFIK_CHART_VERSION="41.6.1"
 VM_STACK_CHART_VERSION="0.95.0"
 VLOGS_CHART_VERSION="0.13.10"
 HETZNER_WEBHOOK_CHART_VERSION="0.9.0"   # cert-manager DNS-01 for Hetzner DNS (Cloud API), 2026-08-19
+# Builds from Git, latest stable as of 2026-10-04. The chart's values.yaml has
+# the same defaults (install/test/install.bats checks that they agree).
+ZOT_VERSION="v2.1.21"                   # in-cluster registry, ghcr.io/project-zot/zot-minimal
+BUILDKIT_VERSION="v0.33.1"              # docker.io/moby/buildkit:<version>-rootless
+RAILPACK_VERSION="v0.40.1"              # ghcr.io/railwayapp/railpack-frontend (contains the railpack CLI)
 KWERFT_CHART_REPO="oci://ghcr.io/ehilzinger/charts/kwerft"
 KWERFT_IMAGE_REPO="ghcr.io/ehilzinger/kwerft"   # the chart's image.repository; checked before installing
 
@@ -54,6 +59,11 @@ readonly WG_PORT=51871
 readonly POD_CIDR="10.42.0.0/16"
 readonly SERVICE_CIDR="10.43.0.0/16"
 readonly TEMP_DOMAIN_SUFFIX=".sslip.io"   # wildcard DNS: <ip>.sslip.io resolves to <ip>
+readonly REGISTRY_HOST="registry.kwerft.internal:5000"   # internal/builds.RegistryHost
+readonly REGISTRY_CLUSTER_IP="10.43.0.50"  # zot's fixed ClusterIP (chart: registry.clusterIP), inside SERVICE_CIDR
+readonly REGISTRY_MARKER="# Managed by Kwerft installer (registry mirror)."
+REGISTRIES_FILE="/etc/rancher/k3s/registries.yaml"   # not readonly so tests can point it elsewhere
+BUILD_APPARMOR_FILE="/etc/apparmor.d/kwerft-buildkit"  # likewise
 DOMAIN_FILE="$STATE_DIR/domain"           # not readonly so tests can point it elsewhere
 DNS_TOKEN_SUM_FILE="$STATE_DIR/dns-token.sha256"  # likewise; tells a changed DNS token from the same one
 
@@ -543,11 +553,138 @@ EOF
 
 stage_kubernetes() {
   write_k3s_config
+  write_registry_mirror >/dev/null   # before k3s first starts: no restart needed
   curl -fsSL https://get.k3s.io \
     | INSTALL_K3S_VERSION="$K3S_VERSION" INSTALL_K3S_SKIP_ENABLE=false sh -s - server >>"$LOG_FILE" 2>&1 \
     || die $EXIT_K8S "k3s installation failed"
   retry 60 2 kc get --raw /readyz >/dev/null 2>&1 || die $EXIT_K8S "Kubernetes API did not become ready"
   echo "k3s $K3S_VERSION · server · embedded etcd · secrets encryption on"
+}
+
+# ---------------------------------------------------------------------------
+# Stage: registry mirror
+# Images built from Git are named registry.kwerft.internal:5000/<project>/<app>
+# and live in the in-cluster registry (zot, Service kwerft-registry with a
+# fixed ClusterIP). containerd runs on the host and cannot resolve cluster DNS,
+# so k3s's registries.yaml maps the name to that ClusterIP, which Cilium's
+# kube-proxy replacement serves to host processes as well (socket load
+# balancing), on this node and every joined one. Plain HTTP: the traffic
+# stays inside the cluster (WireGuard between nodes) and zot admits only the
+# nodes, build pods and the console. Deliberately no NodePort: Cilium answers
+# NodePorts in eBPF before the nftables host firewall sees the packet, which
+# would publish an unauthenticated registry on the public address.
+# ---------------------------------------------------------------------------
+registries_yaml() {
+  cat <<EOF
+$REGISTRY_MARKER
+# Images built from Git ($REGISTRY_HOST) come from the in-cluster registry
+# through its fixed ClusterIP. k3s reads this file only when it starts.
+mirrors:
+  "$REGISTRY_HOST":
+    endpoint:
+      - "http://$REGISTRY_CLUSTER_IP:5000"
+EOF
+}
+
+# write_registry_mirror brings registries.yaml up to date and prints what it
+# found: "changed" (written), "unchanged", "operator" (a file of the
+# operator's own that already maps the registry) or "foreign" (a file of the
+# operator's own without it). Files Kwerft did not write are never changed.
+write_registry_mirror() {
+  local want
+  want=$(registries_yaml)
+  if [[ -f "$REGISTRIES_FILE" ]]; then
+    if [[ "$(<"$REGISTRIES_FILE")" == "$want" ]]; then echo unchanged; return 0; fi
+    if [[ "$(head -n1 "$REGISTRIES_FILE")" != "$REGISTRY_MARKER" ]]; then
+      if grep -qF "$REGISTRY_HOST" "$REGISTRIES_FILE"; then echo operator; else echo foreign; fi
+      return 0
+    fi
+  fi
+  mkdir -p "$(dirname "$REGISTRIES_FILE")"
+  (umask 077; printf '%s\n' "$want" >"$REGISTRIES_FILE.kwerft-new")
+  mv -f "$REGISTRIES_FILE.kwerft-new" "$REGISTRIES_FILE"
+  echo changed
+}
+
+# restart_k3s applies a changed registries.yaml. Restarting k3s leaves running
+# containers alone (the unit's KillMode=process); the API is back in seconds.
+# Prints the unit it restarted, nothing when k3s is not running yet.
+restart_k3s() {
+  local unit
+  for unit in k3s k3s-agent; do
+    systemctl is-active --quiet "$unit" || continue
+    systemctl restart "$unit" >>"$LOG_FILE" 2>&1 || die $EXIT_K8S "Could not restart $unit to apply $REGISTRIES_FILE"
+    if [[ "$unit" == "k3s" ]]; then
+      retry 60 2 kc get --raw /readyz >/dev/null 2>&1 || die $EXIT_K8S "Kubernetes API did not come back after restarting k3s"
+    fi
+    echo "$unit"
+    return 0
+  done
+}
+
+stage_registry_mirror() {
+  local state restarted=""
+  state=$(write_registry_mirror)
+  case "$state" in
+    changed) restarted=$(restart_k3s) ;;
+    operator) echo "$REGISTRY_HOST as configured in $REGISTRIES_FILE (not managed by Kwerft)"; return 0 ;;
+    foreign)
+      warn "$REGISTRIES_FILE was not written by Kwerft, so it is left alone. Add this mirror to it and restart k3s, or images built from Git cannot be pulled:"
+      registries_yaml | sed -n '/^mirrors:/,$p' >&2
+      echo "$REGISTRY_HOST not configured (see warning)"
+      return 0 ;;
+  esac
+  local apparmor
+  apparmor=$(ensure_build_apparmor)
+  echo "$REGISTRY_HOST → zot at $REGISTRY_CLUSTER_IP:5000${restarted:+ · $restarted restarted}${apparmor:+ · $apparmor}"
+}
+
+# Rootless BuildKit creates user namespaces. Ubuntu (24.04 on) lets only
+# processes with an AppArmor profile that allows it do that
+# (kernel.apparmor_restrict_unprivileged_userns), and an unconfined container
+# has none. Rather than turning the restriction off for the whole host, this
+# profile allows user namespaces and nothing else beyond "unconfined", like
+# Ubuntu's own profile for rootlesskit; only build containers use it
+# (Kubernetes appArmorProfile Localhost "kwerft-buildkit"). Prints a summary
+# word, or nothing where AppArmor is off.
+build_apparmor_profile() {
+  cat <<'PROFILE'
+# Written by the Kwerft installer: rootless BuildKit in build containers.
+abi <abi/4.0>,
+include <tunables/global>
+
+profile kwerft-buildkit flags=(unconfined) {
+  userns,
+
+  include if exists <local/kwerft-buildkit>
+}
+PROFILE
+}
+
+ensure_build_apparmor() {
+  command -v apparmor_parser >/dev/null 2>&1 || return 0
+  [[ -d "$(dirname "$BUILD_APPARMOR_FILE")" ]] || return 0
+  local want
+  want=$(build_apparmor_profile)
+  if [[ "$(cat "$BUILD_APPARMOR_FILE" 2>/dev/null)" != "$want" ]]; then
+    printf '%s\n' "$want" >"$BUILD_APPARMOR_FILE"
+  fi
+  # Loading is cheap and idempotent; after a reboot the profile is loaded by
+  # apparmor.service from the file.
+  apparmor_parser -r -W "$BUILD_APPARMOR_FILE" >>"$LOG_FILE" 2>&1 \
+    || die $EXIT_PLATFORM "Could not load the AppArmor profile $BUILD_APPARMOR_FILE (see $LOG_FILE)"
+  echo "AppArmor profile kwerft-buildkit"
+}
+
+# Uninstall: k3s's own uninstall removes /etc/rancher/k3s; this covers a
+# server where k3s is already gone. Only Kwerft's own file is removed.
+remove_registry_mirror() {
+  if [[ -f "$BUILD_APPARMOR_FILE" ]]; then
+    apparmor_parser -R "$BUILD_APPARMOR_FILE" >/dev/null 2>&1 || true
+    rm -f "$BUILD_APPARMOR_FILE"
+  fi
+  [[ -f "$REGISTRIES_FILE" && "$(head -n1 "$REGISTRIES_FILE")" == "$REGISTRY_MARKER" ]] || return 0
+  rm -f "$REGISTRIES_FILE"
 }
 
 stage_helm() {
@@ -819,15 +956,42 @@ stage_kwerft() {
     | kc apply --server-side --force-conflicts -f - >>"$LOG_FILE" 2>&1 \
     || die $EXIT_KWERFT "Kwerft CRDs failed to apply (chart: $ref)"
   apply_console_settings
+  adopt_namespace kwerft-builds
+  local taken
+  taken=$(registry_address_taken)
+  [[ -z "$taken" ]] || die $EXIT_KWERFT "The registry's fixed address $REGISTRY_CLUSTER_IP is taken by Service $taken." \
+    "Delete or re-create that Service (it gets a new address) and re-run the installer."
   helmk upgrade --install kwerft "$ref" ${version_args[@]+"${version_args[@]}"} \
     --namespace kwerft-system --wait --timeout 10m --skip-crds \
     --set console.domain="$DOMAIN" \
     --set acme.email="$ACME_EMAIL" \
     --set platform="$PLATFORM" \
     "${image_args[@]}" \
+    --set registry.image.tag="$ZOT_VERSION" \
+    --set registry.clusterIP="$REGISTRY_CLUSTER_IP" \
+    --set builds.buildkitImage="docker.io/moby/buildkit:${BUILDKIT_VERSION}-rootless" \
+    --set builds.railpackImage="ghcr.io/railwayapp/railpack-frontend:${RAILPACK_VERSION}" \
     >>"$LOG_FILE" 2>&1 || die $EXIT_KWERFT "Kwerft installation failed (chart: $ref)"
   printf '%s\n' "$DOMAIN" >"$DOMAIN_FILE"   # fallback; the cluster setting is the record
-  echo "control plane ${IMAGE:-$KWERFT_VERSION} ready"
+  echo "control plane ${IMAGE:-$KWERFT_VERSION} ready · registry zot $ZOT_VERSION at $REGISTRY_CLUSTER_IP:5000"
+}
+
+# adopt_namespace hands a namespace the chart creates, but that already exists
+# (made by hand or by an earlier development build), over to the Helm
+# release; Helm refuses to install over objects it does not own.
+adopt_namespace() {
+  kc get namespace "$1" >/dev/null 2>&1 || return 0
+  kc annotate namespace "$1" --overwrite meta.helm.sh/release-name=kwerft meta.helm.sh/release-namespace=kwerft-system >>"$LOG_FILE" 2>&1
+  kc label namespace "$1" --overwrite app.kubernetes.io/managed-by=Helm >>"$LOG_FILE" 2>&1
+}
+
+# registry_address_taken prints the Service, other than zot's own, that holds
+# the registry's fixed ClusterIP (an older Service may have been given it
+# before Kwerft reserved it); nothing when the address is free.
+registry_address_taken() {
+  kc get services --all-namespaces \
+    -o jsonpath="{range .items[?(@.spec.clusterIP==\"$REGISTRY_CLUSTER_IP\")]}{.metadata.namespace}/{.metadata.name}{\"\\n\"}{end}" 2>/dev/null \
+    | grep -v -x "kwerft-system/kwerft-registry" || true
 }
 
 # apply_console_settings records the console hostname, and the apps domain
@@ -1017,6 +1181,7 @@ stage_join() {
     sed -i '/^cluster-init:/d' /etc/rancher/k3s/config.yaml
     printf 'server: %s\ntoken: %s\n' "$server" "$k3s_token" >>/etc/rancher/k3s/config.yaml
   fi
+  write_registry_mirror >/dev/null   # before k3s first starts, as on the first server
   curl -fsSL https://get.k3s.io | INSTALL_K3S_VERSION="$K3S_VERSION" sh -s - "$kind" >>"$LOG_FILE" 2>&1 \
     || die $EXIT_K8S "k3s $kind installation failed"
   echo "k3s $kind joined $server"
@@ -1035,10 +1200,11 @@ do_reset_firewall() {
 do_uninstall() {
   [[ $EUID -eq 0 ]] || die $EXIT_PREFLIGHT "Run as root (sudo)."
   confirm "Remove Kwerft, k3s and all workloads on this server?" || die $EXIT_USAGE "Aborted"
-  if (( DRY_RUN )); then say "Would run k3s uninstall and remove $STATE_DIR $CONF_DIR"; return; fi
+  if (( DRY_RUN )); then say "Would run k3s uninstall and remove $STATE_DIR $CONF_DIR $REGISTRIES_FILE"; return; fi
   [[ -x /usr/local/bin/k3s-uninstall.sh ]] && /usr/local/bin/k3s-uninstall.sh >>"$LOG_FILE" 2>&1
   [[ -x /usr/local/bin/k3s-agent-uninstall.sh ]] && /usr/local/bin/k3s-agent-uninstall.sh >>"$LOG_FILE" 2>&1
   do_reset_firewall >/dev/null
+  remove_registry_mirror
   rm -rf "$STATE_DIR" "$CONF_DIR" /etc/sysctl.d/90-kwerft.conf /etc/modules-load.d/kwerft.conf /etc/ssh/sshd_config.d/90-kwerft.conf
   say "Kwerft and k3s removed. Logs kept in $LOG_DIR."
 }
@@ -1077,11 +1243,13 @@ main() {
 
   if [[ "$MODE" == "join" ]]; then
     run_stage join "Join cluster" stage_join
+    run_stage registry "Registry mirror" stage_registry_mirror force
     printf '\n%sThis node will appear in the console within a minute.%s\n' "$C_OK" "$C_0"
     return
   fi
 
   run_stage kubernetes    "Kubernetes"    stage_kubernetes
+  run_stage registry      "Registry mirror" stage_registry_mirror force
   run_stage helm          "Helm"          stage_helm
   run_stage network       "Network"       stage_network force
   run_stage ingress       "Ingress & TLS" stage_ingress_tls force

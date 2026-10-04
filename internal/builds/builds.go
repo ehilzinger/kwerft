@@ -27,8 +27,10 @@ const (
 	RegistryService   = "kwerft-registry"
 	RegistryNamespace = "kwerft-system"
 	RegistryPort      = 5000
-	// RegistryClusterIP is the registry Service's fixed ClusterIP: build
-	// pods map RegistryHost to it (hostAliases), nodes' k3s mirror points at it.
+	// RegistryClusterIP is the Service's fixed address (chart value
+	// registry.clusterIP, REGISTRY_CLUSTER_IP in install.sh): the nodes'
+	// registries.yaml points at it, and build pods can map RegistryHost to
+	// it with hostAliases, since cluster DNS does not know that name.
 	RegistryClusterIP = "10.43.0.50"
 	// KeepTagPrefix marks the tags Kwerft sets on images that an App
 	// revision runs; the registry's retention keeps them.

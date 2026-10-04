@@ -396,3 +396,22 @@ func TestRegistryKeeperTagsRevisionImages(t *testing.T) {
 		t.Errorf("tags = %v", reg.tags)
 	}
 }
+
+func TestBuildContainerAppArmor(t *testing.T) {
+	r := testRun("dockerfile", "ssh")
+	build := renderJob(t, r).Spec.Template.Spec.Containers[0]
+	if p := build.SecurityContext.AppArmorProfile; p == nil || p.Type != corev1.AppArmorProfileTypeUnconfined {
+		t.Errorf("without a profile: %+v", p)
+	}
+	r.appArmor = "kwerft-buildkit"
+	build = renderJob(t, r).Spec.Template.Spec.Containers[0]
+	if p := build.SecurityContext.AppArmorProfile; p == nil || p.Type != corev1.AppArmorProfileTypeLocalhost || p.LocalhostProfile == nil || *p.LocalhostProfile != "kwerft-buildkit" {
+		t.Errorf("with the installer's profile: %+v", p)
+	}
+	// Only the build container needs it; clone and prepare stay confined.
+	for _, c := range renderJob(t, r).Spec.Template.Spec.InitContainers {
+		if c.SecurityContext != nil && c.SecurityContext.AppArmorProfile != nil {
+			t.Errorf("%s has AppArmor %+v", c.Name, c.SecurityContext.AppArmorProfile)
+		}
+	}
+}
