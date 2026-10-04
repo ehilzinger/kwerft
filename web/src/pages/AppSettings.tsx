@@ -2,6 +2,7 @@ import { useState, type FormEvent, type InputHTMLAttributes } from "react";
 import { useMutation } from "@tanstack/react-query";
 import { ApiError } from "../api";
 import { Icon } from "../components/Icon";
+import { VolumeMounts, checkMounts, mountsOf, volumesOf, type Mount } from "../components/VolumeMounts";
 import { HOST_RE, sizes, workloads, type App, type AppSpec, type EnvVar, type Size } from "../workloads";
 
 type HC = "none" | "http" | "tcp";
@@ -17,6 +18,7 @@ type Form = {
   hcPath: string;
   hcPort: string;
   egress: "none" | "https" | "all";
+  mounts: Mount[]; // shared Volumes; disks per replica are kept as they are
 };
 
 function formOf(spec: AppSpec): Form {
@@ -33,6 +35,7 @@ function formOf(spec: AppSpec): Form {
     hcPath: hc?.http ?? "/healthz",
     hcPort: hc ? String(hc.port) : String(spec.ports?.[0]?.container ?? ""),
     egress: spec.egress ?? "https",
+    mounts: mountsOf(spec.volumes),
   };
 }
 
@@ -53,8 +56,12 @@ function specOf(f: Form, base: AppSpec): AppSpec {
   if (f.hc === "none") delete spec.healthCheck;
   else spec.healthCheck = { port: Number(f.hcPort), ...(f.hc === "http" ? { http: f.hcPath.trim() || "/" } : {}) };
   spec.egress = f.egress;
+  spec.volumes = [...ownDisks(base), ...volumesOf(f.mounts)];
+  if (spec.volumes.length === 0) delete spec.volumes;
   return spec;
 }
+
+const ownDisks = (spec: AppSpec) => (spec.volumes ?? []).filter((v) => !v.volume);
 
 /** Client-side checks, reported with the same field paths the server uses. */
 function check(f: Form, isImage: boolean): { field: string; message: string } | undefined {
@@ -73,6 +80,8 @@ function check(f: Form, isImage: boolean): { field: string; message: string } | 
     const c = Number(f.hcPort);
     if (!Number.isInteger(c) || c < 1 || c > 65535) return { field: "spec.healthCheck.port", message: "A port is a number from 1 to 65535." };
   }
+  const m = checkMounts(f.mounts);
+  if (m) return { field: `mounts[${m[0]}]`, message: m[1] };
   return undefined;
 }
 
@@ -101,7 +110,10 @@ export function AppSettings({ app, canEdit, onSaved }: { app: App; canEdit: bool
       onSaved(saved);
     },
     onError: (e) => {
-      if (e instanceof ApiError) setError({ field: e.field, message: e.message, conflict: e.status === 409 });
+      // spec.volumes[i] counts the disks per replica first; the form lists shared mounts only.
+      const vol = /^spec\.volumes\[(\d+)\]/.exec(e instanceof ApiError ? e.field ?? "" : "");
+      const field = vol ? `mounts[${Number(vol[1]) - ownDisks(base.spec).length}]` : e instanceof ApiError ? e.field : undefined;
+      if (e instanceof ApiError) setError({ field, message: e.message, conflict: e.status === 409 });
       else setError({ message: "The console could not be reached. Check your connection and try again." });
     },
   });
@@ -124,6 +136,7 @@ export function AppSettings({ app, canEdit, onSaved }: { app: App; canEdit: bool
 
   const err = (field: string) => (error?.field === field ? error.message : undefined);
   const errAt = (prefix: string) => (error?.field?.startsWith(prefix) ? error.message : undefined);
+  const mountErr = /^mounts\[(\d+)\]$/.exec(error?.field ?? "");
   const nextRevision = (app.status?.revision ?? 0) + 1;
   const ro = !canEdit;
 
@@ -266,6 +279,25 @@ export function AppSettings({ app, canEdit, onSaved }: { app: App; canEdit: bool
             </div>
           </div>
         </div>
+
+        <div className="card">
+          <h3>Volumes</h3>
+          <div className="bd fields">
+            {ownDisks(base.spec).length > 0 && (
+              <div className="field full">
+                <label>Disks per replica</label>
+                <span>{ownDisks(base.spec).map((v) => `${v.path} (${v.size}${v.class ? `, ${v.class}` : ""})`).join(", ")}</span>
+                <span className="hint">Each replica keeps its own disk, so the app runs as a StatefulSet. These cannot be changed here.</span>
+              </div>
+            )}
+            <div className="field full">
+              <label>Shared volumes</label>
+              <VolumeMounts project={base.metadata.namespace} mounts={f.mounts} onChange={(v) => set("mounts", v)} idPrefix="s-vol"
+                errorAt={mountErr ? [Number(mountErr[1]), error!.message] : undefined} />
+              <span className="hint">Volumes of the project that other apps and jobs mount too; the pods run on the volume's node.</span>
+            </div>
+          </div>
+        </div>
       </fieldset>
 
       {error && !error.field && (
@@ -288,7 +320,7 @@ export function AppSettings({ app, canEdit, onSaved }: { app: App; canEdit: bool
 }
 
 function knownField(field: string) {
-  return /^spec\.(source\.image\.(ref|pullSecret)|replicas|env\[\d+\]|ports\[\d+\]|healthCheck\.(http|port))/.test(field);
+  return /^(spec\.(source\.image\.(ref|pullSecret)|replicas|env\[\d+\]|ports\[\d+\]|healthCheck\.(http|port))|mounts\[\d+\])/.test(field);
 }
 
 type InputProps = { id: string; label: string; value: string; onChange: (v: string) => void; error?: string; hint?: string; className?: string } & Omit<InputHTMLAttributes<HTMLInputElement>, "onChange" | "value" | "className">;
