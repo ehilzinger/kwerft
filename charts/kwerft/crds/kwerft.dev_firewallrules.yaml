@@ -4,32 +4,33 @@ kind: CustomResourceDefinition
 metadata:
   annotations:
     controller-gen.kubebuilder.io/version: v0.20.1
-  name: projects.kwerft.dev
+  name: firewallrules.kwerft.dev
 spec:
   group: kwerft.dev
   names:
-    kind: Project
-    listKind: ProjectList
-    plural: projects
+    kind: FirewallRule
+    listKind: FirewallRuleList
+    plural: firewallrules
     shortNames:
-    - proj
-    singular: project
+    - fw
+    singular: firewallrule
   scope: Cluster
   versions:
   - additionalPrinterColumns:
-    - jsonPath: .spec.displayName
-      name: Display name
+    - jsonPath: .spec.port
+      name: Port
+      type: integer
+    - jsonPath: .spec.protocol
+      name: Protocol
       type: string
     - jsonPath: .status.conditions[?(@.type=="Ready")].status
       name: Ready
       type: string
-    - jsonPath: .metadata.creationTimestamp
-      name: Age
-      type: date
     name: v1alpha1
     schema:
       openAPIV3Schema:
-        description: Project maps one-to-one to a namespace with the same name.
+        description: FirewallRule is a server firewall rule (cluster-scoped, owners
+          and admins).
         properties:
           apiVersion:
             description: |-
@@ -50,77 +51,53 @@ spec:
             type: object
           spec:
             description: |-
-              ProjectSpec describes a group of apps that share a namespace, quotas and
-              access rules.
+              FirewallRuleSpec opens a port on the servers themselves (not the apps,
+              which the ingress serves). The installer's rules (SSH, HTTP(S), the
+              cluster's private ports) are FirewallRules labelled kwerft.dev/required
+              that cannot be deleted, only narrowed where safe (SSH sources).
             properties:
-              access:
-                default: Team
-                description: |-
-                  Access says who besides owners and admins reaches the project. Team:
-                  every member of the console, with their console role. Members: only
-                  the users listed in Members, with the role given there.
-                enum:
-                - Team
-                - Members
+              description:
                 type: string
-              displayName:
-                description: DisplayName is shown in the console; the resource name
-                  is the namespace.
-                type: string
-              isolated:
-                default: true
-                description: Isolated denies traffic from other projects unless a
-                  TrafficRule allows it.
+              disabled:
                 type: boolean
-              members:
-                description: |-
-                  Members of a project with Access Members. Owners and admins always
-                  reach every project and are not listed.
-                items:
-                  description: ProjectMember is a console user's role in one project.
-                  properties:
-                    role:
-                      enum:
-                      - developer
-                      - viewer
-                      type: string
-                    user:
-                      description: User is the console user's email address.
-                      maxLength: 254
-                      minLength: 3
-                      type: string
-                  required:
-                  - role
-                  - user
-                  type: object
-                maxItems: 200
-                type: array
-                x-kubernetes-list-map-keys:
-                - user
-                x-kubernetes-list-type: map
-              podSecurity:
-                default: baseline
-                description: PodSecurity is the Pod Security Admission level enforced
-                  in the namespace.
+              endPort:
+                format: int32
+                type: integer
+              nodes:
+                default: all
+                description: 'Nodes it applies to: all, or only control-plane nodes.'
                 enum:
-                - baseline
-                - restricted
+                - all
+                - control-plane
                 type: string
-              quota:
-                additionalProperties:
-                  anyOf:
-                  - type: integer
-                  - type: string
-                  pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
-                  x-kubernetes-int-or-string: true
-                description: |-
-                  Quota caps the total resources the project may request.
-                  Keys: requests.cpu, requests.memory, requests.storage, ...
-                type: object
+              port:
+                format: int32
+                maximum: 65535
+                minimum: 1
+                type: integer
+              protocol:
+                enum:
+                - TCP
+                - UDP
+                - ICMP
+                type: string
+              sources:
+                description: Sources allowed in, as CIDRs; empty means anywhere.
+                items:
+                  type: string
+                maxItems: 64
+                type: array
+            required:
+            - port
+            - protocol
             type: object
           status:
-            description: ProjectStatus is written by the Project reconciler.
+            description: FirewallRuleStatus is written by the firewall reconciler.
             properties:
+              cloudFirewall:
+                description: CloudFirewall reports the Hetzner Cloud Firewall sync
+                  for cloud nodes.
+                type: string
               conditions:
                 items:
                   description: Condition contains details for one aspect of the current
@@ -182,10 +159,6 @@ spec:
                 type: integer
             type: object
         type: object
-        x-kubernetes-validations:
-        - message: this name is reserved for the platform
-          rule: '!(self.metadata.name in [''default'', ''cert-manager'', ''traefik'',
-            ''monitoring'']) && !self.metadata.name.startsWith(''kube-'') && !self.metadata.name.startsWith(''kwerft-'')'
     served: true
     storage: true
     subresources:

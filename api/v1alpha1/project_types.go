@@ -42,6 +42,40 @@ type ProjectSpec struct {
 	// +kubebuilder:default=true
 	// +optional
 	Isolated *bool `json:"isolated,omitempty"`
+
+	// Access says who besides owners and admins reaches the project. Team:
+	// every member of the console, with their console role. Members: only
+	// the users listed in Members, with the role given there.
+	// +kubebuilder:validation:Enum=Team;Members
+	// +kubebuilder:default=Team
+	// +optional
+	Access ProjectAccess `json:"access,omitempty"`
+
+	// Members of a project with Access Members. Owners and admins always
+	// reach every project and are not listed.
+	// +kubebuilder:validation:MaxItems=200
+	// +listType=map
+	// +listMapKey=user
+	// +optional
+	Members []ProjectMember `json:"members,omitempty"`
+}
+
+// ProjectAccess: Team or Members.
+type ProjectAccess string
+
+const (
+	ProjectAccessTeam    ProjectAccess = "Team"
+	ProjectAccessMembers ProjectAccess = "Members"
+)
+
+// ProjectMember is a console user's role in one project.
+type ProjectMember struct {
+	// User is the console user's email address.
+	// +kubebuilder:validation:MinLength=3
+	// +kubebuilder:validation:MaxLength=254
+	User string `json:"user"`
+	// +kubebuilder:validation:Enum=developer;viewer
+	Role string `json:"role"`
 }
 
 // ProjectStatus is written by the Project reconciler.

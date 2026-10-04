@@ -3,6 +3,7 @@
 package v1alpha1
 
 import (
+	apiv1alpha1 "github.com/ehilzinger/kwerft/api/v1alpha1"
 	v1 "k8s.io/api/core/v1"
 )
 
@@ -21,6 +22,13 @@ type ProjectSpecApplyConfiguration struct {
 	PodSecurity *string `json:"podSecurity,omitempty"`
 	// Isolated denies traffic from other projects unless a TrafficRule allows it.
 	Isolated *bool `json:"isolated,omitempty"`
+	// Access says who besides owners and admins reaches the project. Team:
+	// every member of the console, with their console role. Members: only
+	// the users listed in Members, with the role given there.
+	Access *apiv1alpha1.ProjectAccess `json:"access,omitempty"`
+	// Members of a project with Access Members. Owners and admins always
+	// reach every project and are not listed.
+	Members []ProjectMemberApplyConfiguration `json:"members,omitempty"`
 }
 
 // ProjectSpecApplyConfiguration constructs a declarative configuration of the ProjectSpec type for use with
@@ -58,5 +66,26 @@ func (b *ProjectSpecApplyConfiguration) WithPodSecurity(value string) *ProjectSp
 // If called multiple times, the Isolated field is set to the value of the last call.
 func (b *ProjectSpecApplyConfiguration) WithIsolated(value bool) *ProjectSpecApplyConfiguration {
 	b.Isolated = &value
+	return b
+}
+
+// WithAccess sets the Access field in the declarative configuration to the given value
+// and returns the receiver, so that objects can be built by chaining "With" function invocations.
+// If called multiple times, the Access field is set to the value of the last call.
+func (b *ProjectSpecApplyConfiguration) WithAccess(value apiv1alpha1.ProjectAccess) *ProjectSpecApplyConfiguration {
+	b.Access = &value
+	return b
+}
+
+// WithMembers adds the given value to the Members field in the declarative configuration
+// and returns the receiver, so that objects can be build by chaining "With" function invocations.
+// If called multiple times, values provided by each call will be appended to the Members field.
+func (b *ProjectSpecApplyConfiguration) WithMembers(values ...*ProjectMemberApplyConfiguration) *ProjectSpecApplyConfiguration {
+	for i := range values {
+		if values[i] == nil {
+			panic("nil value passed to WithMembers")
+		}
+		b.Members = append(b.Members, *values[i])
+	}
 	return b
 }

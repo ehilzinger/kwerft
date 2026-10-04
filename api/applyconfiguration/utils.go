@@ -50,6 +50,12 @@ func ForKind(kind schema.GroupVersionKind) interface{} {
 		return &apiv1alpha1.DomainStatusApplyConfiguration{}
 	case v1alpha1.SchemeGroupVersion.WithKind("EmailSettings"):
 		return &apiv1alpha1.EmailSettingsApplyConfiguration{}
+	case v1alpha1.SchemeGroupVersion.WithKind("FirewallRule"):
+		return &apiv1alpha1.FirewallRuleApplyConfiguration{}
+	case v1alpha1.SchemeGroupVersion.WithKind("FirewallRuleSpec"):
+		return &apiv1alpha1.FirewallRuleSpecApplyConfiguration{}
+	case v1alpha1.SchemeGroupVersion.WithKind("FirewallRuleStatus"):
+		return &apiv1alpha1.FirewallRuleStatusApplyConfiguration{}
 	case v1alpha1.SchemeGroupVersion.WithKind("GitConnection"):
 		return &apiv1alpha1.GitConnectionApplyConfiguration{}
 	case v1alpha1.SchemeGroupVersion.WithKind("GitConnectionSpec"):
@@ -74,6 +80,8 @@ func ForKind(kind schema.GroupVersionKind) interface{} {
 		return &apiv1alpha1.NtfySettingsApplyConfiguration{}
 	case v1alpha1.SchemeGroupVersion.WithKind("Project"):
 		return &apiv1alpha1.ProjectApplyConfiguration{}
+	case v1alpha1.SchemeGroupVersion.WithKind("ProjectMember"):
+		return &apiv1alpha1.ProjectMemberApplyConfiguration{}
 	case v1alpha1.SchemeGroupVersion.WithKind("ProjectSpec"):
 		return &apiv1alpha1.ProjectSpecApplyConfiguration{}
 	case v1alpha1.SchemeGroupVersion.WithKind("ProjectStatus"):
@@ -92,6 +100,18 @@ func ForKind(kind schema.GroupVersionKind) interface{} {
 		return &apiv1alpha1.TaskOnSuccessApplyConfiguration{}
 	case v1alpha1.SchemeGroupVersion.WithKind("TaskSpec"):
 		return &apiv1alpha1.TaskSpecApplyConfiguration{}
+	case v1alpha1.SchemeGroupVersion.WithKind("TrafficCounts"):
+		return &apiv1alpha1.TrafficCountsApplyConfiguration{}
+	case v1alpha1.SchemeGroupVersion.WithKind("TrafficPeer"):
+		return &apiv1alpha1.TrafficPeerApplyConfiguration{}
+	case v1alpha1.SchemeGroupVersion.WithKind("TrafficPort"):
+		return &apiv1alpha1.TrafficPortApplyConfiguration{}
+	case v1alpha1.SchemeGroupVersion.WithKind("TrafficRule"):
+		return &apiv1alpha1.TrafficRuleApplyConfiguration{}
+	case v1alpha1.SchemeGroupVersion.WithKind("TrafficRuleSpec"):
+		return &apiv1alpha1.TrafficRuleSpecApplyConfiguration{}
+	case v1alpha1.SchemeGroupVersion.WithKind("TrafficRuleStatus"):
+		return &apiv1alpha1.TrafficRuleStatusApplyConfiguration{}
 	case v1alpha1.SchemeGroupVersion.WithKind("Volume"):
 		return &apiv1alpha1.VolumeApplyConfiguration{}
 	case v1alpha1.SchemeGroupVersion.WithKind("VolumeSpec"):
