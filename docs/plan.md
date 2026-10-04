@@ -231,6 +231,7 @@ Work split and contracts: `docs/phase2.md`.
 - [x] W4 Console: deploy wizard and settings for Git apps, Builds tab with live logs, Git connections page
 - [x] First real build on the test server (2026-10-04): public GitHub repository → clone, rootless BuildKit (AppArmor profile `kwerft-buildkit`, since Ubuntu restricts user namespaces), push to zot, rollout pinned by digest through the k3s mirror, live on the apps wildcard in ~70 s; a rebuild reused the cache
 - [x] Exit criterion on the test server with a real repository (2026-10-04, private ehilzinger/kwerft-demo through a fine-grained token connection): push → webhook in 3 s → build #2 in 39 s → revision 2 serving ~47 s after the push; build log in the Builds tab; GitHub commit status pending → success linking to the build
+- [x] Railpack builder on the server (Go detected, 70 s first build) and pull-request builds (same-repo PR → one check build per App using the repository, not deployed, queued one at a time, checks on the PR)
 
 ### Phase 0 checklist
 
