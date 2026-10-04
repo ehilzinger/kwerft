@@ -112,6 +112,11 @@ func (r *ScheduleReconciler) reconcile(ctx context.Context, s *kwerftv1.Schedule
 		case kwerftv1.ConcurrencyAllow:
 		case kwerftv1.ConcurrencyReplace:
 			for _, t := range active {
+				// This very run, started by an earlier reconcile whose status
+				// write the cache has not caught up with yet: keep it.
+				if t.Name == runName(s, due) {
+					continue
+				}
 				if err := client.IgnoreNotFound(r.Delete(ctx, t, client.PropagationPolicy(metav1.DeletePropagationBackground))); err != nil {
 					return ctrl.Result{}, nil, err
 				}
@@ -135,6 +140,13 @@ func (r *ScheduleReconciler) reconcile(ctx context.Context, s *kwerftv1.Schedule
 		s.Status.Active = append(s.Status.Active, name)
 	}
 	return requeue, scheduled, nil
+}
+
+// ParseSchedule reads a cron expression and time zone exactly as the Schedule
+// reconciler does, so the API can reject a bad one before it is written and
+// preview the next runs.
+func ParseSchedule(spec, tz string) (cron.Schedule, *time.Location, error) {
+	return parseSchedule(spec, tz)
 }
 
 // parseSchedule parses a cron expression in the given IANA time zone (empty:

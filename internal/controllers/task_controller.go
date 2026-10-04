@@ -101,6 +101,9 @@ func (r *TaskReconciler) reconcile(ctx context.Context, task *kwerftv1.Task) err
 	if task.Status.Phase == "" {
 		task.Status.Phase = kwerftv1.TaskPending
 	}
+	if by := task.Annotations[kwerftv1.AnnotationCancelRequested]; by != "" && !task.Status.Phase.Finished() {
+		return r.cancel(ctx, task, by)
+	}
 	if !task.Status.Phase.Finished() {
 		job, wait, err := r.ensureJob(ctx, task)
 		switch {
@@ -118,6 +121,26 @@ func (r *TaskReconciler) reconcile(ctx context.Context, task *kwerftv1.Task) err
 	if task.Status.Phase == kwerftv1.TaskSucceeded {
 		return r.restartApps(ctx, task)
 	}
+	return nil
+}
+
+// cancel stops an unfinished run: the Job goes (its pods with it) and the
+// Task becomes final, Failed with reason Cancelled, so neither it nor its
+// Schedule starts it again. A Task without a Job yet never gets one.
+func (r *TaskReconciler) cancel(ctx context.Context, task *kwerftv1.Task, by string) error {
+	job := &batchv1.Job{}
+	switch err := r.Get(ctx, client.ObjectKey{Namespace: task.Namespace, Name: task.Name}, job); {
+	case apierrors.IsNotFound(err):
+	case err != nil:
+		return err
+	case metav1.IsControlledBy(job, task):
+		if err := client.IgnoreNotFound(r.Delete(ctx, job, client.PropagationPolicy(metav1.DeletePropagationBackground))); err != nil {
+			return fmt.Errorf("delete job: %w", err)
+		}
+	}
+	task.Status.Phase = kwerftv1.TaskFailed
+	task.Status.CompletionTime = ptrTime(r.now())
+	setReady(&task.Status.Conditions, task.Generation, metav1.ConditionFalse, "Cancelled", "Cancelled by "+by)
 	return nil
 }
 
@@ -385,8 +408,10 @@ func (r *TaskReconciler) waitingTasks(ctx context.Context, obj client.Object) []
 func (r *TaskReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	waiting := handler.EnqueueRequestsFromMapFunc(r.waitingTasks)
 	return ctrl.NewControllerManagedBy(mgr).
-		// Status writes do not bump the generation, so they do not re-trigger.
-		For(&kwerftv1.Task{}, builder.WithPredicates(predicate.GenerationChangedPredicate{})).
+		// Status writes do not bump the generation, so they do not re-trigger;
+		// an annotation carries a cancel request.
+		For(&kwerftv1.Task{}, builder.WithPredicates(predicate.Or(
+			predicate.GenerationChangedPredicate{}, predicate.AnnotationChangedPredicate{}))).
 		Owns(&batchv1.Job{}).
 		Owns(&networkingv1.NetworkPolicy{}).
 		Watches(&kwerftv1.App{}, waiting).
