@@ -3,9 +3,9 @@
 package applyconfiguration
 
 import (
-	apiv1alpha1 "github.com/ehilzinger/werft/api/applyconfiguration/api/v1alpha1"
-	internal "github.com/ehilzinger/werft/api/applyconfiguration/internal"
-	v1alpha1 "github.com/ehilzinger/werft/api/v1alpha1"
+	apiv1alpha1 "github.com/ehilzinger/kwerft/api/applyconfiguration/api/v1alpha1"
+	internal "github.com/ehilzinger/kwerft/api/applyconfiguration/internal"
+	v1alpha1 "github.com/ehilzinger/kwerft/api/v1alpha1"
 	runtime "k8s.io/apimachinery/pkg/runtime"
 	schema "k8s.io/apimachinery/pkg/runtime/schema"
 	managedfields "k8s.io/apimachinery/pkg/util/managedfields"
@@ -15,7 +15,7 @@ import (
 // apply configuration type exists for the given GroupVersionKind.
 func ForKind(kind schema.GroupVersionKind) interface{} {
 	switch kind {
-	// Group=werft.dev, Version=v1alpha1
+	// Group=kwerft.dev, Version=v1alpha1
 	case v1alpha1.SchemeGroupVersion.WithKind("Domain"):
 		return &apiv1alpha1.DomainApplyConfiguration{}
 	case v1alpha1.SchemeGroupVersion.WithKind("DomainSpec"):

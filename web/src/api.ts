@@ -1,4 +1,4 @@
-// Thin client for the Werft REST API. Every call goes through here so auth,
+// Thin client for the Kwerft REST API. Every call goes through here so auth,
 // error shapes and (later) CSRF handling live in one place.
 
 export class ApiError extends Error {

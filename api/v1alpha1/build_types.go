@@ -53,7 +53,7 @@ type BuildStatus struct {
 	// +optional
 	Phase BuildPhase `json:"phase,omitempty"`
 
-	// Image is the pushed reference, e.g. registry.werft.internal/storefront/api:4f2c1ab.
+	// Image is the pushed reference, e.g. registry.kwerft.internal/storefront/api:4f2c1ab.
 	// +optional
 	Image string `json:"image,omitempty"`
 

@@ -1,6 +1,6 @@
-// Package controllers holds the reconcilers that turn werft.dev resources into
-// native Kubernetes objects. All writes use server-side apply with the "werft"
-// field manager, so hand edits to fields Werft does not manage survive.
+// Package controllers holds the reconcilers that turn kwerft.dev resources into
+// native Kubernetes objects. All writes use server-side apply with the "kwerft"
+// field manager, so hand edits to fields Kwerft does not manage survive.
 package controllers
 
 import (
@@ -16,28 +16,28 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	gwv1 "sigs.k8s.io/gateway-api/apis/v1"
 
-	werftv1 "github.com/ehilzinger/werft/api/v1alpha1"
+	kwerftv1 "github.com/ehilzinger/kwerft/api/v1alpha1"
 )
 
 const (
-	// FieldOwner is the server-side apply field manager for everything Werft writes.
-	FieldOwner = "werft"
+	// FieldOwner is the server-side apply field manager for everything Kwerft writes.
+	FieldOwner = "kwerft"
 
-	LabelManagedBy = "app.kubernetes.io/managed-by"
-	ManagedByWerft = "werft"
-	// LabelProject marks a namespace as a Werft project and pods as belonging to one.
-	LabelProject = "werft.dev/project"
+	LabelManagedBy  = "app.kubernetes.io/managed-by"
+	ManagedByKwerft = "kwerft"
+	// LabelProject marks a namespace as a Kwerft project and pods as belonging to one.
+	LabelProject = "kwerft.dev/project"
 	// LabelApp selects the pods of one App.
-	LabelApp = "werft.dev/app"
+	LabelApp = "kwerft.dev/app"
 	// LabelSystem marks namespaces whose pods may reach every app (ingress,
 	// monitoring). Set on platform namespaces by the installer.
-	LabelSystem = "werft.dev/system"
+	LabelSystem = "kwerft.dev/system"
 
 	// The shared Gateway that public traffic enters through (see the Helm chart).
-	GatewayName      = "werft"
-	GatewayNamespace = "werft-system"
+	GatewayName      = "kwerft"
+	GatewayNamespace = "kwerft-system"
 
-	// ConditionReady is the single summary condition on every Werft resource.
+	// ConditionReady is the single summary condition on every Kwerft resource.
 	ConditionReady = "Ready"
 )
 
@@ -45,7 +45,7 @@ const (
 func NewScheme() *runtime.Scheme {
 	s := runtime.NewScheme()
 	must(clientgoscheme.AddToScheme(s))
-	must(werftv1.AddToScheme(s))
+	must(kwerftv1.AddToScheme(s))
 	must(gwv1.Install(s))
 	return s
 }
@@ -73,7 +73,7 @@ func controllerRef(owner metav1.Object, gvk schema.GroupVersionKind) *metav1ac.O
 }
 
 // deleteIfControlledBy removes obj (identified by name/namespace) only when
-// owner controls it, so Werft never deletes objects it did not create.
+// owner controls it, so Kwerft never deletes objects it did not create.
 func deleteIfControlledBy(ctx context.Context, c client.Client, obj client.Object, owner metav1.Object) error {
 	if err := c.Get(ctx, client.ObjectKeyFromObject(obj), obj); err != nil {
 		if apierrors.IsNotFound(err) || meta.IsNoMatchError(err) {

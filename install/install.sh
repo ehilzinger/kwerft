@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# Werft installer — turns a fresh Ubuntu server on Hetzner (Cloud or dedicated)
-# into a single-node Kubernetes cluster with the Werft console on top.
+# Kwerft installer — turns a fresh Ubuntu server on Hetzner (Cloud or dedicated)
+# into a single-node Kubernetes cluster with the Kwerft console on top.
 #
-#   curl -fsSL https://raw.githubusercontent.com/ehilzinger/werft/main/install/install.sh | sudo bash -s -- --domain ops.example.com --email ops@example.com --yes
+#   curl -fsSL https://raw.githubusercontent.com/ehilzinger/kwerft/main/install/install.sh | sudo bash -s -- --domain ops.example.com --email ops@example.com --yes
 #
 # The script is idempotent: every stage records completion in $STATE_DIR and is
 # skipped on the next run. Re-running repairs a broken install or upgrades it.
@@ -22,7 +22,7 @@ shopt -s inherit_errexit 2>/dev/null || true   # bash >= 4.4: fail inside $(...)
 # Latest upstream releases as of 2026-10-04. TODO(phase-0): verify chart values
 # against these versions on a real server and add SHA-256 checksums.
 # ---------------------------------------------------------------------------
-WERFT_VERSION_DEFAULT="0.1.0-dev"
+KWERFT_VERSION_DEFAULT="0.1.0-dev"
 K3S_VERSION="v1.37.1+k3s1"
 HELM_VERSION="v4.3.0"
 CILIUM_VERSION="1.20.2"
@@ -31,16 +31,16 @@ GATEWAY_API_VERSION="v1.6.2"            # only used when k3s does not ship the C
 TRAEFIK_CHART_VERSION="41.6.1"
 VM_STACK_CHART_VERSION="0.95.0"
 VLOGS_CHART_VERSION="0.13.10"
-WERFT_CHART_REPO="oci://ghcr.io/ehilzinger/charts/werft"
+KWERFT_CHART_REPO="oci://ghcr.io/ehilzinger/charts/kwerft"
 
 # ---------------------------------------------------------------------------
 # Exit codes are part of the automation contract — do not renumber.
 # ---------------------------------------------------------------------------
-readonly EXIT_OK=0 EXIT_USAGE=2 EXIT_PREFLIGHT=10 EXIT_NETWORK=20 EXIT_K8S=30 EXIT_PLATFORM=40 EXIT_WERFT=50
+readonly EXIT_OK=0 EXIT_USAGE=2 EXIT_PREFLIGHT=10 EXIT_NETWORK=20 EXIT_K8S=30 EXIT_PLATFORM=40 EXIT_KWERFT=50
 
-readonly STATE_DIR="/var/lib/werft"
-readonly CONF_DIR="/etc/werft"
-readonly LOG_DIR="/var/log/werft"
+readonly STATE_DIR="/var/lib/kwerft"
+readonly CONF_DIR="/etc/kwerft"
+readonly LOG_DIR="/var/log/kwerft"
 readonly LOG_FILE="$LOG_DIR/install.log"
 readonly KUBECONFIG_PATH="/etc/rancher/k3s/k3s.yaml"
 readonly WG_PORT=51871
@@ -49,20 +49,20 @@ readonly SERVICE_CIDR="10.43.0.0/16"
 readonly TEMP_DOMAIN_SUFFIX=".sslip.io"   # wildcard DNS: <ip>.sslip.io resolves to <ip>
 DOMAIN_FILE="$STATE_DIR/domain"           # not readonly so tests can point it elsewhere
 
-# Options (flags override WERFT_* environment variables).
-DOMAIN="${WERFT_DOMAIN:-}"
-ACME_EMAIL="${WERFT_EMAIL:-}"
-CONFIG_FILE="${WERFT_CONFIG:-}"
-PLATFORM="${WERFT_PLATFORM:-auto}"
-PRIVATE_IFACE="${WERFT_PRIVATE_IFACE:-}"
-WERFT_VERSION="${WERFT_VERSION:-$WERFT_VERSION_DEFAULT}"
-CHANNEL="${WERFT_CHANNEL:-stable}"
-JOIN_URL="${WERFT_JOIN_URL:-}"
-JOIN_TOKEN="${WERFT_JOIN_TOKEN:-}"
-JOIN_ROLE="${WERFT_JOIN_ROLE:-worker}"
-WERFT_CHART="${WERFT_CHART:-}"
-IMAGE="${WERFT_IMAGE:-}"
-IMAGE_ARCHIVE="${WERFT_IMAGE_ARCHIVE:-}"
+# Options (flags override KWERFT_* environment variables).
+DOMAIN="${KWERFT_DOMAIN:-}"
+ACME_EMAIL="${KWERFT_EMAIL:-}"
+CONFIG_FILE="${KWERFT_CONFIG:-}"
+PLATFORM="${KWERFT_PLATFORM:-auto}"
+PRIVATE_IFACE="${KWERFT_PRIVATE_IFACE:-}"
+KWERFT_VERSION="${KWERFT_VERSION:-$KWERFT_VERSION_DEFAULT}"
+CHANNEL="${KWERFT_CHANNEL:-stable}"
+JOIN_URL="${KWERFT_JOIN_URL:-}"
+JOIN_TOKEN="${KWERFT_JOIN_TOKEN:-}"
+JOIN_ROLE="${KWERFT_JOIN_ROLE:-worker}"
+KWERFT_CHART="${KWERFT_CHART:-}"
+IMAGE="${KWERFT_IMAGE:-}"
+IMAGE_ARCHIVE="${KWERFT_IMAGE_ARCHIVE:-}"
 MODE="install"
 DRY_RUN=0
 ASSUME_YES=0
@@ -102,18 +102,18 @@ on_error() {
 
 usage() {
   cat <<EOF
-Werft installer ${WERFT_VERSION_DEFAULT}
+Kwerft installer ${KWERFT_VERSION_DEFAULT}
 
 Usage: install.sh [options]
 
 Install:
   --domain HOST          Console hostname. Without it, a temporary <public-ip>.sslip.io
-                         name is used so you can try Werft before setting up DNS
+                         name is used so you can try Kwerft before setting up DNS
   --email ADDR           Let's Encrypt account contact (optional)
   --config FILE          Pre-seed owner, DNS, Hetzner tokens; skips the setup wizard
   --platform P           auto | cloud | dedicated (default: auto)
   --private-iface IF     Interface for node-to-node and API traffic
-  --version V            Werft release to install (default: ${WERFT_VERSION_DEFAULT})
+  --version V            Kwerft release to install (default: ${KWERFT_VERSION_DEFAULT})
   --channel C            stable | edge
   --lite                 Smaller footprint for 4 GB servers (no Hubble, short retention)
   --harden-ssh           Disable SSH password login and root password login
@@ -128,16 +128,16 @@ Development:
                          hack/dev-server.sh uses both to test unreleased builds
 
 Maintenance:
-  --reset-firewall       Remove Werft's host firewall rules (rescue)
-  --uninstall            Remove Werft and k3s from this server
+  --reset-firewall       Remove Kwerft's host firewall rules (rescue)
+  --uninstall            Remove Kwerft and k3s from this server
 
 General:
   --dry-run              Print the plan without changing anything
   --yes, -y              Never prompt
   --help, -h             Show this help
 
-Every option can also be set as WERFT_<NAME> in the environment, e.g. WERFT_DOMAIN.
-Exit codes: 0 ok · 2 usage · 10 preflight · 20 network/DNS · 30 Kubernetes · 40 platform · 50 Werft
+Every option can also be set as KWERFT_<NAME> in the environment, e.g. KWERFT_DOMAIN.
+Exit codes: 0 ok · 2 usage · 10 preflight · 20 network/DNS · 30 Kubernetes · 40 platform · 50 Kwerft
 EOF
 }
 
@@ -154,7 +154,7 @@ parse_args() {
       --config)         need_arg "$@"; CONFIG_FILE=$2; shift 2 ;;
       --platform)       need_arg "$@"; PLATFORM=$2; shift 2 ;;
       --private-iface)  need_arg "$@"; PRIVATE_IFACE=$2; shift 2 ;;
-      --version)        need_arg "$@"; WERFT_VERSION=$2; shift 2 ;;
+      --version)        need_arg "$@"; KWERFT_VERSION=$2; shift 2 ;;
       --channel)        need_arg "$@"; CHANNEL=$2; shift 2 ;;
       --join)           need_arg "$@"; JOIN_URL=$2; MODE="join"; shift 2 ;;
       --token)          need_arg "$@"; JOIN_TOKEN=$2; shift 2 ;;
@@ -178,7 +178,7 @@ parse_args() {
   case "$JOIN_ROLE" in worker|control-plane) ;; *) die $EXIT_USAGE "--role must be worker or control-plane" ;; esac
   if [[ "$MODE" == "join" && -z "$JOIN_TOKEN" ]]; then die $EXIT_USAGE "--join needs --token"; fi
   if [[ -n "$CONFIG_FILE" && ! -r "$CONFIG_FILE" ]]; then die $EXIT_USAGE "Config file not readable: $CONFIG_FILE"; fi
-  if [[ -n "$IMAGE" && "${IMAGE##*/}" != *:* ]]; then die $EXIT_USAGE "--image needs a tag, e.g. ghcr.io/ehilzinger/werft:dev-abc123"; fi
+  if [[ -n "$IMAGE" && "${IMAGE##*/}" != *:* ]]; then die $EXIT_USAGE "--image needs a tag, e.g. ghcr.io/ehilzinger/kwerft:dev-abc123"; fi
   if [[ -n "$IMAGE_ARCHIVE" && -z "$IMAGE" ]]; then die $EXIT_USAGE "--image-archive needs --image to say which image it contains"; fi
   if [[ -n "$IMAGE_ARCHIVE" && ! -r "$IMAGE_ARCHIVE" ]]; then die $EXIT_USAGE "Image archive not readable: $IMAGE_ARCHIVE"; fi
 
@@ -191,7 +191,7 @@ parse_args() {
 }
 
 # Reads a top-level scalar `key: value` from the config file. The full file is
-# handed to Werft as a Secret; the installer only needs a few top-level keys.
+# handed to Kwerft as a Secret; the installer only needs a few top-level keys.
 config_get() {
   sed -n -E "s/^$1:[[:space:]]*['\"]?([^'\"#]*)['\"]?[[:space:]]*(#.*)?$/\1/p" "$CONFIG_FILE" | head -n1 | sed -E 's/[[:space:]]+$//'
 }
@@ -273,7 +273,7 @@ detect_addresses() {
 
 # Picks the console hostname: --domain (or the config file) first, then the one
 # saved by a previous run — so re-running without flags never changes it — and
-# finally a temporary <ip>.sslip.io name for trying Werft before DNS exists.
+# finally a temporary <ip>.sslip.io name for trying Kwerft before DNS exists.
 resolve_domain() {
   if [[ -z "$DOMAIN" && -s "$DOMAIN_FILE" ]]; then
     DOMAIN=$(<"$DOMAIN_FILE")
@@ -334,16 +334,16 @@ stage_system() {
   apt-get install -y -qq curl ca-certificates jq nftables chrony unattended-upgrades open-iscsi >>"$LOG_FILE" 2>&1
 
   swapoff -a
-  sed -i -E 's@^([^#].*[[:space:]]swap[[:space:]].*)$@# disabled by werft: \1@' /etc/fstab
+  sed -i -E 's@^([^#].*[[:space:]]swap[[:space:]].*)$@# disabled by kwerft: \1@' /etc/fstab
 
-  cat >/etc/modules-load.d/werft.conf <<'EOF'
+  cat >/etc/modules-load.d/kwerft.conf <<'EOF'
 overlay
 br_netfilter
 wireguard
 EOF
   modprobe overlay; modprobe br_netfilter; modprobe wireguard 2>/dev/null || true
 
-  cat >/etc/sysctl.d/90-werft.conf <<'EOF'
+  cat >/etc/sysctl.d/90-kwerft.conf <<'EOF'
 net.ipv4.ip_forward = 1
 net.ipv6.conf.all.forwarding = 1
 net.bridge.bridge-nf-call-iptables = 1
@@ -357,7 +357,7 @@ EOF
   systemctl enable --now unattended-upgrades >>"$LOG_FILE" 2>&1
 
   if (( HARDEN_SSH )); then
-    cat >/etc/ssh/sshd_config.d/90-werft.conf <<'EOF'
+    cat >/etc/ssh/sshd_config.d/90-kwerft.conf <<'EOF'
 PasswordAuthentication no
 PermitRootLogin prohibit-password
 KbdInteractiveAuthentication no
@@ -370,16 +370,16 @@ EOF
 # ---------------------------------------------------------------------------
 # Stage: host firewall baseline
 # Separate nftables table so we never clobber the operator's own rules.
-# Cilium host policies take over fine-grained control once Werft runs.
+# Cilium host policies take over fine-grained control once Kwerft runs.
 # ---------------------------------------------------------------------------
 stage_firewall() {
   mkdir -p /etc/nftables.d
   local priv_rule="# no private network detected"
   [[ -n "$PRIVATE_CIDR" ]] && priv_rule="ip saddr $(network_of "$PRIVATE_CIDR") accept"
 
-  cat >/etc/nftables.d/werft.nft <<EOF
-# Managed by Werft — edit rules in the console (Network → Server firewall).
-table inet werft {
+  cat >/etc/nftables.d/kwerft.nft <<EOF
+# Managed by Kwerft — edit rules in the console (Network → Server firewall).
+table inet kwerft {
   chain input {
     type filter hook input priority 0; policy drop;
     ct state established,related accept
@@ -396,8 +396,8 @@ EOF
   if ! grep -q 'include "/etc/nftables.d/\*.nft"' /etc/nftables.conf 2>/dev/null; then
     printf '\ninclude "/etc/nftables.d/*.nft"\n' >>/etc/nftables.conf
   fi
-  nft delete table inet werft 2>/dev/null || true
-  nft -f /etc/nftables.d/werft.nft
+  nft delete table inet kwerft 2>/dev/null || true
+  nft -f /etc/nftables.d/kwerft.nft
   systemctl enable nftables >>"$LOG_FILE" 2>&1
   echo "nftables: 22, 80, 443 public$([[ -n "$PRIVATE_CIDR" ]] && echo " · cluster ports on $PRIVATE_IFACE only")"
 }
@@ -417,7 +417,7 @@ write_k3s_config() {
   local node_ip=${PRIVATE_IP:-$PUBLIC_IP}
   mkdir -p /etc/rancher/k3s
   cat >/etc/rancher/k3s/config.yaml <<EOF
-# Managed by Werft installer.
+# Managed by Kwerft installer.
 cluster-init: true
 node-ip: $node_ip
 node-external-ip: $PUBLIC_IP
@@ -436,7 +436,7 @@ disable:
 secrets-encryption: true
 write-kubeconfig-mode: "0600"
 node-label:
-  - werft.dev/platform=$PLATFORM
+  - kwerft.dev/platform=$PLATFORM
 kubelet-arg:
   - max-pods=200
 EOF
@@ -491,10 +491,10 @@ stage_network() {
   echo "Cilium $CILIUM_VERSION · kube-proxy replacement · WireGuard$([[ $hubble == true ]] && echo ' · Hubble')"
 }
 
-# Pods in namespaces labelled werft.dev/system may reach every app (each App's
+# Pods in namespaces labelled kwerft.dev/system may reach every app (each App's
 # NetworkPolicy allows them): ingress, monitoring and the console itself.
 mark_system_namespace() {
-  kc label namespace "$1" werft.dev/system=true --overwrite >/dev/null
+  kc label namespace "$1" kwerft.dev/system=true --overwrite >/dev/null
 }
 
 # ---------------------------------------------------------------------------
@@ -502,7 +502,7 @@ mark_system_namespace() {
 # ---------------------------------------------------------------------------
 # k3s >= 1.37 ships the Gateway API CRDs as its own packaged component
 # (gateway-api-crd) and upgrades them together with Kubernetes. Taking them
-# over would make k3s and Werft fight, so use k3s's copy when it is there and
+# over would make k3s and Kwerft fight, so use k3s's copy when it is there and
 # install the pinned release only on k3s versions without it.
 gateway_api_from_k3s() {
   [[ "$(kc get crd gateways.gateway.networking.k8s.io \
@@ -563,7 +563,7 @@ ports:
     expose:
       default: false
 gateway:
-  enabled: false        # Werft owns the Gateway resource
+  enabled: false        # Kwerft owns the Gateway resource
 providers:
   kubernetesGateway:
     enabled: true
@@ -592,69 +592,69 @@ stage_observability() {
   (( LITE )) && { retention=7d; log_retention=3d; }
   helmk repo add vm https://victoriametrics.github.io/helm-charts/ --force-update >>"$LOG_FILE" 2>&1
   helmk upgrade --install vm vm/victoria-metrics-k8s-stack --version "$VM_STACK_CHART_VERSION" \
-    --namespace werft-observability --create-namespace --wait --timeout 15m \
+    --namespace kwerft-observability --create-namespace --wait --timeout 15m \
     --set grafana.enabled=false \
     --set vmsingle.spec.retentionPeriod="$retention" \
     --set alertmanager.enabled=true \
     >>"$LOG_FILE" 2>&1 || die $EXIT_PLATFORM "VictoriaMetrics installation failed"
   helmk upgrade --install vlogs vm/victoria-logs-single --version "$VLOGS_CHART_VERSION" \
-    --namespace werft-observability --wait --timeout 10m \
+    --namespace kwerft-observability --wait --timeout 10m \
     --set server.retentionPeriod="$log_retention" \
     --set vector.enabled=true \
     >>"$LOG_FILE" 2>&1 || die $EXIT_PLATFORM "VictoriaLogs installation failed"
-  mark_system_namespace werft-observability
+  mark_system_namespace kwerft-observability
   echo "VictoriaMetrics ($retention) · VictoriaLogs ($log_retention) · kube-state-metrics · node-exporter"
 }
 
 # ---------------------------------------------------------------------------
-# Stage: Werft
+# Stage: Kwerft
 # ---------------------------------------------------------------------------
 chart_ref() {
-  if [[ -n "$WERFT_CHART" ]]; then echo "$WERFT_CHART"; return; fi
+  if [[ -n "$KWERFT_CHART" ]]; then echo "$KWERFT_CHART"; return; fi
   local here
   here=$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd || true)
-  if [[ -n "$here" && -f "$here/../charts/werft/Chart.yaml" ]]; then
-    echo "$here/../charts/werft"      # running from a repository checkout
+  if [[ -n "$here" && -f "$here/../charts/kwerft/Chart.yaml" ]]; then
+    echo "$here/../charts/kwerft"      # running from a repository checkout
   else
-    echo "$WERFT_CHART_REPO"
+    echo "$KWERFT_CHART_REPO"
   fi
 }
 
-stage_werft() {
-  kc create namespace werft-system --dry-run=client -o yaml | kc apply -f - >/dev/null
-  mark_system_namespace werft-system
+stage_kwerft() {
+  kc create namespace kwerft-system --dry-run=client -o yaml | kc apply -f - >/dev/null
+  mark_system_namespace kwerft-system
   if [[ -n "$CONFIG_FILE" ]]; then
-    kc -n werft-system create secret generic werft-bootstrap \
+    kc -n kwerft-system create secret generic kwerft-bootstrap \
       --from-file=config.yaml="$CONFIG_FILE" --dry-run=client -o yaml | kc apply -f - >/dev/null
   fi
 
   local ref version_args=() image_args=()
   ref=$(chart_ref)
-  [[ "$ref" == oci://* ]] && version_args=(--version "$WERFT_VERSION")
+  [[ "$ref" == oci://* ]] && version_args=(--version "$KWERFT_VERSION")
   if [[ -n "$IMAGE" ]]; then
     if [[ -n "$IMAGE_ARCHIVE" ]]; then
       k3s ctr --namespace k8s.io images import "$IMAGE_ARCHIVE" >>"$LOG_FILE" 2>&1 \
-        || die $EXIT_WERFT "Could not import $IMAGE_ARCHIVE into k3s"
+        || die $EXIT_KWERFT "Could not import $IMAGE_ARCHIVE into k3s"
     fi
     # IfNotPresent: an imported image is used as-is and never pulled.
     image_args=(--set image.repository="${IMAGE%:*}" --set image.tag="${IMAGE##*:}" --set image.pullPolicy=IfNotPresent)
   else
-    image_args=(--set image.tag="$WERFT_VERSION")
+    image_args=(--set image.tag="$KWERFT_VERSION")
   fi
   # Helm installs a chart's CRDs only on first install, never on upgrade, so
   # apply them on every run (server-side; Helm no longer touches them).
   helmk show crds "$ref" ${version_args[@]+"${version_args[@]}"} 2>>"$LOG_FILE" \
     | kc apply --server-side --force-conflicts -f - >>"$LOG_FILE" 2>&1 \
-    || die $EXIT_WERFT "Werft CRDs failed to apply (chart: $ref)"
-  helmk upgrade --install werft "$ref" ${version_args[@]+"${version_args[@]}"} \
-    --namespace werft-system --wait --timeout 10m --skip-crds \
+    || die $EXIT_KWERFT "Kwerft CRDs failed to apply (chart: $ref)"
+  helmk upgrade --install kwerft "$ref" ${version_args[@]+"${version_args[@]}"} \
+    --namespace kwerft-system --wait --timeout 10m --skip-crds \
     --set console.domain="$DOMAIN" \
     --set acme.email="$ACME_EMAIL" \
     --set platform="$PLATFORM" \
     "${image_args[@]}" \
-    >>"$LOG_FILE" 2>&1 || die $EXIT_WERFT "Werft installation failed (chart: $ref)"
+    >>"$LOG_FILE" 2>&1 || die $EXIT_KWERFT "Kwerft installation failed (chart: $ref)"
   printf '%s\n' "$DOMAIN" >"$DOMAIN_FILE"
-  echo "control plane ${IMAGE:-$WERFT_VERSION} ready"
+  echo "control plane ${IMAGE:-$KWERFT_VERSION} ready"
 }
 
 stage_handoff() {
@@ -668,11 +668,11 @@ stage_handoff() {
   mkdir -p "$CONF_DIR"; chmod 0700 "$CONF_DIR"
   if [[ ! -s "$CONF_DIR/setup-token" && -z "$CONFIG_FILE" ]]; then
     local token hash
-    token="wrft_setup_$(head -c 15 /dev/urandom | base32 | tr -d '=' | tr '[:upper:]' '[:lower:]')"
+    token="kwft_setup_$(head -c 15 /dev/urandom | base32 | tr -d '=' | tr '[:upper:]' '[:lower:]')"
     (umask 077; printf '%s\n' "$token" >"$CONF_DIR/setup-token")
     hash=$(printf '%s' "$token" | sha256sum | awk '{print $1}')
-    # Werft only ever sees the hash; the token itself never leaves this disk.
-    kc -n werft-system create secret generic werft-setup-token \
+    # Kwerft only ever sees the hash; the token itself never leaves this disk.
+    kc -n kwerft-system create secret generic kwerft-setup-token \
       --from-literal=sha256="$hash" \
       --from-literal=expires="$(date -u -d '+24 hours' +%FT%TZ)" \
       --dry-run=client -o yaml | kc apply -f - >/dev/null
@@ -715,12 +715,12 @@ stage_join() {
   [[ "$JOIN_ROLE" == "control-plane" ]] && kind=server
   mkdir -p /etc/rancher/k3s
   {
-    echo "# Managed by Werft installer (join)."
+    echo "# Managed by Kwerft installer (join)."
     echo "server: $server"
     echo "token: $k3s_token"
     echo "node-ip: $node_ip"
     echo "node-external-ip: $PUBLIC_IP"
-    echo "node-label: [werft.dev/platform=$PLATFORM]"
+    echo "node-label: [kwerft.dev/platform=$PLATFORM]"
   } >/etc/rancher/k3s/config.yaml
   chmod 0600 /etc/rancher/k3s/config.yaml
   if [[ "$kind" == "server" ]]; then
@@ -739,20 +739,20 @@ stage_join() {
 # ---------------------------------------------------------------------------
 do_reset_firewall() {
   [[ $EUID -eq 0 ]] || die $EXIT_PREFLIGHT "Run as root (sudo)."
-  nft delete table inet werft 2>/dev/null || true
-  rm -f /etc/nftables.d/werft.nft "$STATE_DIR/stages/firewall.done"
-  say "Werft host firewall removed. Run the installer again to restore the baseline."
+  nft delete table inet kwerft 2>/dev/null || true
+  rm -f /etc/nftables.d/kwerft.nft "$STATE_DIR/stages/firewall.done"
+  say "Kwerft host firewall removed. Run the installer again to restore the baseline."
 }
 
 do_uninstall() {
   [[ $EUID -eq 0 ]] || die $EXIT_PREFLIGHT "Run as root (sudo)."
-  confirm "Remove Werft, k3s and all workloads on this server?" || die $EXIT_USAGE "Aborted"
+  confirm "Remove Kwerft, k3s and all workloads on this server?" || die $EXIT_USAGE "Aborted"
   if (( DRY_RUN )); then say "Would run k3s uninstall and remove $STATE_DIR $CONF_DIR"; return; fi
   [[ -x /usr/local/bin/k3s-uninstall.sh ]] && /usr/local/bin/k3s-uninstall.sh >>"$LOG_FILE" 2>&1
   [[ -x /usr/local/bin/k3s-agent-uninstall.sh ]] && /usr/local/bin/k3s-agent-uninstall.sh >>"$LOG_FILE" 2>&1
   do_reset_firewall >/dev/null
-  rm -rf "$STATE_DIR" "$CONF_DIR" /etc/sysctl.d/90-werft.conf /etc/modules-load.d/werft.conf /etc/ssh/sshd_config.d/90-werft.conf
-  say "Werft and k3s removed. Logs kept in $LOG_DIR."
+  rm -rf "$STATE_DIR" "$CONF_DIR" /etc/sysctl.d/90-kwerft.conf /etc/modules-load.d/kwerft.conf /etc/ssh/sshd_config.d/90-kwerft.conf
+  say "Kwerft and k3s removed. Logs kept in $LOG_DIR."
 }
 
 # ---------------------------------------------------------------------------
@@ -775,11 +775,11 @@ main() {
   detect_addresses
   [[ "$MODE" == "join" ]] || resolve_domain
 
-  printf '%s▸ Werft installer %s%s  %schannel=%s · platform=%s · mode=%s%s\n\n' \
-    "$C_ACC$C_B" "$WERFT_VERSION" "$C_0" "$C_DIM" "$CHANNEL" "$PLATFORM" "$MODE" "$C_0"
+  printf '%s▸ Kwerft installer %s%s  %schannel=%s · platform=%s · mode=%s%s\n\n' \
+    "$C_ACC$C_B" "$KWERFT_VERSION" "$C_0" "$C_DIM" "$CHANNEL" "$PLATFORM" "$MODE" "$C_0"
 
   if [[ "$MODE" != "join" ]] && is_temp_domain; then
-    warn "No --domain given: using temporary hostname $DOMAIN (fine for trying Werft, not for production)."
+    warn "No --domain given: using temporary hostname $DOMAIN (fine for trying Kwerft, not for production)."
     echo
   fi
 
@@ -798,13 +798,13 @@ main() {
   run_stage network       "Network"       stage_network force
   run_stage ingress       "Ingress & TLS" stage_ingress_tls force
   run_stage observability "Observability" stage_observability force
-  run_stage werft         "Werft"         stage_werft force
+  run_stage kwerft         "Kwerft"         stage_kwerft force
   run_stage handoff       "Handoff"       stage_handoff force
 
   (( DRY_RUN )) || print_summary
 }
 
-# Tests source this file with WERFT_SOURCED=1 to call individual functions.
-if [[ "${WERFT_SOURCED:-0}" != "1" ]]; then
+# Tests source this file with KWERFT_SOURCED=1 to call individual functions.
+if [[ "${KWERFT_SOURCED:-0}" != "1" ]]; then
   main "$@"
 fi

@@ -4,9 +4,9 @@ kind: CustomResourceDefinition
 metadata:
   annotations:
     controller-gen.kubebuilder.io/version: v0.20.1
-  name: domains.werft.dev
+  name: domains.kwerft.dev
 spec:
-  group: werft.dev
+  group: kwerft.dev
   names:
     kind: Domain
     listKind: DomainList

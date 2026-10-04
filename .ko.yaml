@@ -2,13 +2,13 @@
 # Keep the base image and flags in step with the Dockerfile.
 defaultBaseImage: gcr.io/distroless/static:nonroot
 builds:
-  - id: werft
-    main: ./cmd/werft
+  - id: kwerft
+    main: ./cmd/kwerft
     env:
       - CGO_ENABLED=0
     flags:
       - -trimpath
     ldflags:
       - -s -w
-      - -X github.com/ehilzinger/werft/internal/version.Version={{.Env.VERSION}}
-      - -X github.com/ehilzinger/werft/internal/version.Commit={{.Env.COMMIT}}
+      - -X github.com/ehilzinger/kwerft/internal/version.Version={{.Env.VERSION}}
+      - -X github.com/ehilzinger/kwerft/internal/version.Commit={{.Env.COMMIT}}

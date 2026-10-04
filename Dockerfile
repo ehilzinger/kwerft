@@ -16,11 +16,11 @@ COPY --from=web /src/web/dist ./web/dist
 ARG VERSION=0.1.0-dev
 ARG COMMIT=unknown
 RUN CGO_ENABLED=0 go build -trimpath \
-    -ldflags "-s -w -X github.com/ehilzinger/werft/internal/version.Version=${VERSION} -X github.com/ehilzinger/werft/internal/version.Commit=${COMMIT}" \
-    -o /out/werft ./cmd/werft
+    -ldflags "-s -w -X github.com/ehilzinger/kwerft/internal/version.Version=${VERSION} -X github.com/ehilzinger/kwerft/internal/version.Commit=${COMMIT}" \
+    -o /out/kwerft ./cmd/kwerft
 
 FROM gcr.io/distroless/static:nonroot
-COPY --from=go /out/werft /usr/local/bin/werft
+COPY --from=go /out/kwerft /usr/local/bin/kwerft
 USER 65532:65532
 EXPOSE 8080
-ENTRYPOINT ["/usr/local/bin/werft"]
+ENTRYPOINT ["/usr/local/bin/kwerft"]

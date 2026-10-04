@@ -1,4 +1,4 @@
-# Werft — notes for Claude
+# Kwerft — notes for Claude
 
 Self-hosted Kubernetes console for Hetzner (Cloud + dedicated), installed by
 `install/install.sh`. Plan and decisions: `docs/plan.md`. UI mockups and the
@@ -21,8 +21,8 @@ when the blueprint changes).
 - UI design tokens live in `web/src/styles/tokens.css` and mirror the
   blueprint. Fonts are self-hosted (CSP is `'self'` only).
 - Hosted under the personal GitHub account `ehilzinger`: module
-  `github.com/ehilzinger/werft`, image `ghcr.io/ehilzinger/werft`. The
-  installer URL is GitHub raw until there is a domain (`get.werft.sh` in the
+  `github.com/ehilzinger/kwerft`, image `ghcr.io/ehilzinger/kwerft`. The
+  installer URL is GitHub raw until there is a domain (`get.kwerft.dev` in the
   blueprint is the target, not live).
 
 ## Commands

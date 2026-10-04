@@ -17,7 +17,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	gwv1 "sigs.k8s.io/gateway-api/apis/v1"
 
-	werftv1 "github.com/ehilzinger/werft/api/v1alpha1"
+	kwerftv1 "github.com/ehilzinger/kwerft/api/v1alpha1"
 )
 
 const maxHistory = 20
@@ -30,7 +30,7 @@ type AppReconciler struct {
 }
 
 func (r *AppReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
-	var app werftv1.App
+	var app kwerftv1.App
 	if err := r.Get(ctx, req.NamespacedName, &app); err != nil {
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
@@ -64,14 +64,14 @@ type readiness struct {
 	message string
 }
 
-func (r *AppReconciler) reconcile(ctx context.Context, app *werftv1.App) (*readiness, error) {
+func (r *AppReconciler) reconcile(ctx context.Context, app *kwerftv1.App) (*readiness, error) {
 	var ns corev1.Namespace
 	if err := r.Get(ctx, client.ObjectKey{Name: app.Namespace}, &ns); err != nil {
 		return nil, err
 	}
 	project := ns.Labels[LabelProject]
 	if project == "" {
-		return nil, terminalf("NotInProject", "namespace %q is not a Werft project; create a Project first", app.Namespace)
+		return nil, terminalf("NotInProject", "namespace %q is not a Kwerft project; create a Project first", app.Namespace)
 	}
 
 	image, ok := resolveImage(app)
@@ -124,8 +124,8 @@ func (r *AppReconciler) reconcile(ctx context.Context, app *werftv1.App) (*readi
 	// Revisions: a new one whenever the spec or the resolved image changes.
 	if h := app.Status.History; len(h) == 0 || h[0].Image != image || h[0].Generation != app.Generation {
 		app.Status.Revision++
-		rev := werftv1.AppRevision{Number: app.Status.Revision, Image: image, Generation: app.Generation, Time: metav1.Now()}
-		app.Status.History = append([]werftv1.AppRevision{rev}, app.Status.History...)
+		rev := kwerftv1.AppRevision{Number: app.Status.Revision, Image: image, Generation: app.Generation, Time: metav1.Now()}
+		app.Status.History = append([]kwerftv1.AppRevision{rev}, app.Status.History...)
 		if len(app.Status.History) > maxHistory {
 			app.Status.History = app.Status.History[:maxHistory]
 		}
@@ -162,10 +162,10 @@ func (r *AppReconciler) reconcile(ctx context.Context, app *werftv1.App) (*readi
 // reconcileDomains claims a Domain per public hostname and releases the ones
 // this App no longer uses. A Domain created by someone else is left alone;
 // one owned by another App is a conflict.
-func (r *AppReconciler) reconcileDomains(ctx context.Context, app *werftv1.App, rd *appRender) error {
+func (r *AppReconciler) reconcileDomains(ctx context.Context, app *kwerftv1.App, rd *appRender) error {
 	desired := rd.domains()
 	for name, domain := range desired {
-		var existing werftv1.Domain
+		var existing kwerftv1.Domain
 		err := r.Get(ctx, client.ObjectKey{Namespace: app.Namespace, Name: name}, &existing)
 		switch {
 		case apierrors.IsNotFound(err):
@@ -182,7 +182,7 @@ func (r *AppReconciler) reconcileDomains(ctx context.Context, app *werftv1.App, 
 			return fmt.Errorf("apply domain: %w", err)
 		}
 	}
-	var existing werftv1.DomainList
+	var existing kwerftv1.DomainList
 	if err := r.List(ctx, &existing, client.InNamespace(app.Namespace), client.MatchingLabels{LabelApp: app.Name}); err != nil {
 		return err
 	}
@@ -199,7 +199,7 @@ func (r *AppReconciler) reconcileDomains(ctx context.Context, app *werftv1.App, 
 
 // reconcileRoutes applies the desired HTTPRoutes and removes ones for ports
 // that are no longer public.
-func (r *AppReconciler) reconcileRoutes(ctx context.Context, app *werftv1.App, rd *appRender) error {
+func (r *AppReconciler) reconcileRoutes(ctx context.Context, app *kwerftv1.App, rd *appRender) error {
 	desired := rd.routes()
 	for _, route := range desired {
 		if err := apply(ctx, r.Client, route); err != nil {
@@ -229,7 +229,7 @@ func (r *AppReconciler) reconcileRoutes(ctx context.Context, app *werftv1.App, r
 
 // resolveImage returns the image to run. Git apps run the image of their last
 // successful build, recorded in status by the Build reconciler (Phase 2).
-func resolveImage(app *werftv1.App) (string, bool) {
+func resolveImage(app *kwerftv1.App) (string, bool) {
 	if src := app.Spec.Source.Image; src != nil {
 		return src.Ref, true
 	}
@@ -244,13 +244,13 @@ func resolveImage(app *werftv1.App) (string, bool) {
 func (r *AppReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		// Status writes do not bump the generation, so they do not re-trigger.
-		For(&werftv1.App{}, builder.WithPredicates(predicate.GenerationChangedPredicate{})).
+		For(&kwerftv1.App{}, builder.WithPredicates(predicate.GenerationChangedPredicate{})).
 		Owns(&appsv1.Deployment{}).
 		Owns(&appsv1.StatefulSet{}).
 		Owns(&corev1.Service{}).
 		Owns(&networkingv1.NetworkPolicy{}).
 		Owns(&gwv1.HTTPRoute{}).
-		Owns(&werftv1.Domain{}).
+		Owns(&kwerftv1.Domain{}).
 		Named("app").
 		Complete(r)
 }

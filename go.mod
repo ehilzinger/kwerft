@@ -1,4 +1,4 @@
-module github.com/ehilzinger/werft
+module github.com/ehilzinger/kwerft
 
 go 1.26.0
 

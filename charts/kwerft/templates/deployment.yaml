@@ -1,9 +1,9 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: {{ include "werft.fullname" . }}
+  name: {{ include "kwerft.fullname" . }}
   namespace: {{ .Release.Namespace }}
-  labels: {{- include "werft.labels" . | nindent 4 }}
+  labels: {{- include "kwerft.labels" . | nindent 4 }}
 spec:
   # TODO(phase-1): replicas > 1 needs leader election for the reconcilers and
   # the SQLite store moved behind the leader (or to Postgres for HA).
@@ -11,20 +11,20 @@ spec:
   strategy:
     type: Recreate             # single RWO volume for SQLite
   selector:
-    matchLabels: {{- include "werft.selectorLabels" . | nindent 6 }}
+    matchLabels: {{- include "kwerft.selectorLabels" . | nindent 6 }}
   template:
     metadata:
-      labels: {{- include "werft.selectorLabels" . | nindent 8 }}
+      labels: {{- include "kwerft.selectorLabels" . | nindent 8 }}
     spec:
-      serviceAccountName: {{ include "werft.fullname" . }}
+      serviceAccountName: {{ include "kwerft.fullname" . }}
       securityContext: {{- toYaml .Values.podSecurityContext | nindent 8 }}
       containers:
-        - name: werft
-          image: {{ include "werft.image" . }}
+        - name: kwerft
+          image: {{ include "kwerft.image" . }}
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           args:
             - --listen=:8080
-            - --data-dir=/var/lib/werft
+            - --data-dir=/var/lib/kwerft
             - --console-domain={{ required "console.domain is required" .Values.console.domain }}
             - --platform={{ .Values.platform }}
             - --gateway-class={{ .Values.gateway.className }}
@@ -45,12 +45,12 @@ spec:
           securityContext: {{- toYaml .Values.securityContext | nindent 12 }}
           volumeMounts:
             - name: data
-              mountPath: /var/lib/werft
+              mountPath: /var/lib/kwerft
             - name: tmp
               mountPath: /tmp
       volumes:
         - name: data
           persistentVolumeClaim:
-            claimName: {{ include "werft.fullname" . }}-data
+            claimName: {{ include "kwerft.fullname" . }}-data
         - name: tmp
           emptyDir: {}

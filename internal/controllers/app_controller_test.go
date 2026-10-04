@@ -15,21 +15,21 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	gwv1 "sigs.k8s.io/gateway-api/apis/v1"
 
-	werftv1 "github.com/ehilzinger/werft/api/v1alpha1"
+	kwerftv1 "github.com/ehilzinger/kwerft/api/v1alpha1"
 )
 
 // projectNamespace creates a Project and waits for its namespace.
 func projectNamespace(t *testing.T, name string) {
 	t.Helper()
-	createProject(t, name, werftv1.ProjectSpec{})
+	createProject(t, name, kwerftv1.ProjectSpec{})
 	eventually(t, func() error {
 		return k8s.Get(context.Background(), client.ObjectKey{Name: name}, &corev1.Namespace{})
 	})
 }
 
-func createApp(t *testing.T, ns, name string, spec werftv1.AppSpec) *werftv1.App {
+func createApp(t *testing.T, ns, name string, spec kwerftv1.AppSpec) *kwerftv1.App {
 	t.Helper()
-	app := &werftv1.App{ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: name}, Spec: spec}
+	app := &kwerftv1.App{ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: name}, Spec: spec}
 	if err := k8s.Create(context.Background(), app); err != nil {
 		t.Fatal(err)
 	}
@@ -38,7 +38,7 @@ func createApp(t *testing.T, ns, name string, spec werftv1.AppSpec) *werftv1.App
 
 // waitForApp waits until the App's Ready condition reflects its current
 // generation and returns the fresh object.
-func waitForApp(t *testing.T, app *werftv1.App, wantReason string) *werftv1.App {
+func waitForApp(t *testing.T, app *kwerftv1.App, wantReason string) *kwerftv1.App {
 	t.Helper()
 	eventually(t, func() error {
 		if err := k8s.Get(context.Background(), client.ObjectKeyFromObject(app), app); err != nil {
@@ -56,14 +56,14 @@ func waitForApp(t *testing.T, app *werftv1.App, wantReason string) *werftv1.App 
 	return app
 }
 
-func imageApp(ref string) werftv1.AppSpec {
-	return werftv1.AppSpec{
-		Source:      werftv1.AppSource{Image: &werftv1.ImageSource{Ref: ref, PullSecret: "ghcr-acme"}},
+func imageApp(ref string) kwerftv1.AppSpec {
+	return kwerftv1.AppSpec{
+		Source:      kwerftv1.AppSource{Image: &kwerftv1.ImageSource{Ref: ref, PullSecret: "ghcr-acme"}},
 		Replicas:    ptr.To[int32](2),
 		Size:        "medium",
-		Ports:       []werftv1.AppPort{{Container: 8080, Public: "api.example.com"}},
+		Ports:       []kwerftv1.AppPort{{Container: 8080, Public: "api.example.com"}},
 		AllowFrom:   []string{"web-frontend", "internal/cron"},
-		HealthCheck: &werftv1.HealthCheck{HTTP: "/healthz", Port: 8080},
+		HealthCheck: &kwerftv1.HealthCheck{HTTP: "/healthz", Port: 8080},
 		Env: []corev1.EnvVar{
 			{Name: "LOG_LEVEL", Value: "info"},
 			{Name: "DATABASE_URL", ValueFrom: &corev1.EnvVarSource{SecretKeyRef: &corev1.SecretKeySelector{
@@ -212,10 +212,10 @@ func TestAppWithVolumesRunsAsStatefulSet(t *testing.T) {
 	requireEnvtest(t)
 	ctx := context.Background()
 	projectNamespace(t, "db")
-	spec := werftv1.AppSpec{
-		Source:  werftv1.AppSource{Image: &werftv1.ImageSource{Ref: "postgres:17.6"}},
-		Ports:   []werftv1.AppPort{{Container: 5432}},
-		Volumes: []werftv1.AppVolume{{Path: "/var/lib/postgresql/data", Size: resource.MustParse("50Gi"), Class: "hcloud-volume"}},
+	spec := kwerftv1.AppSpec{
+		Source:  kwerftv1.AppSource{Image: &kwerftv1.ImageSource{Ref: "postgres:17.6"}},
+		Ports:   []kwerftv1.AppPort{{Container: 5432}},
+		Volumes: []kwerftv1.AppVolume{{Path: "/var/lib/postgresql/data", Size: resource.MustParse("50Gi"), Class: "hcloud-volume"}},
 	}
 	app := createApp(t, "db", "postgres", spec)
 	waitForApp(t, app, "Progressing")
@@ -245,8 +245,8 @@ func TestGitAppWaitsForFirstBuild(t *testing.T) {
 	requireEnvtest(t)
 	ctx := context.Background()
 	projectNamespace(t, "gitproj")
-	app := createApp(t, "gitproj", "invoices", werftv1.AppSpec{
-		Source: werftv1.AppSource{Git: &werftv1.GitSource{Repository: "https://github.com/acme/invoices.git"}},
+	app := createApp(t, "gitproj", "invoices", kwerftv1.AppSpec{
+		Source: kwerftv1.AppSource{Git: &kwerftv1.GitSource{Repository: "https://github.com/acme/invoices.git"}},
 	})
 	waitForApp(t, app, "AwaitingBuild")
 	if err := k8s.Get(ctx, client.ObjectKey{Namespace: "gitproj", Name: "invoices"}, &appsv1.Deployment{}); !apierrors.IsNotFound(err) {
@@ -266,11 +266,11 @@ func TestAppOutsideProjectIsRejected(t *testing.T) {
 
 func TestAppSpecRejectsBothSources(t *testing.T) {
 	requireEnvtest(t)
-	app := &werftv1.App{
+	app := &kwerftv1.App{
 		ObjectMeta: metav1.ObjectMeta{Namespace: "default", Name: "both"},
-		Spec: werftv1.AppSpec{Source: werftv1.AppSource{
-			Image: &werftv1.ImageSource{Ref: "nginx"},
-			Git:   &werftv1.GitSource{Repository: "https://example.com/x.git"},
+		Spec: kwerftv1.AppSpec{Source: kwerftv1.AppSource{
+			Image: &kwerftv1.ImageSource{Ref: "nginx"},
+			Git:   &kwerftv1.GitSource{Repository: "https://example.com/x.git"},
 		}},
 	}
 	err := k8s.Create(context.Background(), app)

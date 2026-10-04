@@ -14,7 +14,7 @@ export function Apps() {
       </div>
       <div className="empty">
         <h2>No apps yet</h2>
-        <p>Deploy a container image from any registry, or connect a Git repository and Werft builds and deploys every push.</p>
+        <p>Deploy a container image from any registry, or connect a Git repository and Kwerft builds and deploys every push.</p>
       </div>
     </section>
   );

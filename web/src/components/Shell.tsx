@@ -32,7 +32,7 @@ export function Shell() {
   return (
     <div className="shell">
       <aside className="side">
-        <Link to="/" className="brand"><Icon name="logo" />Werft</Link>
+        <Link to="/" className="brand"><Icon name="logo" />Kwerft</Link>
         <nav className="nav" aria-label="Console">
           {sections.map((s, i) => (
             <div key={i} style={{ display: "contents" }}>
@@ -52,7 +52,7 @@ export function Shell() {
       </aside>
       <div className="main">
         <header className="topbar">
-          <div className="crumb"><b>{titles[section] ?? "Werft"}</b></div>
+          <div className="crumb"><b>{titles[section] ?? "Kwerft"}</b></div>
         </header>
         <Outlet />
       </div>

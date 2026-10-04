@@ -27,13 +27,13 @@ import (
 	gwv1 "sigs.k8s.io/gateway-api/apis/v1"
 	gwv1ac "sigs.k8s.io/gateway-api/applyconfiguration/apis/v1"
 
-	werftv1 "github.com/ehilzinger/werft/api/v1alpha1"
+	kwerftv1 "github.com/ehilzinger/kwerft/api/v1alpha1"
 )
 
 const (
 	httpListener    = "http"
 	consoleListener = "console-https"
-	consoleSecret   = "werft-console-tls"
+	consoleSecret   = "kwerft-console-tls"
 	// Gateway API allows 64 listeners; two are http and the console.
 	maxDomainListeners = 62
 )
@@ -57,11 +57,11 @@ type DomainReconciler struct {
 }
 
 func (r *DomainReconciler) Reconcile(ctx context.Context, _ ctrl.Request) (ctrl.Result, error) {
-	var list werftv1.DomainList
+	var list kwerftv1.DomainList
 	if err := r.List(ctx, &list); err != nil {
 		return ctrl.Result{}, err
 	}
-	domains := make([]*werftv1.Domain, 0, len(list.Items))
+	domains := make([]*kwerftv1.Domain, 0, len(list.Items))
 	for i := range list.Items {
 		if list.Items[i].DeletionTimestamp.IsZero() {
 			domains = append(domains, &list.Items[i])
@@ -116,7 +116,7 @@ func (r *DomainReconciler) Reconcile(ctx context.Context, _ ctrl.Request) (ctrl.
 	}
 
 	gw := gwv1ac.Gateway(GatewayName, GatewayNamespace).
-		WithLabels(map[string]string{LabelManagedBy: ManagedByWerft}).
+		WithLabels(map[string]string{LabelManagedBy: ManagedByKwerft}).
 		WithSpec(gwv1ac.GatewaySpec().
 			WithGatewayClassName(gwv1.ObjectName(r.GatewayClass)).
 			WithListeners(listeners...))
@@ -158,7 +158,7 @@ func (r *DomainReconciler) Reconcile(ctx context.Context, _ ctrl.Request) (ctrl.
 
 // certificateState reads the cert-manager Certificate that the gateway-shim
 // creates for the Domain's listener (named after its secret).
-func (r *DomainReconciler) certificateState(ctx context.Context, d *werftv1.Domain) *readiness {
+func (r *DomainReconciler) certificateState(ctx context.Context, d *kwerftv1.Domain) *readiness {
 	if r.ClusterIssuer == "" {
 		return &readiness{metav1.ConditionFalse, "CertificatesDisabled", "No certificate issuer is configured; HTTPS uses the ingress default certificate"}
 	}
@@ -231,7 +231,7 @@ func (r *DomainReconciler) SetupWithManager(mgr ctrl.Manager) error {
 
 	b := ctrl.NewControllerManagedBy(mgr).
 		Named("domain").
-		Watches(&werftv1.Domain{}, toGateway).
+		Watches(&kwerftv1.Domain{}, toGateway).
 		Watches(&gwv1.Gateway{}, toGateway).
 		WatchesRawSource(source.Channel(kick, toGateway))
 

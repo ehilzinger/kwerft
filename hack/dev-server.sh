@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Install or upgrade Werft on a test server from this checkout — no Docker and
+# Install or upgrade Kwerft on a test server from this checkout — no Docker and
 # no registry needed. Builds the UI and a console image locally (with ko),
 # copies the installer, chart and image over SSH, and runs the installer with
 # --image/--image-archive. Re-run after every change to redeploy.
@@ -15,8 +15,8 @@
 set -Eeuo pipefail
 
 readonly KO_VERSION="v0.19.1"
-readonly REPO="ghcr.io/ehilzinger/werft"
-readonly REMOTE_DIR="/opt/werft-src"
+readonly REPO="ghcr.io/ehilzinger/kwerft"
+readonly REMOTE_DIR="/opt/kwerft-src"
 
 say() { printf '\033[34m▸\033[0m %s\n' "$*"; }
 die() { printf '\033[31m✗ %s\033[0m\n' "$*" >&2; exit 1; }
@@ -50,19 +50,19 @@ main() {
 
   say "Building $image for linux/$arch"
   (cd "$root" && KO_DOCKER_REPO="$REPO" VERSION="$tag" COMMIT="$commit" \
-    go run "github.com/google/ko@$KO_VERSION" build ./cmd/werft \
+    go run "github.com/google/ko@$KO_VERSION" build ./cmd/kwerft \
       --bare --tags "$tag" --platform "linux/$arch" \
-      --push=false --tarball "$WORK/werft-image.tar" >/dev/null)
+      --push=false --tarball "$WORK/kwerft-image.tar" >/dev/null)
 
   say "Copying installer, chart and image to $target:$REMOTE_DIR"
   # COPYFILE_DISABLE keeps macOS tar from adding ._ metadata files.
   COPYFILE_DISABLE=1 tar -C "$root" -cf - install charts \
     | ssh "$target" "sudo rm -rf $REMOTE_DIR && sudo mkdir -p $REMOTE_DIR && sudo tar -C $REMOTE_DIR -xf -"
-  ssh "$target" "sudo tee $REMOTE_DIR/werft-image.tar >/dev/null" <"$WORK/werft-image.tar"
+  ssh "$target" "sudo tee $REMOTE_DIR/kwerft-image.tar >/dev/null" <"$WORK/kwerft-image.tar"
 
   say "Running the installer on $target"
   local args
-  args=$(printf '%q ' --image "$image" --image-archive "$REMOTE_DIR/werft-image.tar" --yes "$@")
+  args=$(printf '%q ' --image "$image" --image-archive "$REMOTE_DIR/kwerft-image.tar" --yes "$@")
   local tty=()
   [[ -t 1 ]] && tty=(-t)
   ssh ${tty[@]+"${tty[@]}"} "$target" "sudo $REMOTE_DIR/install/install.sh $args"

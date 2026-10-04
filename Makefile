@@ -1,11 +1,11 @@
-# Werft — common developer tasks. `make help` lists them.
+# Kwerft — common developer tasks. `make help` lists them.
 
 GO            ?= go
 VERSION       ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo 0.1.0-dev)
 COMMIT        ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)
-LDFLAGS       := -s -w -X github.com/ehilzinger/werft/internal/version.Version=$(VERSION) -X github.com/ehilzinger/werft/internal/version.Commit=$(COMMIT)
+LDFLAGS       := -s -w -X github.com/ehilzinger/kwerft/internal/version.Version=$(VERSION) -X github.com/ehilzinger/kwerft/internal/version.Commit=$(COMMIT)
 CONTROLLER_GEN = $(GO) run sigs.k8s.io/controller-tools/cmd/controller-gen@v0.20.1
-IMAGE         ?= ghcr.io/ehilzinger/werft:$(VERSION)
+IMAGE         ?= ghcr.io/ehilzinger/kwerft:$(VERSION)
 # Kubernetes API server + etcd binaries for controller integration tests.
 ENVTEST_K8S   ?= 1.37.0
 SETUP_ENVTEST  = $(GO) run sigs.k8s.io/controller-runtime/tools/setup-envtest@v0.25.2
@@ -22,11 +22,11 @@ web: ## Build the console UI into web/dist
 
 .PHONY: dist-stub
 dist-stub: ## Create a placeholder web/dist so Go builds without Node
-	@test -f web/dist/index.html || { mkdir -p web/dist && echo '<!doctype html><title>Werft</title><p>UI not built — run <code>make web</code>.</p>' > web/dist/index.html; }
+	@test -f web/dist/index.html || { mkdir -p web/dist && echo '<!doctype html><title>Kwerft</title><p>UI not built — run <code>make web</code>.</p>' > web/dist/index.html; }
 
 .PHONY: build
-build: dist-stub ## Build bin/werft (run `make web` first for the real UI)
-	CGO_ENABLED=0 $(GO) build -trimpath -ldflags '$(LDFLAGS)' -o bin/werft ./cmd/werft
+build: dist-stub ## Build bin/kwerft (run `make web` first for the real UI)
+	CGO_ENABLED=0 $(GO) build -trimpath -ldflags '$(LDFLAGS)' -o bin/kwerft ./cmd/kwerft
 
 .PHONY: image
 image: ## Build the container image
@@ -38,11 +38,11 @@ image: ## Build the container image
 generate: ## Regenerate deepcopy, apply configurations and CRDs from api/v1alpha1
 	$(CONTROLLER_GEN) object paths=./api/...
 	$(CONTROLLER_GEN) applyconfiguration paths=./api/...
-	$(CONTROLLER_GEN) crd paths=./api/... output:crd:dir=charts/werft/crds
+	$(CONTROLLER_GEN) crd paths=./api/... output:crd:dir=charts/kwerft/crds
 
 .PHONY: verify-generate
 verify-generate: generate ## Fail if generated files are out of date
-	@git diff --exit-code -- api charts/werft/crds || { echo "Run 'make generate' and commit the result."; exit 1; }
+	@git diff --exit-code -- api charts/kwerft/crds || { echo "Run 'make generate' and commit the result."; exit 1; }
 
 ## --- checks ------------------------------------------------------------
 
@@ -63,8 +63,8 @@ test-install: ## shellcheck + bats for the installer
 
 .PHONY: helm-lint
 helm-lint: ## Lint and render the Helm chart
-	helm lint charts/werft --set console.domain=ops.example.com --set acme.email=ops@example.com
-	helm template werft charts/werft --set console.domain=ops.example.com >/dev/null
+	helm lint charts/kwerft --set console.domain=ops.example.com --set acme.email=ops@example.com
+	helm template kwerft charts/kwerft --set console.domain=ops.example.com >/dev/null
 
 .PHONY: check
 check: lint test test-install helm-lint ## Everything CI runs
@@ -73,7 +73,7 @@ check: lint test test-install helm-lint ## Everything CI runs
 
 .PHONY: dev-api
 dev-api: dist-stub ## Run the API on :8080 (pair with `make dev-web`)
-	$(GO) run ./cmd/werft --listen=127.0.0.1:8080 --console-domain=localhost --platform=cloud --controllers=false
+	$(GO) run ./cmd/kwerft --listen=127.0.0.1:8080 --console-domain=localhost --platform=cloud --controllers=false
 
 .PHONY: dev-server
 dev-server: ## Install/upgrade on a test server: make dev-server HOST=root@1.2.3.4 ARGS="--domain ops.example.com"

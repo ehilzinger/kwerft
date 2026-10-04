@@ -4,9 +4,9 @@ kind: CustomResourceDefinition
 metadata:
   annotations:
     controller-gen.kubebuilder.io/version: v0.20.1
-  name: builds.werft.dev
+  name: builds.kwerft.dev
 spec:
-  group: werft.dev
+  group: kwerft.dev
   names:
     kind: Build
     listKind: BuildList
@@ -151,7 +151,7 @@ spec:
                   type: object
                 type: array
               image:
-                description: Image is the pushed reference, e.g. registry.werft.internal/storefront/api:4f2c1ab.
+                description: Image is the pushed reference, e.g. registry.kwerft.internal/storefront/api:4f2c1ab.
                 type: string
               job:
                 description: Job is the name of the Kubernetes Job running BuildKit.

@@ -13,12 +13,12 @@ import (
 	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	werftv1 "github.com/ehilzinger/werft/api/v1alpha1"
+	kwerftv1 "github.com/ehilzinger/kwerft/api/v1alpha1"
 )
 
-func createProject(t *testing.T, name string, spec werftv1.ProjectSpec) *werftv1.Project {
+func createProject(t *testing.T, name string, spec kwerftv1.ProjectSpec) *kwerftv1.Project {
 	t.Helper()
-	p := &werftv1.Project{ObjectMeta: metav1.ObjectMeta{Name: name}, Spec: spec}
+	p := &kwerftv1.Project{ObjectMeta: metav1.ObjectMeta{Name: name}, Spec: spec}
 	if err := k8s.Create(context.Background(), p); err != nil {
 		t.Fatal(err)
 	}
@@ -28,14 +28,14 @@ func createProject(t *testing.T, name string, spec werftv1.ProjectSpec) *werftv1
 func TestProjectCreatesManagedNamespace(t *testing.T) {
 	requireEnvtest(t)
 	ctx := context.Background()
-	p := createProject(t, "storefront", werftv1.ProjectSpec{PodSecurity: "restricted"})
+	p := createProject(t, "storefront", kwerftv1.ProjectSpec{PodSecurity: "restricted"})
 
 	var ns corev1.Namespace
 	eventually(t, func() error { return k8s.Get(ctx, client.ObjectKey{Name: "storefront"}, &ns) })
 
 	want := map[string]string{
 		LabelProject:                         "storefront",
-		LabelManagedBy:                       ManagedByWerft,
+		LabelManagedBy:                       ManagedByKwerft,
 		"pod-security.kubernetes.io/enforce": "restricted",
 	}
 	for k, v := range want {
@@ -73,7 +73,7 @@ func TestProjectCreatesManagedNamespace(t *testing.T) {
 func TestProjectQuotaFollowsSpec(t *testing.T) {
 	requireEnvtest(t)
 	ctx := context.Background()
-	p := createProject(t, "quota-test", werftv1.ProjectSpec{
+	p := createProject(t, "quota-test", kwerftv1.ProjectSpec{
 		Quota: corev1.ResourceList{corev1.ResourceRequestsCPU: resource.MustParse("4")},
 	})
 
@@ -104,7 +104,7 @@ func TestProjectQuotaFollowsSpec(t *testing.T) {
 func TestProjectWithoutIsolationHasNoDefaultDeny(t *testing.T) {
 	requireEnvtest(t)
 	ctx := context.Background()
-	p := createProject(t, "open", werftv1.ProjectSpec{Isolated: ptr.To(false)})
+	p := createProject(t, "open", kwerftv1.ProjectSpec{Isolated: ptr.To(false)})
 	eventually(t, func() error {
 		if err := k8s.Get(ctx, client.ObjectKeyFromObject(p), p); err != nil {
 			return err
@@ -124,7 +124,7 @@ func TestProjectRefusesForeignNamespace(t *testing.T) {
 	if err := k8s.Create(ctx, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "legacy"}}); err != nil {
 		t.Fatal(err)
 	}
-	p := createProject(t, "legacy", werftv1.ProjectSpec{})
+	p := createProject(t, "legacy", kwerftv1.ProjectSpec{})
 
 	eventually(t, func() error {
 		if err := k8s.Get(ctx, client.ObjectKeyFromObject(p), p); err != nil {
@@ -144,6 +144,6 @@ func TestProjectRefusesForeignNamespace(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, touched := ns.Labels[LabelProject]; touched {
-		t.Error("Werft labelled a namespace it does not own")
+		t.Error("Kwerft labelled a namespace it does not own")
 	}
 }

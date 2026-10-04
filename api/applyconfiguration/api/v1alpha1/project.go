@@ -26,7 +26,7 @@ func Project(name, namespace string) *ProjectApplyConfiguration {
 	b.WithName(name)
 	b.WithNamespace(namespace)
 	b.WithKind("Project")
-	b.WithAPIVersion("werft.dev/v1alpha1")
+	b.WithAPIVersion("kwerft.dev/v1alpha1")
 	return b
 }
 

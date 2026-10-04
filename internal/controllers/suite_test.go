@@ -27,7 +27,7 @@ var k8s client.Client
 
 const testConsoleDomain = "console.example.com"
 
-// TestMain starts a real kube-apiserver + etcd (envtest) with the Werft and
+// TestMain starts a real kube-apiserver + etcd (envtest) with the Kwerft and
 // Gateway API CRDs, and runs both reconcilers against it. There are no
 // built-in controllers (no pods, no garbage collection), so tests assert on
 // rendered objects and fake workload status where needed.
@@ -47,7 +47,7 @@ func TestMain(m *testing.M) {
 	}
 	env := &envtest.Environment{
 		CRDDirectoryPaths: []string{
-			filepath.Join("..", "..", "charts", "werft", "crds"),
+			filepath.Join("..", "..", "charts", "kwerft", "crds"),
 			filepath.Join(gatewayCRDs, "config", "crd", "standard"),
 			filepath.Join("testdata", "crds"),
 		},

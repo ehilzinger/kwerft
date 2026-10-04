@@ -27,7 +27,7 @@ func Domain(name, namespace string) *DomainApplyConfiguration {
 	b.WithName(name)
 	b.WithNamespace(namespace)
 	b.WithKind("Domain")
-	b.WithAPIVersion("werft.dev/v1alpha1")
+	b.WithAPIVersion("kwerft.dev/v1alpha1")
 	return b
 }
 

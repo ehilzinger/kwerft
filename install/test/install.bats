@@ -38,7 +38,7 @@ setup() {
 @test "--dry-run lists every install stage in order" {
   run "$SCRIPT" --dry-run --platform cloud --domain ops.example.com
   [ "$status" -eq 0 ]
-  expected="Preflight System Firewall Kubernetes Helm Network Ingress Observability Werft Handoff"
+  expected="Preflight System Firewall Kubernetes Helm Network Ingress Observability Kwerft Handoff"
   actual=$(printf '%s\n' "$output" | sed -n 's/^→ \([A-Za-z]*\).*/\1/p' | tr '\n' ' ' | sed 's/ $//')
   [ "$actual" = "$expected" ]
 }
@@ -51,23 +51,23 @@ setup() {
 }
 
 @test "config_get reads top-level scalars and ignores comments and quotes" {
-  cfg="$BATS_TEST_TMPDIR/werft.yaml"
+  cfg="$BATS_TEST_TMPDIR/kwerft.yaml"
   printf 'domain: "ops.example.com"   # console\nemail: ops@example.com\nowner:\n  email: nested@example.com\n' >"$cfg"
-  WERFT_SOURCED=1 source "$SCRIPT"
+  KWERFT_SOURCED=1 source "$SCRIPT"
   CONFIG_FILE=$cfg
   [ "$(config_get domain)" = "ops.example.com" ]
   [ "$(config_get email)" = "ops@example.com" ]
 }
 
 @test "network_of masks host bits" {
-  WERFT_SOURCED=1 source "$SCRIPT"
+  KWERFT_SOURCED=1 source "$SCRIPT"
   [ "$(network_of 10.0.1.3/16)" = "10.0.0.0/16" ]
   [ "$(network_of 192.168.100.7/24)" = "192.168.100.0/24" ]
   [ "$(network_of 172.16.5.9/12)" = "172.16.0.0/12" ]
 }
 
 @test "resolve_domain: --domain wins over a saved hostname" {
-  WERFT_SOURCED=1 source "$SCRIPT"
+  KWERFT_SOURCED=1 source "$SCRIPT"
   DOMAIN_FILE="$BATS_TEST_TMPDIR/domain"; echo "old.example.com" >"$DOMAIN_FILE"
   DOMAIN="ops.example.com"; PUBLIC_IP="203.0.113.24"
   resolve_domain
@@ -77,7 +77,7 @@ setup() {
 }
 
 @test "resolve_domain: re-running without --domain keeps the saved hostname" {
-  WERFT_SOURCED=1 source "$SCRIPT"
+  KWERFT_SOURCED=1 source "$SCRIPT"
   DOMAIN_FILE="$BATS_TEST_TMPDIR/domain"; echo "ops.example.com" >"$DOMAIN_FILE"
   DOMAIN=""; PUBLIC_IP="203.0.113.24"
   resolve_domain
@@ -85,7 +85,7 @@ setup() {
 }
 
 @test "resolve_domain: falls back to a temporary sslip.io hostname" {
-  WERFT_SOURCED=1 source "$SCRIPT"
+  KWERFT_SOURCED=1 source "$SCRIPT"
   DOMAIN_FILE="$BATS_TEST_TMPDIR/missing"
   DOMAIN=""; PUBLIC_IP="203.0.113.24"
   resolve_domain
@@ -94,20 +94,20 @@ setup() {
 }
 
 @test "--image needs a tag" {
-  run "$SCRIPT" --image ghcr.io/ehilzinger/werft
+  run "$SCRIPT" --image ghcr.io/ehilzinger/kwerft
   [ "$status" -eq 2 ]
   [[ "$output" == *"--image needs a tag"* ]]
 }
 
 @test "--image-archive needs --image" {
-  archive="$BATS_TEST_TMPDIR/werft.tar"; touch "$archive"
+  archive="$BATS_TEST_TMPDIR/kwerft.tar"; touch "$archive"
   run "$SCRIPT" --image-archive "$archive"
   [ "$status" -eq 2 ]
   [[ "$output" == *"--image-archive needs --image"* ]]
 }
 
 @test "--image with a registry port keeps the port in the repository" {
-  archive="$BATS_TEST_TMPDIR/werft.tar"; touch "$archive"
-  run "$SCRIPT" --dry-run --platform cloud --image registry.local:5000/werft:dev-1 --image-archive "$archive"
+  archive="$BATS_TEST_TMPDIR/kwerft.tar"; touch "$archive"
+  run "$SCRIPT" --dry-run --platform cloud --image registry.local:5000/kwerft:dev-1 --image-archive "$archive"
   [ "$status" -eq 0 ]
 }

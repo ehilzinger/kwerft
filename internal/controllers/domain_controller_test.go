@@ -12,7 +12,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	gwv1 "sigs.k8s.io/gateway-api/apis/v1"
 
-	werftv1 "github.com/ehilzinger/werft/api/v1alpha1"
+	kwerftv1 "github.com/ehilzinger/kwerft/api/v1alpha1"
 )
 
 func TestListenerName(t *testing.T) {
@@ -68,16 +68,16 @@ func waitForListener(t *testing.T, host string, want bool) *gwv1.Gateway {
 	return gw
 }
 
-func createDomain(t *testing.T, ns, name, host string) *werftv1.Domain {
+func createDomain(t *testing.T, ns, name, host string) *kwerftv1.Domain {
 	t.Helper()
-	d := &werftv1.Domain{ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: name}, Spec: werftv1.DomainSpec{Hostname: host}}
+	d := &kwerftv1.Domain{ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: name}, Spec: kwerftv1.DomainSpec{Hostname: host}}
 	if err := k8s.Create(context.Background(), d); err != nil {
 		t.Fatal(err)
 	}
 	return d
 }
 
-func waitForDomain(t *testing.T, d *werftv1.Domain, wantReason string) *werftv1.Domain {
+func waitForDomain(t *testing.T, d *kwerftv1.Domain, wantReason string) *kwerftv1.Domain {
 	t.Helper()
 	eventually(t, func() error {
 		if err := k8s.Get(context.Background(), client.ObjectKeyFromObject(d), d); err != nil {
@@ -120,13 +120,13 @@ func TestAppPublicPortGetsDomainHTTPSListenerAndRedirect(t *testing.T) {
 	projectNamespace(t, "shopfront")
 	host := "shop.example.com"
 	app := createApp(t, "shopfront", "web", imageApp("nginx:1.29"))
-	app.Spec.Ports = []werftv1.AppPort{{Container: 8080, Public: host}}
+	app.Spec.Ports = []kwerftv1.AppPort{{Container: 8080, Public: host}}
 	if err := k8s.Update(ctx, app); err != nil {
 		t.Fatal(err)
 	}
 
 	// The App claims a Domain...
-	d := &werftv1.Domain{ObjectMeta: metav1.ObjectMeta{Namespace: "shopfront", Name: host}}
+	d := &kwerftv1.Domain{ObjectMeta: metav1.ObjectMeta{Namespace: "shopfront", Name: host}}
 	eventually(t, func() error { return k8s.Get(ctx, client.ObjectKeyFromObject(d), d) })
 	if !metav1.IsControlledBy(d, app) || d.Spec.Hostname != host {
 		t.Errorf("domain = %+v, want controlled by the App", d.ObjectMeta)
@@ -168,7 +168,7 @@ func TestAppPublicPortGetsDomainHTTPSListenerAndRedirect(t *testing.T) {
 	if err := k8s.Get(ctx, client.ObjectKeyFromObject(app), app); err != nil {
 		t.Fatal(err)
 	}
-	app.Spec.Ports = []werftv1.AppPort{{Container: 8080}}
+	app.Spec.Ports = []kwerftv1.AppPort{{Container: 8080}}
 	if err := k8s.Update(ctx, app); err != nil {
 		t.Fatal(err)
 	}

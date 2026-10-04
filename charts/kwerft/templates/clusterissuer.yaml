@@ -3,7 +3,7 @@ apiVersion: cert-manager.io/v1
 kind: ClusterIssuer
 metadata:
   name: letsencrypt
-  labels: {{- include "werft.labels" . | nindent 4 }}
+  labels: {{- include "kwerft.labels" . | nindent 4 }}
 spec:
   acme:
     {{- with .Values.acme.email }}
@@ -16,7 +16,7 @@ spec:
       - http01:
           gatewayHTTPRoute:
             parentRefs:
-              - name: werft  # the Gateway Werft manages
+              - name: kwerft  # the Gateway Kwerft manages
                 namespace: {{ .Release.Namespace }}
                 kind: Gateway
                 sectionName: http

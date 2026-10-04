@@ -10,7 +10,7 @@ acme:
   server: https://acme-v02.api.letsencrypt.org/directory
 
 image:
-  repository: ghcr.io/ehilzinger/werft
+  repository: ghcr.io/ehilzinger/kwerft
   tag: ""                      # defaults to .Chart.AppVersion
   pullPolicy: IfNotPresent
 
@@ -18,8 +18,8 @@ resources:
   requests: { cpu: 50m, memory: 64Mi }
   limits: { memory: 256Mi }
 
-# The shared Gateway "werft" that all public traffic enters through is created
-# and owned by Werft itself (listeners for the console and every Domain), so
+# The shared Gateway "kwerft" that all public traffic enters through is created
+# and owned by Kwerft itself (listeners for the console and every Domain), so
 # Helm never overwrites listeners added at runtime.
 gateway:
   className: traefik

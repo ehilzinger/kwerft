@@ -1,6 +1,6 @@
 apiVersion: v2
-name: werft
-description: Werft console — API server, controllers and web UI
+name: kwerft
+description: Kwerft console — API server, controllers and web UI
 type: application
 version: 0.1.0-dev
 appVersion: 0.1.0-dev

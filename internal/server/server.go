@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/ehilzinger/werft/internal/version"
+	"github.com/ehilzinger/kwerft/internal/version"
 )
 
 // Config is the runtime configuration the server needs.

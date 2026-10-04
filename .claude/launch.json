@@ -2,9 +2,9 @@
   "version": "0.0.1",
   "configurations": [
     {
-      "name": "werft",
+      "name": "kwerft",
       "runtimeExecutable": "go",
-      "runtimeArgs": ["run", "./cmd/werft", "--listen=:8080", "--console-domain=localhost", "--platform=cloud", "--controllers=false"],
+      "runtimeArgs": ["run", "./cmd/kwerft", "--listen=:8080", "--console-domain=localhost", "--platform=cloud", "--controllers=false"],
       "port": 8080
     }
   ]

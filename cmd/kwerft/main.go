@@ -1,5 +1,5 @@
-// Command werft runs the Werft console: REST/WebSocket API, the reconcilers
-// for werft.dev resources, and the embedded web UI — one binary.
+// Command kwerft runs the Kwerft console: REST/WebSocket API, the reconcilers
+// for kwerft.dev resources, and the embedded web UI — one binary.
 package main
 
 import (
@@ -21,17 +21,17 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 
-	werftv1 "github.com/ehilzinger/werft/api/v1alpha1"
-	"github.com/ehilzinger/werft/internal/controllers"
-	"github.com/ehilzinger/werft/internal/server"
-	"github.com/ehilzinger/werft/internal/version"
-	"github.com/ehilzinger/werft/web"
+	kwerftv1 "github.com/ehilzinger/kwerft/api/v1alpha1"
+	"github.com/ehilzinger/kwerft/internal/controllers"
+	"github.com/ehilzinger/kwerft/internal/server"
+	"github.com/ehilzinger/kwerft/internal/version"
+	"github.com/ehilzinger/kwerft/web"
 )
 
 func main() {
 	var (
 		listen         = flag.String("listen", ":8080", "HTTP listen address")
-		dataDir        = flag.String("data-dir", "/var/lib/werft", "directory for the SQLite store")
+		dataDir        = flag.String("data-dir", "/var/lib/kwerft", "directory for the SQLite store")
 		consoleDomain  = flag.String("console-domain", "", "public hostname of the console")
 		platform       = flag.String("platform", "dedicated", "hosting platform: cloud or dedicated")
 		runControllers = flag.Bool("controllers", true, "run the reconcilers (needs cluster access)")
@@ -87,7 +87,7 @@ func main() {
 	})
 
 	go func() {
-		log.Info("werft starting", "version", version.Version, "commit", version.Commit,
+		log.Info("kwerft starting", "version", version.Version, "commit", version.Commit,
 			"listen", *listen, "platform", *platform, "controllers", *runControllers)
 		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			log.Error("http server failed", "err", err)
@@ -101,15 +101,15 @@ func main() {
 	if err := srv.Shutdown(shutdownCtx); err != nil {
 		log.Error("graceful shutdown failed", "err", err)
 	}
-	log.Info("werft stopped")
+	log.Info("kwerft stopped")
 }
 
-// waitUntilReady marks the server ready once the caches for Werft's own types
+// waitUntilReady marks the server ready once the caches for Kwerft's own types
 // have synced. Registering them up front matters: controllers only start their
 // informers after winning leader election, and a missing CRD must keep the pod
 // not-ready (so `helm --wait` fails) instead of passing silently.
 func waitUntilReady(ctx context.Context, log *slog.Logger, mgr ctrl.Manager, ready *atomic.Bool) {
-	types := []client.Object{&werftv1.Project{}, &werftv1.App{}, &werftv1.Domain{}}
+	types := []client.Object{&kwerftv1.Project{}, &kwerftv1.App{}, &kwerftv1.Domain{}}
 	for _, obj := range types {
 		for {
 			_, err := mgr.GetCache().GetInformer(ctx, obj, cache.BlockUntilSynced(false))
@@ -140,7 +140,7 @@ func newManager(log *slog.Logger, leaderElect bool, domains *controllers.DomainR
 		Metrics:                 metricsserver.Options{BindAddress: "0"}, // TODO(phase-3): expose for vmagent
 		HealthProbeBindAddress:  "0",                                     // the console server answers /healthz and /readyz
 		LeaderElection:          leaderElect,
-		LeaderElectionID:        "werft-controllers",
+		LeaderElectionID:        "kwerft-controllers",
 		LeaderElectionNamespace: os.Getenv("POD_NAMESPACE"),
 		// Hand the lease over on shutdown so an upgraded pod takes over at once
 		// instead of waiting for the old lease to expire.

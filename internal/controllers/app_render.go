@@ -16,8 +16,8 @@ import (
 	gwv1 "sigs.k8s.io/gateway-api/apis/v1"
 	gwv1ac "sigs.k8s.io/gateway-api/applyconfiguration/apis/v1"
 
-	werftv1ac "github.com/ehilzinger/werft/api/applyconfiguration/api/v1alpha1"
-	werftv1 "github.com/ehilzinger/werft/api/v1alpha1"
+	kwerftv1ac "github.com/ehilzinger/kwerft/api/applyconfiguration/api/v1alpha1"
+	kwerftv1 "github.com/ehilzinger/kwerft/api/v1alpha1"
 )
 
 // Storage classes behind AppVolume.Class.
@@ -35,7 +35,7 @@ var sizes = map[string][2]string{
 
 // appRender holds everything derived from one App for one reconcile.
 type appRender struct {
-	app      *werftv1.App
+	app      *kwerftv1.App
 	image    string
 	project  string
 	owner    *metav1ac.OwnerReferenceApplyConfiguration
@@ -43,15 +43,15 @@ type appRender struct {
 	labels   map[string]string
 }
 
-func newAppRender(app *werftv1.App, image, project string) *appRender {
+func newAppRender(app *kwerftv1.App, image, project string) *appRender {
 	sel := map[string]string{LabelApp: app.Name}
 	return &appRender{
 		app:      app,
 		image:    image,
 		project:  project,
-		owner:    controllerRef(app, werftv1.GroupVersion.WithKind("App")),
+		owner:    controllerRef(app, kwerftv1.GroupVersion.WithKind("App")),
 		selector: sel,
-		labels:   map[string]string{LabelApp: app.Name, LabelProject: project, LabelManagedBy: ManagedByWerft},
+		labels:   map[string]string{LabelApp: app.Name, LabelProject: project, LabelManagedBy: ManagedByKwerft},
 	}
 }
 
@@ -177,16 +177,16 @@ func (a *appRender) service() *corev1ac.ServiceApplyConfiguration {
 
 // domains returns one Domain per public hostname, keyed by Domain name. The
 // Domain reconciler turns each into an HTTPS listener with a certificate.
-func (a *appRender) domains() map[string]*werftv1ac.DomainApplyConfiguration {
-	out := map[string]*werftv1ac.DomainApplyConfiguration{}
+func (a *appRender) domains() map[string]*kwerftv1ac.DomainApplyConfiguration {
+	out := map[string]*kwerftv1ac.DomainApplyConfiguration{}
 	for _, p := range a.app.Spec.Ports {
 		if p.Public == "" {
 			continue
 		}
-		out[p.Public] = werftv1ac.Domain(p.Public, a.app.Namespace).
+		out[p.Public] = kwerftv1ac.Domain(p.Public, a.app.Namespace).
 			WithLabels(a.labels).
 			WithOwnerReferences(a.owner).
-			WithSpec(werftv1ac.DomainSpec().WithHostname(p.Public))
+			WithSpec(kwerftv1ac.DomainSpec().WithHostname(p.Public))
 	}
 	return out
 }
@@ -303,7 +303,7 @@ func (a *appRender) urls() []string {
 	return out
 }
 
-func probe(hc *werftv1.HealthCheck) *corev1ac.ProbeApplyConfiguration {
+func probe(hc *kwerftv1.HealthCheck) *corev1ac.ProbeApplyConfiguration {
 	if hc.HTTP != "" {
 		return corev1ac.Probe().WithHTTPGet(corev1ac.HTTPGetAction().WithPath(hc.HTTP).WithPort(intstr.FromInt32(hc.Port)))
 	}
@@ -335,14 +335,14 @@ func envVar(e corev1.EnvVar) *corev1ac.EnvVarApplyConfiguration {
 	return out.WithValueFrom(src)
 }
 
-func protocol(p werftv1.AppPort) corev1.Protocol {
+func protocol(p kwerftv1.AppPort) corev1.Protocol {
 	if p.Protocol == "" {
 		return corev1.ProtocolTCP
 	}
 	return p.Protocol
 }
 
-func portName(p werftv1.AppPort) string {
+func portName(p kwerftv1.AppPort) string {
 	return fmt.Sprintf("%s-%d", strings.ToLower(string(protocol(p))), p.Container)
 }
 

@@ -1,8 +1,8 @@
-# Werft
+# Kwerft
 
 Rent a Hetzner server, run one script, manage containers from the browser.
 
-Werft installs a hardened Kubernetes (k3s + Cilium) on a fresh Ubuntu server —
+Kwerft installs a hardened Kubernetes (k3s + Cilium) on a fresh Ubuntu server —
 Hetzner Cloud or dedicated — and puts a console on top: deploy registry images
 or Git repositories, watch them, and administer network rules, domains, nodes,
 clusters and access.
@@ -15,12 +15,12 @@ clusters and access.
 ## Install
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/ehilzinger/werft/main/install/install.sh | sudo bash -s -- --domain ops.example.com --email ops@example.com --yes
+curl -fsSL https://raw.githubusercontent.com/ehilzinger/kwerft/main/install/install.sh | sudo bash -s -- --domain ops.example.com --email ops@example.com --yes
 ```
 
 Until the console image is published, the last stage needs a locally built
-image (see the roadmap in docs/plan.md). A shorter `get.werft.sh`-style URL
-comes once Werft has its own domain.
+image (see the roadmap in docs/plan.md). A shorter `get.kwerft.dev`-style URL
+comes once Kwerft has its own domain.
 
 No domain yet? Leave out `--domain` and the console gets a temporary
 `<public-ip>.sslip.io` hostname; re-run with `--domain` once DNS points at the
@@ -28,7 +28,7 @@ server. `--email` is optional.
 
 `./install/install.sh --help` lists every flag; `--dry-run` prints the plan
 without changing anything. Re-running the script resumes or repairs an
-install. For unattended installs (cloud-init), pass `--config werft.yaml`:
+install. For unattended installs (cloud-init), pass `--config kwerft.yaml`:
 
 ```yaml
 domain: ops.example.com
@@ -42,9 +42,9 @@ owner: { email: you@example.com, passwordFile: /root/owner.pw }
 | Path | What |
 |---|---|
 | `install/` | `install.sh` (install, join, uninstall, firewall rescue), `join.sh`, bats tests |
-| `charts/werft/` | Helm chart; `crds/` is generated |
+| `charts/kwerft/` | Helm chart; `crds/` is generated |
 | `api/v1alpha1/` | `Project`, `App`, `Build` custom resource types |
-| `cmd/werft/` | The console binary: API, reconcilers, embedded UI |
+| `cmd/kwerft/` | The console binary: API, reconcilers, embedded UI |
 | `internal/` | Server, version and (soon) controllers, auth, Hetzner clients |
 | `web/` | React + TypeScript + Vite console |
 | `docs/` | Plan and blueprint (mockups) |

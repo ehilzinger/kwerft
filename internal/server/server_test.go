@@ -12,7 +12,7 @@ import (
 
 func testHandler() http.Handler {
 	ui := fstest.MapFS{
-		"index.html":         {Data: []byte("<!doctype html><title>Werft</title>")},
+		"index.html":         {Data: []byte("<!doctype html><title>Kwerft</title>")},
 		"assets/app-1a2b.js": {Data: []byte("console.log(1)")},
 	}
 	return Handler(Config{Platform: "cloud", UI: ui, Logger: slog.New(slog.DiscardHandler)})
@@ -69,7 +69,7 @@ func TestUnknownAPIPathIsJSON404(t *testing.T) {
 func TestSPAFallbackServesIndexForRoutes(t *testing.T) {
 	rec := get(t, testHandler(), "/apps/storefront/api")
 	body, _ := io.ReadAll(rec.Body)
-	if rec.Code != http.StatusOK || string(body) != "<!doctype html><title>Werft</title>" {
+	if rec.Code != http.StatusOK || string(body) != "<!doctype html><title>Kwerft</title>" {
 		t.Errorf("got %d %q", rec.Code, body)
 	}
 }

@@ -1,18 +1,18 @@
-# Werft acts on behalf of signed-in users through impersonation, so Kubernetes
+# Kwerft acts on behalf of signed-in users through impersonation, so Kubernetes
 # RBAC stays the final authority. Its own service account needs:
 #  - impersonate: to forward user requests with the user's identity
-#  - full access to werft.dev resources: the reconcilers own them
+#  - full access to kwerft.dev resources: the reconcilers own them
 #  - the objects the reconcilers render (TODO(phase-1): narrow to exact verbs)
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
-  name: werft-controller
-  labels: {{- include "werft.labels" . | nindent 4 }}
+  name: kwerft-controller
+  labels: {{- include "kwerft.labels" . | nindent 4 }}
 rules:
   - apiGroups: [""]
     resources: [users, groups, serviceaccounts]
     verbs: [impersonate]
-  - apiGroups: [werft.dev]
+  - apiGroups: [kwerft.dev]
     resources: ["*"]
     verbs: ["*"]
   - apiGroups: [""]
@@ -52,13 +52,13 @@ rules:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
-  name: werft-controller
-  labels: {{- include "werft.labels" . | nindent 4 }}
+  name: kwerft-controller
+  labels: {{- include "kwerft.labels" . | nindent 4 }}
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
-  name: werft-controller
+  name: kwerft-controller
 subjects:
   - kind: ServiceAccount
-    name: {{ include "werft.fullname" . }}
+    name: {{ include "kwerft.fullname" . }}
     namespace: {{ .Release.Namespace }}

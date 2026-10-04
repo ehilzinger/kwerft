@@ -15,12 +15,12 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	werftv1 "github.com/ehilzinger/werft/api/v1alpha1"
+	kwerftv1 "github.com/ehilzinger/kwerft/api/v1alpha1"
 )
 
 const (
-	quotaName       = "werft-quota"
-	defaultDenyName = "werft-default-deny"
+	quotaName       = "kwerft-quota"
+	defaultDenyName = "kwerft-default-deny"
 )
 
 // ProjectReconciler turns a Project into a namespace with quotas, a Pod
@@ -33,7 +33,7 @@ type ProjectReconciler struct {
 }
 
 func (r *ProjectReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
-	var p werftv1.Project
+	var p kwerftv1.Project
 	if err := r.Get(ctx, req.NamespacedName, &p); err != nil {
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
@@ -60,19 +60,19 @@ func (r *ProjectReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	return ctrl.Result{}, err
 }
 
-func (r *ProjectReconciler) reconcile(ctx context.Context, p *werftv1.Project) error {
+func (r *ProjectReconciler) reconcile(ctx context.Context, p *kwerftv1.Project) error {
 	// Never adopt a namespace someone else created.
 	var existing corev1.Namespace
 	switch err := r.Get(ctx, client.ObjectKey{Name: p.Name}, &existing); {
 	case err == nil:
 		if existing.Labels[LabelProject] != p.Name {
-			return terminalf("NamespaceConflict", "namespace %q already exists and is not managed by Werft", p.Name)
+			return terminalf("NamespaceConflict", "namespace %q already exists and is not managed by Kwerft", p.Name)
 		}
 	case !apierrors.IsNotFound(err):
 		return err
 	}
 
-	owner := controllerRef(p, werftv1.GroupVersion.WithKind("Project"))
+	owner := controllerRef(p, kwerftv1.GroupVersion.WithKind("Project"))
 	level := p.Spec.PodSecurity
 	if level == "" {
 		level = "baseline"
@@ -80,7 +80,7 @@ func (r *ProjectReconciler) reconcile(ctx context.Context, p *werftv1.Project) e
 
 	ns := corev1ac.Namespace(p.Name).
 		WithLabels(map[string]string{
-			LabelManagedBy:                       ManagedByWerft,
+			LabelManagedBy:                       ManagedByKwerft,
 			LabelProject:                         p.Name,
 			"pod-security.kubernetes.io/enforce": level,
 			"pod-security.kubernetes.io/audit":   "restricted",
@@ -93,7 +93,7 @@ func (r *ProjectReconciler) reconcile(ctx context.Context, p *werftv1.Project) e
 
 	if len(p.Spec.Quota) > 0 {
 		quota := corev1ac.ResourceQuota(quotaName, p.Name).
-			WithLabels(map[string]string{LabelManagedBy: ManagedByWerft}).
+			WithLabels(map[string]string{LabelManagedBy: ManagedByKwerft}).
 			WithOwnerReferences(owner).
 			WithSpec(corev1ac.ResourceQuotaSpec().WithHard(p.Spec.Quota))
 		if err := apply(ctx, r.Client, quota); err != nil {
@@ -105,7 +105,7 @@ func (r *ProjectReconciler) reconcile(ctx context.Context, p *werftv1.Project) e
 
 	if p.Spec.Isolated == nil || *p.Spec.Isolated {
 		deny := networkingv1ac.NetworkPolicy(defaultDenyName, p.Name).
-			WithLabels(map[string]string{LabelManagedBy: ManagedByWerft}).
+			WithLabels(map[string]string{LabelManagedBy: ManagedByKwerft}).
 			WithOwnerReferences(owner).
 			WithSpec(networkingv1ac.NetworkPolicySpec().
 				WithPodSelector(metav1ac.LabelSelector()).
@@ -121,7 +121,7 @@ func (r *ProjectReconciler) reconcile(ctx context.Context, p *werftv1.Project) e
 
 func (r *ProjectReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
-		For(&werftv1.Project{}).
+		For(&kwerftv1.Project{}).
 		Owns(&corev1.Namespace{}).
 		Owns(&corev1.ResourceQuota{}).
 		Owns(&networkingv1.NetworkPolicy{}).
