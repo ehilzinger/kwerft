@@ -1,0 +1,23 @@
+{{- if .Values.acme.enabled }}
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: letsencrypt
+  labels: {{- include "werft.labels" . | nindent 4 }}
+spec:
+  acme:
+    {{- with .Values.acme.email }}
+    email: {{ . }}
+    {{- end }}
+    server: {{ .Values.acme.server }}
+    privateKeySecretRef:
+      name: letsencrypt-account
+    solvers:
+      - http01:
+          gatewayHTTPRoute:
+            parentRefs:
+              - name: {{ .Values.gateway.name }}
+                namespace: {{ .Release.Namespace }}
+                kind: Gateway
+                sectionName: http
+{{- end }}

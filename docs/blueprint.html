@@ -1,0 +1,1403 @@
+<title>Werft Blueprint</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,700&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;1,400&display=swap">
+<style>
+:root{
+  --bg:#F1F3F7; --surface:#FFFFFF; --surface-2:#F7F8FB; --sunk:#E8ECF2;
+  --ink:#121826; --ink-2:#2C3546; --muted:#5B6679; --faint:#8791A3;
+  --line:#DAE0E9; --line-2:#E9EDF3;
+  --accent:#2F5BD0; --accent-2:#E6ECFB; --accent-ink:#FFFFFF;
+  --c2:#0D857C;
+  --ok:#1B7A4E; --ok-bg:#E2F2E9; --warn:#935C00; --warn-bg:#FBEFD6; --bad:#B4371F; --bad-bg:#FBE5DF;
+  --term-bg:#0E131B; --term-ink:#D3DAE6; --term-dim:#7A869B; --term-ok:#6CCB97; --term-acc:#93B2FF; --term-warn:#E9BE62;
+  --shadow:0 1px 2px rgba(18,24,38,.06),0 10px 30px rgba(18,24,38,.07);
+  --display:'Bricolage Grotesque','IBM Plex Sans',system-ui,sans-serif;
+  --sans:'IBM Plex Sans',system-ui,-apple-system,'Segoe UI',Roboto,sans-serif;
+  --mono:'IBM Plex Mono',ui-monospace,'SF Mono',Menlo,Consolas,monospace;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    color-scheme:dark;
+    --bg:#0B0F16; --surface:#121824; --surface-2:#161D2A; --sunk:#0E131C;
+    --ink:#E6EBF3; --ink-2:#C3CBD9; --muted:#95A1B5; --faint:#6C788D;
+    --line:#252F42; --line-2:#1C2535;
+    --accent:#7398F6; --accent-2:#1A2747; --accent-ink:#0B0F16;
+    --c2:#3FC1B3;
+    --ok:#5BC98E; --ok-bg:#11281D; --warn:#E3B04B; --warn-bg:#2B220F; --bad:#F27D69; --bad-bg:#331915;
+    --term-bg:#070A0F;
+    --shadow:0 1px 2px rgba(0,0,0,.4),0 10px 30px rgba(0,0,0,.35);
+  }
+}
+:root[data-theme="dark"]{
+  color-scheme:dark;
+  --bg:#0B0F16; --surface:#121824; --surface-2:#161D2A; --sunk:#0E131C;
+  --ink:#E6EBF3; --ink-2:#C3CBD9; --muted:#95A1B5; --faint:#6C788D;
+  --line:#252F42; --line-2:#1C2535;
+  --accent:#7398F6; --accent-2:#1A2747; --accent-ink:#0B0F16;
+  --c2:#3FC1B3;
+  --ok:#5BC98E; --ok-bg:#11281D; --warn:#E3B04B; --warn-bg:#2B220F; --bad:#F27D69; --bad-bg:#331915;
+  --term-bg:#070A0F;
+  --shadow:0 1px 2px rgba(0,0,0,.4),0 10px 30px rgba(0,0,0,.35);
+}
+*{box-sizing:border-box}
+body{background:var(--bg);color:var(--ink);font:14px/1.5 var(--sans);-webkit-font-smoothing:antialiased}
+button,input,select{font:inherit;color:inherit}
+button{cursor:pointer}
+:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+code,.mono{font-family:var(--mono);font-size:.92em}
+.wrap{max-width:1240px;margin:0 auto;padding-inline:20px;padding-block:28px 72px}
+
+/* ---------- page header ---------- */
+.mast{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:12px;padding-bottom:18px;border-bottom:1px solid var(--line)}
+.brand{display:flex;align-items:center;gap:10px}
+.brand svg{width:28px;height:28px;color:var(--accent)}
+.brand b{font-family:var(--display);font-size:22px;letter-spacing:-.01em}
+.brand span{color:var(--muted);font-size:13px}
+.meta{color:var(--muted);font-size:13px;font-family:var(--mono)}
+.intro{display:grid;grid-template-columns:minmax(0,1.3fr) minmax(0,1fr);gap:32px;padding-block:28px 22px}
+.intro h1{font-family:var(--display);font-weight:700;font-size:clamp(28px,4vw,42px);line-height:1.08;letter-spacing:-.02em;margin:0;text-wrap:balance}
+.intro p{margin:0;color:var(--ink-2);font-size:15.5px;max-width:62ch}
+.intro .facts{display:grid;gap:10px;align-content:start;margin:0;padding:0;list-style:none}
+.intro .facts li{display:grid;grid-template-columns:118px 1fr;gap:10px;font-size:13.5px;padding-bottom:10px;border-bottom:1px dashed var(--line)}
+.intro .facts dt,.intro .facts .k{color:var(--muted);font-size:11.5px;text-transform:uppercase;letter-spacing:.07em;padding-top:2px}
+@media (max-width:820px){.intro{grid-template-columns:1fr;gap:20px}}
+
+.pagetabs{display:inline-flex;gap:4px;padding:4px;border-radius:10px;background:var(--sunk);margin-bottom:22px}
+.pagetabs button{border:0;background:transparent;padding:8px 16px;border-radius:7px;font-weight:500;color:var(--muted)}
+.pagetabs button[aria-selected="true"]{background:var(--surface);color:var(--ink);box-shadow:0 1px 2px rgba(0,0,0,.08)}
+
+/* ---------- mockup chrome ---------- */
+.flow{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:12px}
+.flow .lbl{font-size:11.5px;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);margin-right:4px}
+.flow button{border:1px solid var(--line);background:var(--surface);padding:6px 12px;border-radius:999px;font-size:13px;display:inline-flex;gap:8px;align-items:center}
+.flow button i{font-style:normal;font-family:var(--mono);font-size:11px;color:var(--faint)}
+.flow button[aria-pressed="true"]{border-color:var(--accent);color:var(--accent);background:var(--accent-2)}
+.flow button[aria-pressed="true"] i{color:var(--accent)}
+.note{display:flex;gap:10px;align-items:flex-start;background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:10px 14px;margin-bottom:14px;font-size:13.5px;color:var(--ink-2)}
+.note b{color:var(--ink);white-space:nowrap}
+.scroller{overflow-x:auto;border-radius:12px;box-shadow:var(--shadow)}
+.frame{min-width:1080px;border:1px solid var(--line);border-radius:12px;overflow:hidden;background:var(--surface)}
+.chrome{display:flex;align-items:center;gap:12px;padding:9px 14px;background:var(--sunk);border-bottom:1px solid var(--line)}
+.dots{display:flex;gap:6px}.dots span{width:10px;height:10px;border-radius:50%;background:var(--line)}
+.url{flex:1;max-width:520px;margin:0 auto;background:var(--surface);border:1px solid var(--line);border-radius:6px;padding:3px 10px;font-family:var(--mono);font-size:12px;color:var(--muted);text-align:center}
+.url b{color:var(--ink);font-weight:500}
+
+/* ---------- terminal ---------- */
+.term{background:var(--term-bg);color:var(--term-ink);font-family:var(--mono);font-size:13px;line-height:1.65;padding:22px 26px 28px;min-height:560px;white-space:pre;overflow-x:auto}
+.term .d{color:var(--term-dim)} .term .g{color:var(--term-ok)} .term .a{color:var(--term-acc)} .term .w{color:var(--term-warn)} .term .b{font-weight:500;color:#fff}
+
+/* ---------- app shell ---------- */
+.app{display:grid;grid-template-columns:224px 1fr;min-height:720px}
+.side{background:var(--surface-2);border-right:1px solid var(--line);padding:14px 12px;display:flex;flex-direction:column;gap:14px}
+.side-brand{display:flex;align-items:center;gap:8px;padding:4px 6px;font-family:var(--display);font-weight:700;font-size:17px}
+.side-brand svg{width:22px;height:22px;color:var(--accent)}
+.cluster{border:1px solid var(--line);background:var(--surface);border-radius:8px;padding:8px 10px;text-align:left;display:grid;gap:1px}
+.cluster b{font-weight:600;font-size:13.5px;display:flex;justify-content:space-between;align-items:center}
+.cluster small{color:var(--muted);font-size:11.5px}
+.cluster .live{width:8px;height:8px;border-radius:50%;background:var(--ok);display:inline-block;margin-right:6px}
+.nav{display:grid;gap:2px}
+.nav .grp{font-size:10.5px;text-transform:uppercase;letter-spacing:.09em;color:var(--faint);padding:10px 8px 4px}
+.nav button{display:flex;align-items:center;gap:10px;border:0;background:transparent;padding:7px 8px;border-radius:7px;color:var(--ink-2);font-size:13.5px;text-align:left}
+.nav button svg{width:16px;height:16px;color:var(--muted)}
+.nav button:hover{background:var(--sunk)}
+.nav button[aria-current="page"]{background:var(--accent-2);color:var(--accent);font-weight:600}
+.nav button[aria-current="page"] svg{color:var(--accent)}
+.nav .count{margin-left:auto;font-size:11px;font-family:var(--mono);color:var(--faint)}
+.nav .count.bad{color:var(--bad)}
+.side-foot{margin-top:auto;font-size:12px;color:var(--muted);border-top:1px solid var(--line);padding-top:12px;display:flex;align-items:center;gap:8px}
+.avatar{width:26px;height:26px;border-radius:50%;display:grid;place-items:center;font-size:11px;font-weight:600;background:var(--accent-2);color:var(--accent);flex:none}
+
+.main{display:flex;flex-direction:column;min-width:0;background:var(--surface)}
+.topbar{display:flex;align-items:center;gap:12px;padding:10px 22px;border-bottom:1px solid var(--line)}
+.crumb{font-size:13px;color:var(--muted)} .crumb b{color:var(--ink);font-weight:500}
+.search{margin-left:auto;display:flex;align-items:center;gap:8px;width:300px;border:1px solid var(--line);border-radius:7px;padding:5px 10px;color:var(--faint);font-size:13px;background:var(--surface-2)}
+.search svg{width:14px;height:14px}
+.kbd{margin-left:auto;font-family:var(--mono);font-size:11px;border:1px solid var(--line);border-radius:4px;padding:0 5px;color:var(--muted)}
+.view{padding:20px 22px 28px;display:grid;gap:16px;align-content:start}
+.ph{display:flex;align-items:flex-end;justify-content:space-between;gap:12px;flex-wrap:wrap}
+.ph h2{margin:0;font-size:20px;font-weight:600;letter-spacing:-.01em;display:flex;align-items:center;gap:10px}
+.ph .sub{margin:2px 0 0;color:var(--muted);font-size:13px}
+.acts{display:flex;gap:8px;flex-wrap:wrap}
+.btn{border:1px solid var(--line);background:var(--surface);border-radius:7px;padding:6px 12px;font-size:13px;font-weight:500;display:inline-flex;align-items:center;gap:6px;white-space:nowrap}
+.btn svg{width:14px;height:14px}
+.btn:hover{border-color:var(--faint)}
+.btn.pri{background:var(--accent);border-color:var(--accent);color:var(--accent-ink)}
+.btn.ghost{border-color:transparent;background:transparent;color:var(--accent);padding-inline:6px}
+.btn.sm{padding:3px 8px;font-size:12px}
+.btn.danger{color:var(--bad)}
+
+.card{border:1px solid var(--line);border-radius:10px;background:var(--surface);min-width:0}
+.card>h3,.card .ch-h{margin:0;padding:12px 16px;font-size:13.5px;font-weight:600;display:flex;align-items:center;justify-content:space-between;gap:8px;border-bottom:1px solid var(--line-2)}
+.card .ch-h h3{margin:0;font-size:13.5px;font-weight:600}
+.card .bd{padding:14px 16px}
+.g2{display:grid;grid-template-columns:minmax(0,1.6fr) minmax(0,1fr);gap:16px}
+.g2e{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+.g3{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px}
+
+.tiles{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px}
+.tile{border:1px solid var(--line);border-radius:10px;padding:12px 14px;display:grid;gap:2px;position:relative;min-width:0}
+.tile .k{font-size:11.5px;color:var(--muted);text-transform:uppercase;letter-spacing:.07em}
+.tile .v{font-size:24px;font-weight:600;letter-spacing:-.02em;font-variant-numeric:tabular-nums}
+.tile .v small{font-size:13px;color:var(--muted);font-weight:400;letter-spacing:0}
+.tile .s{font-size:12px;color:var(--muted)}
+.tile .spark{position:absolute;right:12px;top:14px;width:96px;height:30px}
+.meter{height:6px;border-radius:3px;background:var(--sunk);overflow:hidden;margin-top:6px}
+.meter i{display:block;height:100%;background:var(--accent);border-radius:3px}
+.meter i.warn{background:var(--warn)} .meter i.bad{background:var(--bad)}
+
+.banner{display:flex;align-items:center;gap:10px;border-radius:9px;padding:9px 14px;font-size:13px;border:1px solid}
+.banner.warn{background:var(--warn-bg);border-color:color-mix(in srgb,var(--warn) 30%,transparent);color:var(--ink)}
+.banner.info{background:var(--accent-2);border-color:color-mix(in srgb,var(--accent) 25%,transparent)}
+.banner svg{width:16px;height:16px;flex:none;color:var(--warn)}
+.banner.info svg{color:var(--accent)}
+.banner .btn{margin-left:auto}
+
+.pill{display:inline-flex;align-items:center;gap:5px;font-size:11.5px;font-weight:500;padding:1px 8px;border-radius:999px;white-space:nowrap;line-height:1.6}
+.pill::before{content:"";width:6px;height:6px;border-radius:50%;background:currentColor}
+.pill.ok{color:var(--ok);background:var(--ok-bg)} .pill.warn{color:var(--warn);background:var(--warn-bg)} .pill.bad{color:var(--bad);background:var(--bad-bg)}
+.pill.info{color:var(--accent);background:var(--accent-2)} .pill.mute{color:var(--muted);background:var(--sunk)}
+.pill.nodot::before{display:none}
+.tag{display:inline-block;font-size:11px;font-family:var(--mono);padding:0 6px;border-radius:4px;background:var(--sunk);color:var(--ink-2);white-space:nowrap}
+
+table.t{width:100%;border-collapse:collapse;font-size:13px}
+.t th{text-align:left;font-weight:500;color:var(--muted);font-size:11.5px;text-transform:uppercase;letter-spacing:.06em;padding:8px 12px;border-bottom:1px solid var(--line);white-space:nowrap;background:var(--surface-2)}
+.t td{padding:9px 12px;border-bottom:1px solid var(--line-2);vertical-align:middle}
+.t tr:last-child td{border-bottom:0}
+.t .num{text-align:right;font-variant-numeric:tabular-nums;font-family:var(--mono);font-size:12.5px}
+.t .sub{display:block;color:var(--muted);font-size:12px}
+.t tr.click{cursor:pointer} .t tr.click:hover td{background:var(--surface-2)}
+.t .nm{font-weight:600}
+.t .mono{color:var(--ink-2)}
+.dim{color:var(--muted)}
+
+.list{display:grid}
+.li{display:flex;gap:12px;padding:11px 16px;border-bottom:1px solid var(--line-2);align-items:flex-start;font-size:13px}
+.li:last-child{border-bottom:0}
+.li .ico{width:28px;height:28px;border-radius:7px;display:grid;place-items:center;flex:none}
+.li .ico svg{width:15px;height:15px}
+.li .ico.bad{background:var(--bad-bg);color:var(--bad)} .li .ico.warn{background:var(--warn-bg);color:var(--warn)} .li .ico.ok{background:var(--ok-bg);color:var(--ok)} .li .ico.info{background:var(--accent-2);color:var(--accent)}
+.li p{margin:1px 0 0;color:var(--muted);font-size:12.5px}
+.li .when{margin-left:auto;color:var(--faint);font-size:12px;white-space:nowrap;font-family:var(--mono)}
+
+.legend{display:flex;gap:14px;font-size:12px;color:var(--muted);font-weight:400}
+.legend i{display:inline-block;width:10px;height:3px;border-radius:2px;margin-right:6px;vertical-align:middle}
+svg.ch{width:100%;height:auto;display:block}
+.ch .grid{stroke:var(--line-2);stroke-width:1}
+.ch .ax{fill:var(--faint);font-family:var(--mono);font-size:10.5px}
+.ch .s1{stroke:var(--accent);fill:none;stroke-width:2;stroke-linejoin:round}
+.ch .s2{stroke:var(--c2);fill:none;stroke-width:2;stroke-linejoin:round}
+.ch .a1{fill:var(--accent);opacity:.13} .ch .a2{fill:var(--c2);opacity:.10}
+.ch .e1{fill:var(--accent)} .ch .e2{fill:var(--c2)}
+.ch .thr{stroke:var(--warn);stroke-dasharray:4 4;stroke-width:1.2}
+.ch .thrl{fill:var(--warn);font-family:var(--mono);font-size:10.5px}
+
+.tabs{display:flex;gap:2px;border-bottom:1px solid var(--line)}
+.tabs button{border:0;background:transparent;padding:8px 12px;font-size:13.5px;color:var(--muted);border-bottom:2px solid transparent;margin-bottom:-1px;font-weight:500}
+.tabs button[aria-selected="true"]{color:var(--ink);border-bottom-color:var(--accent)}
+.tabs .n{font-family:var(--mono);font-size:11px;color:var(--faint);margin-left:4px}
+
+.toolbar{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.input{border:1px solid var(--line);border-radius:7px;padding:6px 10px;background:var(--surface);font-size:13px;min-width:0}
+.input.mono{font-family:var(--mono);font-size:12.5px}
+.seg{display:inline-flex;border:1px solid var(--line);border-radius:7px;overflow:hidden}
+.seg button{border:0;background:var(--surface);padding:5px 11px;font-size:12.5px;color:var(--muted);border-right:1px solid var(--line)}
+.seg button:last-child{border-right:0}
+.seg button[aria-pressed="true"]{background:var(--accent-2);color:var(--accent);font-weight:500}
+
+.field{display:grid;gap:5px}
+.field label{font-size:12.5px;font-weight:500;color:var(--ink-2)}
+.field .hint{font-size:12px;color:var(--muted)}
+.field .ok{font-size:12px;color:var(--ok)}
+.fields{display:grid;grid-template-columns:1fr 1fr;gap:14px 18px}
+.fields .full{grid-column:1/-1}
+.choice{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px}
+.opt{border:1px solid var(--line);border-radius:9px;padding:11px 12px;display:grid;gap:3px;text-align:left;background:var(--surface)}
+.opt b{font-size:13.5px;font-weight:600}
+.opt span{font-size:12px;color:var(--muted)}
+.opt[aria-pressed="true"]{border-color:var(--accent);box-shadow:0 0 0 1px var(--accent) inset;background:var(--accent-2)}
+.opt .pill{justify-self:start;margin-top:4px}
+.toggle{display:inline-flex;align-items:center;gap:8px;font-size:13px}
+.toggle i{width:30px;height:17px;border-radius:9px;background:var(--line);position:relative;flex:none}
+.toggle i::after{content:"";position:absolute;top:2px;left:2px;width:13px;height:13px;border-radius:50%;background:#fff;transition:left .15s}
+.toggle.on i{background:var(--accent)} .toggle.on i::after{left:15px}
+
+.steps{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:6px}
+.steps button{border:0;background:transparent;text-align:left;padding:8px 0 0;border-top:3px solid var(--line);font-size:12.5px;color:var(--muted);display:grid;gap:1px}
+.steps button b{font-size:13px;color:var(--ink-2);font-weight:500}
+.steps button.done{border-top-color:color-mix(in srgb,var(--accent) 45%,transparent)}
+.steps button[aria-current="step"]{border-top-color:var(--accent)} .steps button[aria-current="step"] b{color:var(--accent);font-weight:600}
+
+.codebox{background:var(--sunk);border:1px solid var(--line);border-radius:8px;padding:10px 12px;font-family:var(--mono);font-size:12.5px;line-height:1.6;white-space:pre;overflow-x:auto;color:var(--ink-2)}
+.codebox .k{color:var(--accent)} .codebox .c{color:var(--faint)} .codebox .s{color:var(--c2)}
+
+.logs{background:var(--term-bg);color:var(--term-ink);font-family:var(--mono);font-size:12.3px;line-height:1.7;padding:12px 14px;border-radius:8px;white-space:pre;overflow-x:auto;min-height:380px}
+.logs .p1{color:#93B2FF}.logs .p2{color:#6CCB97}.logs .p3{color:#E9BE62}.logs .p4{color:#D59BF0}
+.logs .ts{color:var(--term-dim)} .logs .er{color:#FF8E7A} .logs .wn{color:#E9BE62}
+.logs mark{background:rgba(233,190,98,.25);color:inherit;border-radius:2px}
+
+.bars{display:grid;gap:9px}
+.bar{display:grid;grid-template-columns:130px 1fr 74px;gap:10px;align-items:center;font-size:12.5px}
+.bar .tr{height:8px;background:var(--sunk);border-radius:4px;overflow:hidden}
+.bar .tr i{display:block;height:100%;background:var(--accent);border-radius:4px}
+.bar .num{font-family:var(--mono);text-align:right;color:var(--ink-2);font-variant-numeric:tabular-nums}
+
+.clusters{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}
+.ccard{border:1px solid var(--line);border-radius:10px;padding:12px 14px;display:grid;gap:6px;text-align:left;background:var(--surface)}
+.ccard[aria-pressed="true"]{border-color:var(--accent);box-shadow:0 0 0 1px var(--accent) inset}
+.ccard .row{display:flex;justify-content:space-between;align-items:center;gap:8px}
+.ccard b{font-size:14px}
+.ccard .m{font-size:12px;color:var(--muted)}
+.ccard.new{border-style:dashed;place-content:center;justify-items:center;color:var(--accent);font-weight:500;background:var(--surface-2)}
+.split{display:grid;grid-template-columns:minmax(0,1fr) 340px;gap:16px;align-items:start}
+.drawer{border:1px solid var(--line);border-radius:10px;background:var(--surface-2);display:grid}
+.drawer .hd{padding:12px 14px;border-bottom:1px solid var(--line);display:flex;justify-content:space-between;align-items:center}
+.drawer .hd b{font-size:14px}
+.drawer .bd{padding:14px;display:grid;gap:14px}
+.types{display:grid;gap:6px}
+.type{display:grid;grid-template-columns:auto 1fr auto;gap:10px;align-items:center;border:1px solid var(--line);border-radius:8px;padding:8px 10px;background:var(--surface);text-align:left;font-size:12.5px}
+.type .r{width:14px;height:14px;border-radius:50%;border:1.5px solid var(--faint)}
+.type[aria-pressed="true"]{border-color:var(--accent)} .type[aria-pressed="true"] .r{border:4px solid var(--accent)}
+.type b{font-size:13px;font-family:var(--mono);font-weight:500}
+.type .dim{font-size:12px}
+
+.matrix td.c{text-align:center}
+.yes{color:var(--ok);font-weight:600} .no{color:var(--faint)} .part{color:var(--warn);font-size:12px}
+
+.setup{display:grid;grid-template-columns:260px 1fr;min-height:640px;background:var(--surface-2)}
+.setup aside{padding:28px 24px;border-right:1px solid var(--line);display:grid;gap:22px;align-content:start}
+.vsteps{display:grid;gap:0;list-style:none;padding:0;margin:0}
+.vsteps li{display:grid;grid-template-columns:24px 1fr;gap:10px;padding-bottom:18px;position:relative;font-size:13.5px}
+.vsteps li::before{content:"";position:absolute;left:11px;top:24px;bottom:2px;width:2px;background:var(--line)}
+.vsteps li:last-child::before{display:none}
+.vsteps .dot{width:24px;height:24px;border-radius:50%;border:2px solid var(--line);display:grid;place-items:center;font-size:11px;font-family:var(--mono);background:var(--surface);color:var(--muted)}
+.vsteps li.done .dot{background:var(--accent);border-color:var(--accent);color:var(--accent-ink)}
+.vsteps li.cur .dot{border-color:var(--accent);color:var(--accent)}
+.vsteps li.cur b{color:var(--accent)}
+.vsteps small{display:block;color:var(--muted);font-size:12px}
+.setup main{padding:36px 44px;display:grid;gap:20px;align-content:start;max-width:720px}
+.setup h2{margin:0;font-size:22px;font-weight:600;letter-spacing:-.01em}
+.setup .lead{margin:4px 0 0;color:var(--muted);max-width:60ch}
+.radio{display:grid;gap:8px}
+.radio .opt{grid-template-columns:auto 1fr;column-gap:10px}
+.radio .opt .r{width:14px;height:14px;border-radius:50%;border:1.5px solid var(--faint);margin-top:3px;grid-row:span 2}
+.radio .opt[aria-pressed="true"] .r{border:4px solid var(--accent)}
+.check{display:flex;gap:8px;align-items:center;font-size:12.5px;padding:8px 12px;border-radius:7px;background:var(--ok-bg);color:var(--ok)}
+.check svg{width:14px;height:14px;flex:none}
+
+/* ---------- plan document ---------- */
+.doc{display:grid;grid-template-columns:200px minmax(0,1fr);gap:40px;align-items:start}
+.toc{position:sticky;top:calc(env(safe-area-inset-top,0px) + 20px);display:grid;gap:2px;font-size:13px}
+.toc .k{font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);padding:0 10px 6px}
+.toc a{color:var(--ink-2);text-decoration:none;padding:5px 10px;border-radius:6px;border-left:2px solid transparent}
+.toc a:hover{background:var(--sunk)}
+.prose{max-width:860px;display:grid;gap:52px}
+.prose section{display:grid;gap:14px;scroll-margin-top:20px}
+.prose h2{font-family:var(--display);font-weight:700;font-size:28px;letter-spacing:-.015em;margin:0;line-height:1.15;text-wrap:balance}
+.prose h3{font-size:16px;font-weight:600;margin:10px 0 0}
+.prose p{margin:0;max-width:68ch;color:var(--ink-2);font-size:15px;line-height:1.62}
+.prose .eyebrow{font-size:11.5px;text-transform:uppercase;letter-spacing:.1em;color:var(--accent);font-weight:600;margin:0 0 -6px}
+.prose ul{margin:0;padding-left:20px;display:grid;gap:6px;color:var(--ink-2);font-size:15px;max-width:72ch}
+.prose ol{margin:0;padding-left:22px;display:grid;gap:8px;color:var(--ink-2);font-size:15px;max-width:72ch}
+.prose li b,.prose p b{color:var(--ink);font-weight:600}
+.tw{overflow-x:auto;border:1px solid var(--line);border-radius:10px;background:var(--surface)}
+.tw table.t{min-width:640px}
+.tw .t td{vertical-align:top;line-height:1.5}
+.tw .t td:first-child{font-weight:600;white-space:nowrap}
+.principles{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
+.principles div{background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:14px 16px;display:grid;gap:4px}
+.principles b{font-size:14.5px}
+.principles span{font-size:13.5px;color:var(--muted);line-height:1.5}
+@media (max-width:640px){.principles{grid-template-columns:1fr}}
+
+.arch{display:grid;grid-template-columns:minmax(0,1fr) 170px;gap:8px;font-size:13px;overflow-x:auto}
+.arch .stack{display:grid;gap:6px;min-width:440px}
+.lay{border:1px solid var(--line);border-radius:8px;padding:9px 12px;background:var(--surface);display:flex;flex-wrap:wrap;gap:6px 10px;align-items:center}
+.lay .ln{font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);width:100%}
+.lay .tag{font-size:11.5px}
+.lay.werft{border-color:var(--accent);background:var(--accent-2)}
+.lay.werft .ln{color:var(--accent)}
+.lay.host{background:var(--sunk)}
+.lay.hz{background:transparent;border-style:dashed}
+.lay.user{background:transparent}
+.arch .apps{border:1px solid var(--c2);border-radius:8px;padding:10px 12px;display:grid;gap:6px;align-content:start;background:color-mix(in srgb,var(--c2) 7%,var(--surface));grid-row:span 1}
+.arch .apps .ln{font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:var(--c2)}
+.arch .apps .tag{justify-self:start}
+@media (max-width:640px){.arch{grid-template-columns:1fr}}
+
+.timeline{display:grid;gap:8px;overflow-x:auto}
+.tl{display:grid;grid-template-columns:200px repeat(28,minmax(12px,1fr));align-items:center;min-width:640px;font-size:13px}
+.tl .nm{padding-right:10px}
+.tl .nm small{display:block;color:var(--muted);font-size:12px}
+.tl .b{height:22px;border-radius:5px;background:var(--accent);opacity:.85;display:flex;align-items:center;padding-left:8px;color:var(--accent-ink);font-size:11px;font-family:var(--mono);white-space:nowrap;overflow:hidden}
+.tl.wk{color:var(--faint);font-family:var(--mono);font-size:10.5px}
+.tl.wk span{text-align:left}
+.tl .ms{grid-row:1;height:22px;border-left:2px dashed var(--c2);font-size:11px;color:var(--c2);padding-left:4px;white-space:nowrap;font-weight:500}
+.phases{display:grid;gap:12px}
+.phase{border:1px solid var(--line);border-radius:10px;background:var(--surface);padding:14px 16px;display:grid;grid-template-columns:150px 1fr;gap:6px 18px}
+.phase .h{grid-row:span 3}
+.phase .h b{display:block;font-size:14.5px}
+.phase .h span{font-family:var(--mono);font-size:12px;color:var(--muted)}
+.phase ul{font-size:14px;gap:3px}
+.phase .exit{font-size:13.5px;color:var(--ink-2);border-top:1px dashed var(--line);padding-top:8px}
+.phase .exit b{color:var(--c2)}
+@media (max-width:640px){.phase{grid-template-columns:1fr}.phase .h{grid-row:auto}}
+.qs{display:grid;gap:10px}
+.q{border-left:3px solid var(--accent);background:var(--surface);padding:10px 14px;border-radius:0 8px 8px 0}
+.q b{display:block;font-size:14.5px}
+.q span{font-size:13.5px;color:var(--muted)}
+pre.mermaid{background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:16px;margin:0;overflow-x:auto}
+
+@media (max-width:860px){.doc{grid-template-columns:1fr}.toc{display:none}}
+@media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
+</style>
+
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <defs>
+    <symbol id="i-logo" viewBox="0 0 32 32" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 9h24M7 15h18M10 21h12"/><path d="M4 9l5 16h14l5-16"/></symbol>
+    <symbol id="i-grid" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="2" y="2" width="5" height="5" rx="1"/><rect x="9" y="2" width="5" height="5" rx="1"/><rect x="2" y="9" width="5" height="5" rx="1"/><rect x="9" y="9" width="5" height="5" rx="1"/></symbol>
+    <symbol id="i-box" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"><path d="M8 1.8l5.6 3.1v6.2L8 14.2 2.4 11.1V4.9z"/><path d="M2.6 5L8 8l5.4-3M8 8v6"/></symbol>
+    <symbol id="i-pulse" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M1.5 8.5h3l2-5 3 9 2-4h3"/></symbol>
+    <symbol id="i-server" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="2" y="2.5" width="12" height="4.5" rx="1"/><rect x="2" y="9" width="12" height="4.5" rx="1"/><path d="M4.5 4.75h.01M4.5 11.25h.01" stroke-linecap="round" stroke-width="2"/></symbol>
+    <symbol id="i-net" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="8" cy="3" r="1.6"/><circle cx="3" cy="13" r="1.6"/><circle cx="13" cy="13" r="1.6"/><path d="M7.2 4.4L3.8 11.6M8.8 4.4l3.4 7.2M4.6 13h6.8"/></symbol>
+    <symbol id="i-users" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><circle cx="6" cy="5.5" r="2.5"/><path d="M1.5 13.5c.6-2.4 2.3-3.6 4.5-3.6s3.9 1.2 4.5 3.6"/><path d="M10.5 3.2a2.4 2.4 0 010 4.6M12 9.8c1.3.5 2.1 1.6 2.5 3.7"/></symbol>
+    <symbol id="i-shield" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"><path d="M8 1.5l5.5 2v4.2c0 3.3-2.3 5.6-5.5 6.8-3.2-1.2-5.5-3.5-5.5-6.8V3.5z"/></symbol>
+    <symbol id="i-search" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><circle cx="7" cy="7" r="4.5"/><path d="M10.5 10.5L14 14"/></symbol>
+    <symbol id="i-plus" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M8 3v10M3 8h10"/></symbol>
+    <symbol id="i-term" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="1.5" y="2.5" width="13" height="11" rx="1.5"/><path d="M4.5 6.5l2 1.75-2 1.75M8.5 10.5h3"/></symbol>
+    <symbol id="i-alert" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M8 2l6.5 11.5h-13z"/><path d="M8 6.5v3.2M8 11.8h.01"/></symbol>
+    <symbol id="i-check" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 8.5l3.2 3L13 4.5"/></symbol>
+    <symbol id="i-disk" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><ellipse cx="8" cy="4" rx="5.5" ry="2"/><path d="M2.5 4v8c0 1.1 2.5 2 5.5 2s5.5-.9 5.5-2V4"/></symbol>
+    <symbol id="i-rocket" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M9.5 2.5c2.5-.8 4-.3 4 0s.8 1.5 0 4l-4.5 4.5-4-4z"/><path d="M5 7L2.5 7.5 4 5.5h3M9 11l-.5 2.5 2-1.5V9"/></symbol>
+    <symbol id="i-key" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><circle cx="5" cy="10.5" r="3"/><path d="M7.2 8.3L13.5 2M11 4.5l1.8 1.8"/></symbol>
+  </defs>
+</svg>
+
+<div class="wrap">
+  <header class="mast">
+    <div class="brand"><svg><use href="#i-logo"/></svg><b>Werft</b><span>working name · self-hosted Kubernetes console for Hetzner</span></div>
+    <div class="meta">blueprint · draft 2 · 4 Oct 2026</div>
+  </header>
+
+  <section class="intro">
+    <div style="display:grid;gap:14px;align-content:start">
+      <h1>Rent a Hetzner box, run one script, manage containers from the browser.</h1>
+      <p>Werft installs a hardened single-node Kubernetes (k3s) on a fresh Ubuntu server and puts a console on top of it: deploy container images, watch them, and administer network rules, domains, nodes, clusters and access — without hiding Kubernetes from the people who want it.</p>
+    </div>
+    <ul class="facts">
+      <li><span class="k">Install</span><span><code>curl … | bash -s -- --domain ops.acme.dev</code>, idempotent, non-interactive with flags</span></li>
+      <li><span class="k">Runtime</span><span>k3s · Cilium · Traefik · cert-manager · VictoriaMetrics/Logs</span></li>
+      <li><span class="k">Sources</span><span>Images from any registry, or Git repositories built in-cluster on push</span></li>
+      <li><span class="k">Console</span><span>Go API + controllers, React UI, one binary in one Helm chart</span></li>
+      <li><span class="k">Hosts</span><span>Hetzner Cloud and dedicated servers · Ubuntu 22.04–26.04 LTS · 4 GB RAM minimum, 8 GB with Git builds</span></li>
+    </ul>
+  </section>
+
+  <div class="pagetabs" role="tablist" aria-label="Blueprint sections">
+    <button role="tab" id="tab-mock" aria-selected="true" data-page="mockups">UI mockups</button>
+    <button role="tab" id="tab-plan" aria-selected="false" data-page="plan">Implementation plan</button>
+  </div>
+
+  <!-- =================================================== MOCKUPS -->
+  <section id="page-mockups" data-pagepanel="mockups">
+    <div class="flow" role="group" aria-label="Product flow">
+      <span class="lbl">Walk the flow</span>
+      <button data-flow="install" aria-pressed="false"><i>1</i>Install on the server</button>
+      <button data-flow="setup" aria-pressed="false"><i>2</i>First-run setup</button>
+      <button data-flow="console" aria-pressed="true"><i>3</i>Console</button>
+    </div>
+    <div class="note" id="note"><b id="note-t">Overview</b><span id="note-d"></span></div>
+
+    <div class="scroller">
+    <div class="frame">
+      <div class="chrome"><div class="dots"><span></span><span></span><span></span></div><div class="url" id="url">https://<b>ops.acme.dev</b>/overview</div><div style="width:54px"></div></div>
+
+      <!-- ===== INSTALL ===== -->
+      <div data-flowpanel="install" hidden>
+<div class="term"><span class="d">root@fsn1-node-1:~#</span> <span class="b">curl -fsSL https://get.werft.sh | bash -s -- \
+    --domain ops.acme.dev --email ops@acme.dev --private-iface enp7s0 --yes</span>
+
+<span class="a">▸ Werft installer 0.9.0</span>  <span class="d">channel=stable · log=/var/log/werft/install.log</span>
+
+<span class="g">✓</span> Preflight       Ubuntu 24.04.3 LTS · x86_64 · 16 threads · 62.6 GiB RAM · 476 GB NVMe
+<span class="g">✓</span> Ports           80/tcp, 443/tcp free · 6443 bound to 10.0.0.2 (private)
+<span class="g">✓</span> System          packages · sysctl · chrony · unattended-upgrades · swap off
+<span class="g">✓</span> Firewall        nftables baseline: 22, 80, 443 public · 6443, 10250 private only
+<span class="g">✓</span> Kubernetes      k3s v1.37.1+k3s1 · server · embedded etcd · secrets encryption on
+<span class="g">✓</span> Network         Cilium 1.20 · kube-proxy replacement · Hubble · WireGuard node encryption
+<span class="g">✓</span> Ingress & TLS   Traefik (Gateway API) · cert-manager · Let's Encrypt HTTP-01
+<span class="g">✓</span> Observability   VictoriaMetrics · VictoriaLogs · kube-state-metrics · node-exporter
+<span class="g">✓</span> Werft           control plane 0.9.0 · 2/2 replicas ready
+<span class="w">…</span> Certificate     ops.acme.dev → 203.0.113.24 <span class="g">matches this server</span> · issued in 14 s
+
+  Open        <span class="a">https://ops.acme.dev/setup</span>
+  Setup token <span class="b">wrft_setup_••••-••••-9DRF</span>  <span class="d">(single use, expires in 24 h)</span>
+  Stored at   /etc/werft/setup-token  <span class="d">· mode 0600</span>
+
+<span class="g">Done in 3m 41s.</span> <span class="d">Re-run the same command any time to repair or upgrade.</span>
+<span class="d">root@fsn1-node-1:~#</span> <span class="b">▍</span></div>
+      </div>
+
+      <!-- ===== SETUP WIZARD ===== -->
+      <div data-flowpanel="setup" hidden>
+        <div class="setup">
+          <aside>
+            <div class="side-brand"><svg><use href="#i-logo"/></svg>Werft setup</div>
+            <ol class="vsteps">
+              <li class="done"><span class="dot">✓</span><div><b>Setup token</b><small>Verified from /etc/werft</small></div></li>
+              <li class="done"><span class="dot">✓</span><div><b>Owner account</b><small>mara@acme.dev · passkey added</small></div></li>
+              <li class="cur"><span class="dot">3</span><div><b>Domains &amp; TLS</b><small>Console and app hostnames</small></div></li>
+              <li><span class="dot">4</span><div><b>Hetzner integration</b><small>Optional: Cloud API, backups</small></div></li>
+              <li><span class="dot">5</span><div><b>Ready</b><small>Deploy your first app</small></div></li>
+            </ol>
+            <p class="dim" style="font-size:12px;margin:0">Everything here can be pre-seeded with <code>--config werft.yaml</code>, which skips this wizard entirely.</p>
+          </aside>
+          <main>
+            <div>
+              <h2>Where should Werft and your apps live?</h2>
+              <p class="lead">The console gets its own hostname. Apps get subdomains under a base domain, so <code>invoices</code> becomes <code>invoices.apps.acme.dev</code> without touching DNS again.</p>
+            </div>
+            <div class="fields">
+              <div class="field"><label for="s-console">Console domain</label><input class="input mono" id="s-console" value="ops.acme.dev"><span class="ok">✓ A record points to 203.0.113.24 (this server)</span></div>
+              <div class="field"><label for="s-base">Base domain for apps</label><input class="input mono" id="s-base" value="apps.acme.dev"><span class="hint">Create <code>*.apps.acme.dev</code> → 203.0.113.24</span></div>
+              <div class="field full"><label>How should certificates be issued?</label>
+                <div class="radio" data-radio>
+                  <button class="opt" aria-pressed="false"><span class="r"></span><b>HTTP-01, one certificate per hostname</b><span>No DNS credentials needed. Every new app hostname needs its own DNS record.</span></button>
+                  <button class="opt" aria-pressed="true"><span class="r"></span><b>DNS-01 via Hetzner DNS, wildcard certificate</b><span>Werft creates records and a <code>*.apps.acme.dev</code> certificate automatically. Needs a DNS API token.</span></button>
+                </div>
+              </div>
+              <div class="field"><label for="s-dns">Hetzner DNS API token</label><input class="input mono" id="s-dns" value="••••••••••••••••••••hK2q"><span class="ok">✓ Zone acme.dev found · write access</span></div>
+              <div class="field"><label for="s-mail">Let's Encrypt contact</label><input class="input" id="s-mail" value="ops@acme.dev"><span class="hint">Expiry warnings go here</span></div>
+            </div>
+            <div class="acts" style="justify-content:space-between"><button class="btn">Back</button><button class="btn pri">Continue to Hetzner integration</button></div>
+          </main>
+        </div>
+      </div>
+
+      <!-- ===== CONSOLE ===== -->
+      <div data-flowpanel="console">
+      <div class="app">
+        <aside class="side">
+          <div class="side-brand"><svg><use href="#i-logo"/></svg>Werft</div>
+          <button class="cluster" data-go="clusters"><b><span><span class="live"></span>fsn1-prod</span><span class="dim">▾</span></b><small>3 nodes · k3s v1.37.1</small></button>
+          <nav class="nav" aria-label="Console">
+            <button data-screen="overview" aria-current="page"><svg><use href="#i-grid"/></svg>Overview</button>
+            <button data-screen="apps"><svg><use href="#i-box"/></svg>Apps<span class="count bad">1</span></button>
+            <button data-screen="monitoring"><svg><use href="#i-pulse"/></svg>Monitoring<span class="count bad">2</span></button>
+            <span class="grp">Infrastructure</span>
+            <button data-screen="clusters"><svg><use href="#i-server"/></svg>Clusters &amp; nodes</button>
+            <button data-screen="network"><svg><use href="#i-net"/></svg>Network</button>
+            <span class="grp">Administration</span>
+            <button data-screen="access"><svg><use href="#i-users"/></svg>Access</button>
+          </nav>
+          <div class="side-foot"><span class="avatar">ML</span><div>Mara Lindqvist<br><span class="dim" style="font-size:11px">Owner</span></div></div>
+        </aside>
+
+        <div class="main">
+          <div class="topbar">
+            <div class="crumb" id="crumb">fsn1-prod / <b>Overview</b></div>
+            <div class="search"><svg><use href="#i-search"/></svg>Search apps, pods, nodes, domains<span class="kbd">⌘K</span></div>
+            <button class="btn pri" data-go="deploy"><svg><use href="#i-plus"/></svg>Deploy app</button>
+          </div>
+
+          <!-- OVERVIEW -->
+          <section class="view" data-view="overview">
+            <div class="ph"><div><h2>Overview</h2><p class="sub">Management cluster · Falkenstein (FSN1) · 24 apps in 3 projects</p></div><div class="seg" data-seg><button>1 h</button><button aria-pressed="true">24 h</button><button>7 d</button></div></div>
+            <div class="banner warn"><svg><use href="#i-alert"/></svg><span><b>2 issues need attention.</b> billing-worker is crash-looping and the postgres-main volume is 87% full.</span><button class="btn sm" data-go="monitoring">Review</button></div>
+            <div class="tiles">
+              <div class="tile"><span class="k">CPU</span><span class="v">38<small>%</small></span><span class="s">9.1 of 24 vCPU in use</span><svg class="spark ch" data-spark="cpu"></svg></div>
+              <div class="tile"><span class="k">Memory</span><span class="v">31.6 <small>GiB</small></span><span class="s">of 80 GiB · 40%</span><svg class="spark ch" data-spark="mem"></svg></div>
+              <div class="tile"><span class="k">Storage</span><span class="v">312 <small>GB</small></span><span class="s">of 832 GB NVMe across nodes</span><div class="meter"><i style="width:37.5%"></i></div></div>
+              <div class="tile"><span class="k">Traffic, October</span><span class="v">1.8 <small>TB out</small></span><span class="s">Busiest cloud node 0.9 of 20 TB included</span><div class="meter"><i style="width:4.5%"></i></div></div>
+            </div>
+            <div class="g2">
+              <div class="card"><div class="ch-h"><h3>Cluster usage</h3><span class="legend"><span><i style="background:var(--accent)"></i>CPU</span><span><i style="background:var(--c2)"></i>Memory</span></span></div><div class="bd"><svg class="ch" data-chart="cluster"></svg></div></div>
+              <div class="card"><h3>Needs attention</h3>
+                <div class="list">
+                  <div class="li"><span class="ico bad"><svg><use href="#i-alert"/></svg></span><div><b>billing-worker</b> · CrashLoopBackOff<p>7 restarts in 30 min. 312 connections to <code>api:8080</code> were dropped by a network rule.</p><button class="btn ghost sm" data-go="network" style="padding-left:0">Inspect dropped traffic →</button></div><span class="when">4m</span></div>
+                  <div class="li"><span class="ico warn"><svg><use href="#i-disk"/></svg></span><div><b>postgres-main-data</b> · 87% full<p>43.5 of 50 GiB. At the current rate, full in ~6 days.</p><button class="btn ghost sm" style="padding-left:0">Expand volume →</button></div><span class="when">2h</span></div>
+                  <div class="li"><span class="ico info"><svg><use href="#i-rocket"/></svg></span><div><b>Werft 0.9.1</b> available<p>Patch release · k3s v1.37.2 included</p></div><span class="when">1d</span></div>
+                </div>
+              </div>
+            </div>
+            <div class="g2e">
+              <div class="card"><div class="ch-h"><h3>Nodes</h3><button class="btn ghost sm" data-go="clusters">Manage</button></div>
+                <table class="t"><thead><tr><th>Node</th><th>Type</th><th class="num">CPU</th><th class="num">Mem</th><th>Status</th></tr></thead><tbody>
+                  <tr><td class="nm">fsn1-node-1</td><td>Dedicated AX42</td><td class="num">41%</td><td class="num">38%</td><td><span class="pill ok">Ready</span></td></tr>
+                  <tr><td class="nm">fsn1-node-2</td><td>Cloud CPX31</td><td class="num">29%</td><td class="num">61%</td><td><span class="pill ok">Ready</span></td></tr>
+                  <tr><td class="nm">fsn1-node-3</td><td>Cloud CPX31</td><td class="num">33%</td><td class="num">47%</td><td><span class="pill ok">Ready</span></td></tr>
+                </tbody></table>
+              </div>
+              <div class="card"><h3>Recent activity</h3>
+                <div class="list">
+                  <div class="li"><span class="avatar">JP</span><div><b>Jonas Petrov</b> pushed to <code>acme/api</code> main<p>Build #117 in 1m 31s · revision 42 rolled out 4/4 in 48 s</p></div><span class="when">2h</span></div>
+                  <div class="li"><span class="avatar">JP</span><div><b>Jonas Petrov</b> edited network rule <code>internal-egress</code><p>Allowed 443/tcp to 0.0.0.0/0</p></div><span class="when">5h</span></div>
+                  <div class="li"><span class="avatar">AT</span><div><b>Aiko Tanaka</b> opened a shell in <code>api-7c9d8-x2kq</code><p>Session recorded · 6 min</p></div><span class="when">1d</span></div>
+                </div>
+              </div>
+            </div>
+          </section>
+
+          <!-- APPS -->
+          <section class="view" data-view="apps" hidden>
+            <div class="ph"><div><h2>Apps</h2><p class="sub">Deployments and stateful services across your projects</p></div></div>
+            <div class="toolbar">
+              <input class="input" id="app-filter" placeholder="Filter by name or image" style="width:260px" aria-label="Filter apps">
+              <div class="seg" data-seg><button aria-pressed="true">All projects</button><button>storefront</button><button>internal</button><button>staging</button></div>
+              <div class="seg" data-seg style="margin-left:auto"><button aria-pressed="true">Any status</button><button>Problems</button></div>
+            </div>
+            <div class="card" style="overflow:hidden">
+              <table class="t"><thead><tr><th>App</th><th>Image</th><th class="num">Replicas</th><th>Status</th><th class="num">CPU</th><th class="num">Memory</th><th>Domain</th><th>Updated</th></tr></thead><tbody>
+                <tr class="click" data-go="app"><td><span class="nm">api</span><span class="sub">storefront</span></td><td class="mono">git · acme/api@9e01d7c</td><td class="num">4/4</td><td><span class="pill ok">Running</span></td><td class="num">0.48</td><td class="num">842 Mi</td><td>api.acme.dev</td><td class="dim">2 h ago</td></tr>
+                <tr class="click" data-go="app"><td><span class="nm">web-frontend</span><span class="sub">storefront</span></td><td class="mono">ghcr.io/acme/web:2.14.1</td><td class="num">3/3</td><td><span class="pill ok">Running</span></td><td class="num">0.31</td><td class="num">604 Mi</td><td>web.acme.dev</td><td class="dim">1 d ago</td></tr>
+                <tr class="click" data-go="app"><td><span class="nm">billing-worker</span><span class="sub">storefront</span></td><td class="mono">ghcr.io/acme/billing:1.8.3</td><td class="num">1/2</td><td><span class="pill bad">CrashLoop</span></td><td class="num">0.02</td><td class="num">96 Mi</td><td class="dim">internal</td><td class="dim">3 h ago</td></tr>
+                <tr class="click" data-go="app"><td><span class="nm">postgres-main</span><span class="sub">storefront · stateful</span></td><td class="mono">postgres:17.6</td><td class="num">1/1</td><td><span class="pill warn">Volume 87%</span></td><td class="num">0.74</td><td class="num">3.9 Gi</td><td class="dim">internal</td><td class="dim">12 d ago</td></tr>
+                <tr class="click" data-go="app"><td><span class="nm">redis</span><span class="sub">storefront</span></td><td class="mono">redis:8.2-alpine</td><td class="num">1/1</td><td><span class="pill ok">Running</span></td><td class="num">0.05</td><td class="num">212 Mi</td><td class="dim">internal</td><td class="dim">12 d ago</td></tr>
+                <tr class="click" data-go="app"><td><span class="nm">plausible</span><span class="sub">internal</span></td><td class="mono">ghcr.io/plausible/community-edition:v3.0</td><td class="num">1/1</td><td><span class="pill ok">Running</span></td><td class="num">0.12</td><td class="num">380 Mi</td><td>stats.acme.dev</td><td class="dim">6 d ago</td></tr>
+                <tr class="click" data-go="app"><td><span class="nm">uptime-kuma</span><span class="sub">internal</span></td><td class="mono">louislam/uptime-kuma:2</td><td class="num">1/1</td><td><span class="pill ok">Running</span></td><td class="num">0.03</td><td class="num">141 Mi</td><td>status.acme.dev</td><td class="dim">20 d ago</td></tr>
+                <tr class="click" data-go="app"><td><span class="nm">n8n</span><span class="sub">internal</span></td><td class="mono">n8nio/n8n:1.112.0</td><td class="num">0/1</td><td><span class="pill info">Deploying</span></td><td class="num">—</td><td class="num">—</td><td>flows.acme.dev</td><td class="dim">just now</td></tr>
+              </tbody></table>
+            </div>
+          </section>
+
+          <!-- APP DETAIL -->
+          <section class="view" data-view="app" hidden>
+            <div class="ph">
+              <div><h2>api <span class="pill ok">Running</span></h2><p class="sub">Built from <code>github.com/acme/api</code> @ main · Deployment · project storefront · revision 42</p></div>
+              <div class="acts"><button class="btn"><svg><use href="#i-term"/></svg>Open shell</button><button class="btn">Restart</button><button class="btn">Scale</button><button class="btn pri">Redeploy</button></div>
+            </div>
+            <div class="tabs" role="tablist" data-tabs="app"><button role="tab" aria-selected="true" data-tab="ov">Overview</button><button role="tab" aria-selected="false" data-tab="logs">Logs</button><button role="tab" aria-selected="false" data-tab="builds">Builds</button><button role="tab" aria-selected="false" data-tab="settings">Settings</button></div>
+
+            <div data-tabpanel="app:ov" style="display:grid;gap:16px">
+              <div class="g2">
+                <div class="card"><div class="ch-h"><h3>CPU per replica, cores</h3><span class="legend"><span><i style="background:var(--accent)"></i>usage</span><span><i style="background:var(--warn)"></i>limit 1.0</span></span></div><div class="bd"><svg class="ch" data-chart="app"></svg></div></div>
+                <div class="card"><h3>Reachable at</h3>
+                  <div class="list">
+                    <div class="li"><span class="ico ok"><svg><use href="#i-shield"/></svg></span><div><b>https://api.acme.dev</b><p>→ port 8080 · TLS valid until 2 Jan 2027 · Let's Encrypt</p></div></div>
+                    <div class="li"><span class="ico info"><svg><use href="#i-net"/></svg></span><div><b>api.storefront.svc:8080</b><p>Inside the cluster · allowed from web-frontend</p></div></div>
+                  </div>
+                  <h3 style="border-top:1px solid var(--line-2)">Revisions</h3>
+                  <div class="list">
+                    <div class="li"><div><b>42</b> · 9e01d7c <span class="pill info nodot">current</span><p>build #117 · pushed by Jonas Petrov · 2 h ago</p></div></div>
+                    <div class="li"><div><b>41</b> · a71be03<p>build #115 · yesterday</p></div><button class="btn sm" style="margin-left:auto">Roll back</button></div>
+                  </div>
+                </div>
+              </div>
+              <div class="card" style="overflow:hidden"><h3>Replicas</h3>
+                <table class="t"><thead><tr><th>Pod</th><th>Node</th><th>Status</th><th class="num">Restarts</th><th class="num">Age</th><th class="num">CPU</th><th class="num">Memory</th><th></th></tr></thead><tbody>
+                  <tr><td class="mono">api-7c9d8-x2kq</td><td>fsn1-node-1</td><td><span class="pill ok">Running</span></td><td class="num">0</td><td class="num">2h</td><td class="num">142m</td><td class="num">214Mi</td><td><button class="btn sm">Logs</button> <button class="btn sm">Shell</button></td></tr>
+                  <tr><td class="mono">api-7c9d8-p8mw</td><td>fsn1-node-2</td><td><span class="pill ok">Running</span></td><td class="num">0</td><td class="num">2h</td><td class="num">118m</td><td class="num">209Mi</td><td><button class="btn sm">Logs</button> <button class="btn sm">Shell</button></td></tr>
+                  <tr><td class="mono">api-7c9d8-z4tn</td><td>fsn1-node-3</td><td><span class="pill ok">Running</span></td><td class="num">0</td><td class="num">2h</td><td class="num">121m</td><td class="num">207Mi</td><td><button class="btn sm">Logs</button> <button class="btn sm">Shell</button></td></tr>
+                  <tr><td class="mono">api-7c9d8-hb6r</td><td>fsn1-node-1</td><td><span class="pill ok">Running</span></td><td class="num">1</td><td class="num">2h</td><td class="num">99m</td><td class="num">212Mi</td><td><button class="btn sm">Logs</button> <button class="btn sm">Shell</button></td></tr>
+                </tbody></table>
+              </div>
+            </div>
+
+            <div data-tabpanel="app:logs" hidden style="display:grid;gap:10px">
+              <div class="toolbar">
+                <select class="input" aria-label="Replica"><option>All replicas (4)</option><option>api-7c9d8-x2kq</option></select>
+                <input class="input mono" value="timeout" aria-label="Search logs" style="width:200px">
+                <div class="seg" data-seg><button>15 m</button><button aria-pressed="true">1 h</button><button>24 h</button></div>
+                <span class="toggle on" style="margin-left:auto"><i></i>Follow</span>
+                <span class="toggle on"><i></i>Timestamps</span>
+                <button class="btn sm">Download</button>
+              </div>
+<div class="logs"><span class="p1">x2kq</span> <span class="ts">09:14:02.381</span> INFO  GET /v1/orders?page=2 200 18ms
+<span class="p2">p8mw</span> <span class="ts">09:14:02.402</span> INFO  POST /v1/cart/items 201 31ms
+<span class="p3">z4tn</span> <span class="ts">09:14:02.517</span> INFO  GET /v1/products/4471 200 6ms
+<span class="p1">x2kq</span> <span class="ts">09:14:03.044</span> <span class="wn">WARN</span>  payment provider slow: 1214ms (threshold 800ms)
+<span class="p4">hb6r</span> <span class="ts">09:14:03.090</span> INFO  GET /healthz 200 1ms
+<span class="p2">p8mw</span> <span class="ts">09:14:03.311</span> INFO  GET /v1/orders/88213 200 12ms
+<span class="p3">z4tn</span> <span class="ts">09:14:04.006</span> <span class="er">ERROR</span> redis <mark>timeout</mark> after 500ms, retrying (1/3)
+<span class="p3">z4tn</span> <span class="ts">09:14:04.512</span> INFO  redis reconnected
+<span class="p1">x2kq</span> <span class="ts">09:14:04.733</span> INFO  POST /v1/checkout 200 244ms
+<span class="p4">hb6r</span> <span class="ts">09:14:05.120</span> INFO  GET /v1/orders?page=1 200 21ms
+<span class="p2">p8mw</span> <span class="ts">09:14:05.402</span> INFO  GET /healthz 200 1ms
+<span class="p1">x2kq</span> <span class="ts">09:14:05.958</span> INFO  GET /v1/products?tag=autumn 200 33ms
+<span class="p4">hb6r</span> <span class="ts">09:14:06.214</span> <span class="wn">WARN</span>  upstream <mark>timeout</mark> budget 80% used on /v1/checkout
+<span class="p3">z4tn</span> <span class="ts">09:14:06.630</span> INFO  POST /v1/cart/items 201 27ms
+<span class="ts">— following · 4 streams · VictoriaLogs query: {app="api"} | "timeout" —</span></div>
+            </div>
+
+            <div data-tabpanel="app:builds" hidden style="display:grid;gap:16px">
+              <div class="toolbar"><span class="tag">github.com/acme/api</span><span class="tag">main</span><span class="dim" style="font-size:12.5px">Dockerfile · rootless BuildKit · cache 1.4 GB on fsn1-node-1</span><button class="btn sm" style="margin-left:auto">Build now</button></div>
+              <div class="card" style="overflow:hidden">
+                <table class="t"><thead><tr><th>Build</th><th>Commit</th><th>Author</th><th class="num">Duration</th><th>Status</th><th>Result</th></tr></thead><tbody>
+                  <tr><td class="nm">#118</td><td><span class="mono">4f2c1ab</span><span class="sub">Add order export endpoint</span></td><td>Aiko Tanaka</td><td class="num">0m 59s</td><td><span class="pill info">Building 6/7</span></td><td class="dim">—</td></tr>
+                  <tr><td class="nm">#117</td><td><span class="mono">9e01d7c</span><span class="sub">Bump pgx to v5.7</span></td><td>Jonas Petrov</td><td class="num">1m 31s</td><td><span class="pill ok">Deployed</span></td><td class="dim">revision 42</td></tr>
+                  <tr><td class="nm">#116</td><td><span class="mono">c3a9f20</span><span class="sub">Fix VAT rounding</span></td><td>Aiko Tanaka</td><td class="num">1m 12s</td><td><span class="pill bad">Failed</span></td><td class="dim">tests failed in step 5</td></tr>
+                  <tr><td class="nm">#115</td><td><span class="mono">a71be03</span><span class="sub">Paginate order history</span></td><td>Aiko Tanaka</td><td class="num">1m 44s</td><td><span class="pill mute">Superseded</span></td><td class="dim">revision 41</td></tr>
+                </tbody></table>
+              </div>
+<div class="logs" style="min-height:0"><span class="ts">build #118 · 4f2c1ab · builder pod on fsn1-node-1 · limits 2 vCPU / 2 GiB</span>
+<span class="p1">[1/7]</span> FROM docker.io/library/golang:1.25-alpine          <span class="ts">cached</span>
+<span class="p1">[2/7]</span> WORKDIR /src                                       <span class="ts">cached</span>
+<span class="p1">[3/7]</span> COPY go.mod go.sum ./                              <span class="ts">cached</span>
+<span class="p1">[4/7]</span> RUN go mod download                                <span class="ts">cached</span>
+<span class="p1">[5/7]</span> COPY . . &amp;&amp; RUN go test ./...                    <span class="p2">ok</span> <span class="ts">38.2s</span>
+<span class="p1">[6/7]</span> RUN go build -trimpath -o /out/api ./cmd/api       <span class="wn">running</span> <span class="ts">21s</span>
+<span class="p1">[7/7]</span> FROM gcr.io/distroless/static:nonroot · COPY /out/api
+<span class="ts">→ push registry.werft.internal/storefront/api:4f2c1ab · then roll out as revision 43</span></div>
+            </div>
+
+            <div data-tabpanel="app:settings" hidden style="display:grid;gap:16px">
+              <div class="g2e">
+                <div class="card"><h3>Source</h3><div class="bd fields">
+                  <div class="field full"><label for="a-repo">Repository</label><input class="input mono" id="a-repo" value="github.com/acme/api"><span class="ok">✓ Connected through the GitHub App · webhook active</span></div>
+                  <div class="field"><label for="a-branch">Branch</label><input class="input mono" id="a-branch" value="main"></div>
+                  <div class="field"><label for="a-build">Build with</label><select class="input" id="a-build"><option>Dockerfile (./Dockerfile)</option><option>Railpack auto-detect</option></select></div>
+                  <div class="field full"><label>On push</label><span class="toggle on"><i></i>Build and deploy every push to main</span></div>
+                </div></div>
+                <div class="card"><h3>Scaling &amp; resources</h3><div class="bd fields">
+                  <div class="field"><label for="a-rep">Replicas</label><input class="input" id="a-rep" value="4"></div>
+                  <div class="field"><label>Autoscale</label><span class="toggle on"><i></i>2–8 replicas at 70% CPU</span></div>
+                  <div class="field"><label for="a-cpu">CPU request / limit</label><input class="input mono" id="a-cpu" value="250m / 1"></div>
+                  <div class="field"><label for="a-mem">Memory request / limit</label><input class="input mono" id="a-mem" value="256Mi / 512Mi"></div>
+                </div></div>
+              </div>
+              <div class="card" style="overflow:hidden"><div class="ch-h"><h3>Environment</h3><button class="btn sm"><svg><use href="#i-plus"/></svg>Add variable</button></div>
+                <table class="t"><thead><tr><th>Name</th><th>Value</th><th>Source</th></tr></thead><tbody>
+                  <tr><td class="mono">DATABASE_URL</td><td class="mono dim">•••••••••••••••• <button class="btn ghost sm">Reveal</button></td><td><span class="tag">secret · api-db</span></td></tr>
+                  <tr><td class="mono">REDIS_HOST</td><td class="mono">redis.storefront.svc</td><td><span class="tag">plain</span></td></tr>
+                  <tr><td class="mono">LOG_LEVEL</td><td class="mono">info</td><td><span class="tag">plain</span></td></tr>
+                  <tr><td class="mono">STRIPE_KEY</td><td class="mono dim">•••••••••••••••• <button class="btn ghost sm">Reveal</button></td><td><span class="tag">secret · payments</span></td></tr>
+                </tbody></table>
+              </div>
+              <div class="banner info"><svg><use href="#i-rocket"/></svg><span>Saving creates <b>revision 43</b> and rolls out one replica at a time. Health check <code>GET /healthz :8080</code> must pass before traffic moves.</span><button class="btn pri sm">Save &amp; deploy</button></div>
+            </div>
+          </section>
+
+          <!-- DEPLOY WIZARD -->
+          <section class="view" data-view="deploy" hidden>
+            <div class="ph"><div><h2>Deploy an app</h2><p class="sub">Everything here becomes one <code>App</code> resource. You can export it as YAML at the end.</p></div></div>
+            <div class="steps" data-steps>
+              <button class="done" aria-current="step" data-step="src"><span>Step 1</span><b>Source</b></button>
+              <button data-step="run"><span>Step 2</span><b>Runtime</b></button>
+              <button data-step="netw"><span>Step 3</span><b>Networking</b></button>
+              <button data-step="stor"><span>Step 4</span><b>Storage</b></button>
+              <button data-step="rev"><span>Step 5</span><b>Review</b></button>
+            </div>
+
+            <div data-steppanel="src" style="display:grid;gap:16px">
+              <div class="choice" data-radio>
+                <button class="opt" aria-pressed="true" data-src="image"><b>Container image</b><span>Any registry, public or private</span></button>
+                <button class="opt" aria-pressed="false" data-src="git"><b>Git repository</b><span>Built in-cluster, redeployed on every push</span></button>
+                <button class="opt" aria-pressed="false" data-src="image"><b>Docker Compose</b><span>Paste a compose file; services become apps</span></button>
+                <button class="opt" aria-pressed="false" data-src="image"><b>Template</b><span>PostgreSQL, Redis, MinIO, n8n, Plausible…</span></button>
+              </div>
+              <div class="card"><div class="bd fields">
+                <div class="field"><label for="d-name">App name</label><input class="input mono" id="d-name" value="invoice-renderer"></div>
+                <div class="field"><label for="d-proj">Project</label><select class="input" id="d-proj"><option>storefront</option><option>internal</option></select></div>
+                <div class="field full" data-srcpanel="image"><label for="d-img">Image</label><input class="input mono" id="d-img" value="ghcr.io/acme/invoice-renderer:0.3.0"><span class="ok">✓ Found · linux/amd64, linux/arm64 · 182 MB · exposes 3000/tcp</span></div>
+                <div class="field" data-srcpanel="image"><label for="d-cred">Registry credential</label><select class="input" id="d-cred"><option>ghcr-acme (GitHub)</option><option>None (public image)</option><option>Add credential…</option></select></div>
+                <div class="field full" data-srcpanel="git" hidden><label for="d-repo">Repository</label><input class="input mono" id="d-repo" value="github.com/acme/invoice-renderer"><span class="ok">✓ Access through the GitHub App · last commit 4f2c1ab “Render VAT lines”</span></div>
+                <div class="field" data-srcpanel="git" hidden><label for="d-branch">Branch</label><input class="input mono" id="d-branch" value="main"></div>
+                <div class="field" data-srcpanel="git" hidden><label for="d-build">Build with</label><select class="input" id="d-build"><option>Dockerfile — found at ./Dockerfile</option><option>Railpack — detect language automatically</option></select></div>
+                <div class="field full" data-srcpanel="git" hidden><label>On push</label><span class="toggle on"><i></i>Build and deploy every push to main · pull requests get a build check only</span></div>
+              </div></div>
+              <div class="acts" style="justify-content:flex-end"><button class="btn pri" data-next="run">Continue</button></div>
+            </div>
+
+            <div data-steppanel="run" hidden style="display:grid;gap:16px">
+              <div class="choice" data-radio>
+                <button class="opt" aria-pressed="false"><b>Small</b><span>0.25 vCPU · 256 MiB</span></button>
+                <button class="opt" aria-pressed="true"><b>Medium</b><span>0.5 vCPU · 512 MiB</span></button>
+                <button class="opt" aria-pressed="false"><b>Large</b><span>1 vCPU · 2 GiB</span></button>
+                <button class="opt" aria-pressed="false"><b>Custom</b><span>Set requests and limits</span></button>
+              </div>
+              <div class="card"><div class="bd fields">
+                <div class="field"><label for="d-rep">Replicas</label><input class="input" id="d-rep" value="2"><span class="hint">Spread across nodes when possible</span></div>
+                <div class="field"><label for="d-hc">Health check</label><input class="input mono" id="d-hc" value="HTTP GET /health :3000"></div>
+                <div class="field full"><label for="d-env">Environment (KEY=value, one per line)</label><textarea class="input mono" id="d-env" rows="3">PDF_TIMEOUT=30s
+S3_BUCKET=acme-invoices</textarea><span class="hint">Mark a variable as secret to store it encrypted and hide it in the UI</span></div>
+              </div></div>
+              <div class="acts" style="justify-content:space-between"><button class="btn" data-next="src">Back</button><button class="btn pri" data-next="netw">Continue</button></div>
+            </div>
+
+            <div data-steppanel="netw" hidden style="display:grid;gap:16px">
+              <div class="card"><div class="bd fields">
+                <div class="field"><label for="d-port">Container port</label><input class="input mono" id="d-port" value="3000"></div>
+                <div class="field"><label>Exposure</label><div class="seg" data-seg><button>Cluster only</button><button aria-pressed="true">Public domain</button><button>TCP/UDP port</button></div></div>
+                <div class="field"><label for="d-dom">Domain</label><input class="input mono" id="d-dom" value="invoices.apps.acme.dev"><span class="ok">✓ Covered by wildcard certificate *.apps.acme.dev</span></div>
+                <div class="field"><label>Protection</label><span class="toggle"><i></i>Require console sign-in (SSO gate)</span></div>
+                <div class="field full"><label>Who may connect to this app inside the cluster?</label><div class="toolbar"><span class="tag">storefront/api</span><span class="tag">storefront/billing-worker</span><button class="btn sm"><svg><use href="#i-plus"/></svg>Add source</button></div><span class="hint">Everything else is denied. Ingress traffic for the public domain is allowed automatically.</span></div>
+                <div class="field full"><label>Outbound access</label><div class="seg" data-seg><button>None</button><button aria-pressed="true">HTTPS to internet</button><button>Unrestricted</button></div></div>
+              </div></div>
+              <div class="acts" style="justify-content:space-between"><button class="btn" data-next="run">Back</button><button class="btn pri" data-next="stor">Continue</button></div>
+            </div>
+
+            <div data-steppanel="stor" hidden style="display:grid;gap:16px">
+              <div class="card" style="overflow:hidden"><div class="ch-h"><h3>Volumes</h3><button class="btn sm"><svg><use href="#i-plus"/></svg>Add volume</button></div>
+                <table class="t"><thead><tr><th>Mount path</th><th>Size</th><th>Storage class</th><th>Backup</th></tr></thead><tbody>
+                  <tr><td class="mono">/app/cache</td><td class="num" style="text-align:left">5 GiB</td><td><select class="input" aria-label="Storage class"><option>local-nvme — fastest, pinned to one node</option><option>hcloud-volume — movable between cloud nodes</option></select></td><td><span class="toggle"><i></i>Off</span></td></tr>
+                </tbody></table>
+              </div>
+              <p class="dim" style="margin:0;font-size:13px">Apps with a <code>local-nvme</code> volume stay on the node that holds the data. Choose <code>hcloud-volume</code> if the app should survive a node replacement.</p>
+              <div class="acts" style="justify-content:space-between"><button class="btn" data-next="netw">Back</button><button class="btn pri" data-next="rev">Review</button></div>
+            </div>
+
+            <div data-steppanel="rev" hidden style="display:grid;gap:16px">
+              <div class="g2">
+                <div class="card"><div class="ch-h"><h3>App resource</h3><button class="btn sm">Copy YAML</button></div><div class="bd">
+<div class="codebox"><span class="k">apiVersion:</span> werft.dev/v1alpha1
+<span class="k">kind:</span> App
+<span class="k">metadata:</span> { <span class="k">name:</span> invoice-renderer, <span class="k">namespace:</span> storefront }
+<span class="k">spec:</span>
+  <span class="k">image:</span> <span class="s">ghcr.io/acme/invoice-renderer:0.3.0</span>
+  <span class="k">pullSecret:</span> ghcr-acme
+  <span class="k">replicas:</span> 2
+  <span class="k">size:</span> medium            <span class="c"># 0.5 vCPU / 512Mi</span>
+  <span class="k">ports:</span> [{ <span class="k">container:</span> 3000, <span class="k">public:</span> invoices.apps.acme.dev }]
+  <span class="k">allowFrom:</span> [api, billing-worker]
+  <span class="k">egress:</span> https
+  <span class="k">volumes:</span> [{ <span class="k">path:</span> /app/cache, <span class="k">size:</span> 5Gi, <span class="k">class:</span> local-nvme }]
+  <span class="k">healthCheck:</span> { <span class="k">http:</span> /health, <span class="k">port:</span> 3000 }</div></div></div>
+                <div class="card"><h3>Werft will create</h3>
+                  <div class="list">
+                    <div class="li"><span class="tag">Deployment</span><span class="dim">2 replicas, rolling update</span></div>
+                    <div class="li"><span class="tag">Service</span><span class="dim">ClusterIP :3000</span></div>
+                    <div class="li"><span class="tag">HTTPRoute</span><span class="dim">invoices.apps.acme.dev</span></div>
+                    <div class="li"><span class="tag">CiliumNetworkPolicy</span><span class="dim">2 sources, egress 443</span></div>
+                    <div class="li"><span class="tag">PersistentVolumeClaim</span><span class="dim">5 GiB local-nvme</span></div>
+                    <div class="li"><span class="tag">Secret</span><span class="dim">pull credential reference</span></div>
+                  </div>
+                </div>
+              </div>
+              <div class="acts" style="justify-content:space-between"><button class="btn" data-next="stor">Back</button><button class="btn pri"><svg><use href="#i-rocket"/></svg>Deploy invoice-renderer</button></div>
+            </div>
+          </section>
+
+          <!-- MONITORING -->
+          <section class="view" data-view="monitoring" hidden>
+            <div class="ph"><div><h2>Monitoring</h2><p class="sub">Alerts, resource usage and notification rules · metrics kept 30 days, logs 14 days</p></div><div class="acts"><button class="btn">Explore metrics</button><button class="btn">Explore logs</button></div></div>
+            <div class="g2">
+              <div class="card"><div class="ch-h"><h3>Alerts</h3><div class="seg" data-seg><button aria-pressed="true">Firing 2</button><button>Resolved</button><button>Silenced</button></div></div>
+                <div class="list">
+                  <div class="li"><span class="ico bad"><svg><use href="#i-alert"/></svg></span><div><b>PodCrashLooping</b> · storefront/billing-worker<p>Restarted 7 times in 30 min · last exit: <code>dial tcp api:8080: i/o timeout</code></p><div class="acts" style="margin-top:6px"><button class="btn sm" data-go="network">Dropped traffic</button><button class="btn sm">Logs</button><button class="btn sm">Silence 1 h</button></div></div><span class="pill bad nodot">critical</span></div>
+                  <div class="li"><span class="ico warn"><svg><use href="#i-disk"/></svg></span><div><b>VolumeFillingUp</b> · storefront/postgres-main-data<p>87% used, +1.1 GiB/day · predicted full on 10 Oct</p><div class="acts" style="margin-top:6px"><button class="btn sm">Expand to 80 GiB</button><button class="btn sm">Silence 1 h</button></div></div><span class="pill warn nodot">warning</span></div>
+                </div>
+              </div>
+              <div class="card"><h3>Top memory consumers</h3><div class="bd bars">
+                <div class="bar"><span>postgres-main</span><span class="tr"><i style="width:100%"></i></span><span class="num">3.9 Gi</span></div>
+                <div class="bar"><span>api</span><span class="tr"><i style="width:21%"></i></span><span class="num">842 Mi</span></div>
+                <div class="bar"><span>web-frontend</span><span class="tr"><i style="width:15%"></i></span><span class="num">604 Mi</span></div>
+                <div class="bar"><span>plausible</span><span class="tr"><i style="width:9.5%"></i></span><span class="num">380 Mi</span></div>
+                <div class="bar"><span>redis</span><span class="tr"><i style="width:5.3%"></i></span><span class="num">212 Mi</span></div>
+                <div class="bar"><span class="dim">werft platform</span><span class="tr"><i style="width:45%;background:var(--faint)"></i></span><span class="num">1.76 Gi</span></div>
+              </div></div>
+            </div>
+            <div class="card" style="overflow:hidden"><div class="ch-h"><h3>Alert rules</h3><button class="btn sm"><svg><use href="#i-plus"/></svg>New rule</button></div>
+              <table class="t"><thead><tr><th>Rule</th><th>Condition</th><th>Applies to</th><th>Severity</th><th>Notify</th><th></th></tr></thead><tbody>
+                <tr><td class="nm">PodCrashLooping</td><td class="mono">restarts &gt; 3 in 15m</td><td>All projects</td><td><span class="pill bad nodot">critical</span></td><td>Slack #ops-alerts · ntfy</td><td><span class="toggle on"><i></i></span></td></tr>
+                <tr><td class="nm">VolumeFillingUp</td><td class="mono">used &gt; 85% or full &lt; 7d</td><td>All volumes</td><td><span class="pill warn nodot">warning</span></td><td>Email ops@acme.dev</td><td><span class="toggle on"><i></i></span></td></tr>
+                <tr><td class="nm">NodeMemoryPressure</td><td class="mono">available &lt; 10% for 10m</td><td>All nodes</td><td><span class="pill bad nodot">critical</span></td><td>Slack · Email</td><td><span class="toggle on"><i></i></span></td></tr>
+                <tr><td class="nm">CertificateExpiring</td><td class="mono">expires in &lt; 14d</td><td>All domains</td><td><span class="pill warn nodot">warning</span></td><td>Email ops@acme.dev</td><td><span class="toggle on"><i></i></span></td></tr>
+                <tr><td class="nm">HighLatency</td><td class="mono">p95 &gt; 800ms for 5m</td><td>storefront/api</td><td><span class="pill warn nodot">warning</span></td><td>Slack #storefront</td><td><span class="toggle"><i></i></span></td></tr>
+              </tbody></table>
+            </div>
+          </section>
+
+          <!-- CLUSTERS -->
+          <section class="view" data-view="clusters" hidden>
+            <div class="ph"><div><h2>Clusters &amp; nodes</h2><p class="sub">The cluster Werft runs in manages the others through an outbound agent</p></div></div>
+            <div class="clusters">
+              <button class="ccard" aria-pressed="true"><span class="row"><b>fsn1-prod</b><span class="pill ok">Healthy</span></span><span class="m">Management cluster · FSN1 · 3 nodes · k3s v1.37.1</span><span class="m">1 dedicated + 2 cloud · private network 10.0.0.0/16</span></button>
+              <button class="ccard" aria-pressed="false"><span class="row"><b>hel1-staging</b><span class="pill ok">Agent connected</span></span><span class="m">Workload cluster · HEL1 · 1 node · k3s v1.37.1</span><span class="m">Tunnel latency 24 ms · last seen 3 s ago</span></button>
+              <button class="ccard new"><svg style="width:18px;height:18px"><use href="#i-plus"/></svg>Create cluster on Hetzner Cloud</button>
+            </div>
+            <div class="split">
+              <div class="card" style="overflow:hidden"><div class="ch-h"><h3>Nodes in fsn1-prod</h3><span class="dim" style="font-weight:400;font-size:12px">Control plane: 1 of 3 recommended for HA</span></div>
+                <table class="t"><thead><tr><th>Node</th><th>Role</th><th>Server</th><th>Private IP</th><th class="num">CPU</th><th class="num">Mem</th><th>Status</th></tr></thead><tbody>
+                  <tr><td><span class="nm">fsn1-node-1</span><span class="sub">203.0.113.24</span></td><td><span class="tag">control-plane</span> <span class="tag">etcd</span></td><td>Dedicated AX42<span class="sub">16 threads · 64 GB · 2×512 GB</span></td><td class="mono">10.0.0.2</td><td class="num">41%</td><td class="num">38%</td><td><span class="pill ok">Ready</span></td></tr>
+                  <tr><td><span class="nm">fsn1-node-2</span><span class="sub">203.0.113.71</span></td><td><span class="tag">worker</span></td><td>Cloud CPX31<span class="sub">4 vCPU · 8 GB · 160 GB</span></td><td class="mono">10.0.1.3</td><td class="num">29%</td><td class="num">61%</td><td><span class="pill ok">Ready</span></td></tr>
+                  <tr><td><span class="nm">fsn1-node-3</span><span class="sub">203.0.113.88</span></td><td><span class="tag">worker</span></td><td>Cloud CPX31<span class="sub">4 vCPU · 8 GB · 160 GB</span></td><td class="mono">10.0.1.4</td><td class="num">33%</td><td class="num">47%</td><td><span class="pill ok">Ready</span></td></tr>
+                </tbody></table>
+                <div class="bd" style="border-top:1px solid var(--line-2);display:flex;gap:8px;flex-wrap:wrap"><button class="btn sm">Drain node</button><button class="btn sm">Upgrade k3s → v1.37.2</button><button class="btn sm">Etcd snapshot now</button></div>
+              </div>
+              <div class="drawer">
+                <div class="hd"><b>Add a node</b><div class="seg" data-seg data-addnode><button aria-pressed="true" data-an="cloud">Hetzner Cloud</button><button aria-pressed="false" data-an="byo">Existing server</button></div></div>
+                <div class="bd" data-anpanel="cloud">
+                  <div class="field"><label>Location</label><div class="seg" data-seg><button aria-pressed="true">FSN1</button><button>NBG1</button><button>HEL1</button></div></div>
+                  <div class="field"><label>Server type <span class="dim" style="font-weight:400">· from the Cloud API</span></label>
+                    <div class="types" data-radio>
+                      <button class="type" aria-pressed="false"><span class="r"></span><span><b>CPX21</b> <span class="dim">3 vCPU · 4 GB</span></span><span class="dim">shared</span></button>
+                      <button class="type" aria-pressed="true"><span class="r"></span><span><b>CPX31</b> <span class="dim">4 vCPU · 8 GB</span></span><span class="dim">shared</span></button>
+                      <button class="type" aria-pressed="false"><span class="r"></span><span><b>CCX23</b> <span class="dim">4 vCPU · 16 GB</span></span><span class="dim">dedicated</span></button>
+                    </div>
+                  </div>
+                  <div class="fields"><div class="field"><label for="n-role">Role</label><select class="input" id="n-role"><option>Worker</option><option>Control plane</option></select></div><div class="field"><label for="n-count">Count</label><input class="input" id="n-count" value="1"></div></div>
+                  <div class="field"><label>Network</label><span class="dim" style="font-size:12.5px">Joins <code>werft-net</code> (10.0.0.0/16) · Cloud Firewall <code>werft-nodes</code> attached</span></div>
+                  <button class="btn pri" style="justify-content:center">Create CPX31 in FSN1</button>
+                </div>
+                <div class="bd" data-anpanel="byo" hidden>
+                  <p style="margin:0;font-size:13px;color:var(--ink-2)">Run this on a fresh Ubuntu server — a dedicated machine from Robot or any VPS. It installs k3s in agent mode and joins over WireGuard.</p>
+<div class="codebox">curl -fsSL https://ops.acme.dev/join.sh \
+  | sudo bash -s -- \
+  --token wrft_join_••••••3kP \
+  --role worker</div>
+                  <div class="toolbar"><button class="btn sm">Copy command</button><span class="dim" style="font-size:12px">Token valid 60 min · one node</span></div>
+                  <div class="banner info"><svg><use href="#i-server"/></svg><span>Waiting for a node to connect…</span></div>
+                </div>
+              </div>
+            </div>
+          </section>
+
+          <!-- NETWORK -->
+          <section class="view" data-view="network" hidden>
+            <div class="ph"><div><h2>Network</h2><p class="sub">Traffic rules between apps, the server firewall, and public domains</p></div></div>
+            <div class="tabs" role="tablist" data-tabs="net"><button role="tab" aria-selected="true" data-tab="pol">Traffic rules<span class="n">6</span></button><button role="tab" aria-selected="false" data-tab="fw">Server firewall<span class="n">5</span></button><button role="tab" aria-selected="false" data-tab="dom">Domains &amp; TLS<span class="n">7</span></button></div>
+
+            <div data-tabpanel="net:pol" style="display:grid;gap:16px">
+              <div class="banner warn"><svg><use href="#i-alert"/></svg><span><b>312 connections dropped in the last hour:</b> <code>storefront/billing-worker</code> → <code>storefront/api</code> on TCP 8080. No rule allows it.</span><button class="btn pri sm">Create allow rule</button></div>
+              <div class="toolbar"><span class="toggle on"><i></i>Isolate projects from each other by default</span><span class="toggle on"><i></i>Deny new apps until a rule allows them</span><button class="btn sm" style="margin-left:auto"><svg><use href="#i-plus"/></svg>New rule</button></div>
+              <div class="card" style="overflow:hidden">
+                <table class="t"><thead><tr><th>Rule</th><th>From</th><th>To</th><th>Ports</th><th class="num">Allowed, 1 h</th><th class="num">Dropped</th></tr></thead><tbody>
+                  <tr><td class="nm">public-web</td><td><span class="tag">internet via ingress</span></td><td><span class="tag">storefront/web-frontend</span></td><td class="mono">443 → 3000</td><td class="num">96.4k</td><td class="num">0</td></tr>
+                  <tr><td class="nm">public-api</td><td><span class="tag">internet via ingress</span></td><td><span class="tag">storefront/api</span></td><td class="mono">443 → 8080</td><td class="num">54.0k</td><td class="num">0</td></tr>
+                  <tr><td class="nm">web-to-api</td><td><span class="tag">storefront/web-frontend</span></td><td><span class="tag">storefront/api</span></td><td class="mono">TCP 8080</td><td class="num">41.2k</td><td class="num">0</td></tr>
+                  <tr><td class="nm">api-to-db</td><td><span class="tag">storefront/api</span></td><td><span class="tag">storefront/postgres-main</span> <span class="tag">storefront/redis</span></td><td class="mono">TCP 5432, 6379</td><td class="num">18.9k</td><td class="num">0</td></tr>
+                  <tr><td class="nm">internal-egress</td><td><span class="tag">internal/*</span></td><td><span class="tag">internet</span></td><td class="mono">TCP 443</td><td class="num">2.3k</td><td class="num" style="color:var(--warn)">14</td></tr>
+                  <tr><td class="nm">monitoring-scrape</td><td><span class="tag">werft-system/vmagent</span></td><td><span class="tag">all projects</span></td><td class="mono">metrics ports</td><td class="num">8.6k</td><td class="num">0</td></tr>
+                </tbody></table>
+              </div>
+            </div>
+
+            <div data-tabpanel="net:fw" hidden style="display:grid;gap:16px">
+              <div class="toolbar"><span class="toggle on"><i></i>Mirror to Hetzner Cloud Firewall for cloud nodes</span><span class="pill ok">Synced 2 min ago</span><button class="btn sm" style="margin-left:auto"><svg><use href="#i-plus"/></svg>Add rule</button></div>
+              <div class="card" style="overflow:hidden">
+                <table class="t"><thead><tr><th>Port</th><th>Protocol</th><th>Source</th><th>Purpose</th><th>Applies to</th><th></th></tr></thead><tbody>
+                  <tr><td class="mono">22</td><td>TCP</td><td class="mono">198.51.100.0/24</td><td>SSH from office VPN</td><td>All nodes</td><td><span class="pill info nodot">your IP is covered</span></td></tr>
+                  <tr><td class="mono">80, 443</td><td>TCP</td><td class="mono">any</td><td>Web traffic to ingress</td><td>All nodes</td><td><span class="pill mute nodot">required</span></td></tr>
+                  <tr><td class="mono">6443</td><td>TCP</td><td class="mono">10.0.0.0/16</td><td>Kubernetes API, private only</td><td>Control plane</td><td><span class="pill mute nodot">required</span></td></tr>
+                  <tr><td class="mono">51871</td><td>UDP</td><td class="mono">node IPs</td><td>WireGuard between nodes</td><td>All nodes</td><td><span class="pill mute nodot">managed</span></td></tr>
+                  <tr><td class="mono">—</td><td>ICMP</td><td class="mono">any</td><td>Ping and path MTU</td><td>All nodes</td><td></td></tr>
+                </tbody></table>
+              </div>
+              <p class="dim" style="margin:0;font-size:13px">Werft refuses to save a firewall change that would block SSH or HTTPS from the IP you are using right now, and rolls back automatically if the console becomes unreachable within 60 seconds.</p>
+            </div>
+
+            <div data-tabpanel="net:dom" hidden style="display:grid;gap:16px">
+              <div class="card" style="overflow:hidden">
+                <table class="t"><thead><tr><th>Hostname</th><th>Routes to</th><th>Certificate</th><th>Expires</th><th>Options</th></tr></thead><tbody>
+                  <tr><td class="nm">ops.acme.dev</td><td>Werft console</td><td><span class="pill ok">Valid</span></td><td class="num" style="text-align:left">18 Dec 2026</td><td class="dim">HSTS</td></tr>
+                  <tr><td class="nm">*.apps.acme.dev</td><td class="dim">wildcard</td><td><span class="pill ok">Valid</span> <span class="tag">DNS-01</span></td><td class="num" style="text-align:left">29 Nov 2026</td><td class="dim">—</td></tr>
+                  <tr><td class="nm">web.acme.dev</td><td>storefront/web-frontend</td><td><span class="pill ok">Valid</span></td><td class="num" style="text-align:left">2 Jan 2027</td><td class="dim">www → apex redirect</td></tr>
+                  <tr><td class="nm">api.acme.dev</td><td>storefront/api</td><td><span class="pill ok">Valid</span></td><td class="num" style="text-align:left">2 Jan 2027</td><td class="dim">rate limit 50 r/s</td></tr>
+                  <tr><td class="nm">stats.acme.dev</td><td>internal/plausible</td><td><span class="pill ok">Valid</span></td><td class="num" style="text-align:left">14 Dec 2026</td><td class="dim">—</td></tr>
+                  <tr><td class="nm">status.acme.dev</td><td>internal/uptime-kuma</td><td><span class="pill ok">Valid</span></td><td class="num" style="text-align:left">20 Dec 2026</td><td class="dim">—</td></tr>
+                  <tr><td class="nm">flows.acme.dev</td><td>internal/n8n</td><td><span class="pill info">Issuing</span></td><td class="dim">—</td><td class="dim">SSO gate</td></tr>
+                </tbody></table>
+              </div>
+            </div>
+          </section>
+
+          <!-- ACCESS -->
+          <section class="view" data-view="access" hidden>
+            <div class="ph"><div><h2>Access</h2><p class="sub">Sign-in: password + passkey or TOTP · Google Workspace SSO for acme.dev</p></div><div class="acts"><button class="btn"><svg><use href="#i-key"/></svg>New API token</button><button class="btn pri"><svg><use href="#i-plus"/></svg>Invite member</button></div></div>
+            <div class="tabs" role="tablist" data-tabs="acc"><button role="tab" aria-selected="true" data-tab="mem">Members<span class="n">5</span></button><button role="tab" aria-selected="false" data-tab="roles">Roles</button><button role="tab" aria-selected="false" data-tab="audit">Audit log</button></div>
+
+            <div data-tabpanel="acc:mem">
+              <div class="card" style="overflow:hidden">
+                <table class="t"><thead><tr><th>Member</th><th>Role</th><th>Projects</th><th>Second factor</th><th>Last active</th><th></th></tr></thead><tbody>
+                  <tr><td><span class="nm">Mara Lindqvist</span><span class="sub">mara@acme.dev</span></td><td>Owner</td><td>All</td><td><span class="pill ok">Passkey</span></td><td class="dim">now</td><td><button class="btn sm">Edit</button></td></tr>
+                  <tr><td><span class="nm">Jonas Petrov</span><span class="sub">jonas@acme.dev · SSO</span></td><td>Admin</td><td>All</td><td><span class="pill ok">via Google</span></td><td class="dim">5 h ago</td><td><button class="btn sm">Edit</button></td></tr>
+                  <tr><td><span class="nm">Aiko Tanaka</span><span class="sub">aiko@acme.dev · SSO</span></td><td>Developer</td><td><span class="tag">storefront</span> <span class="tag">staging</span></td><td><span class="pill ok">via Google</span></td><td class="dim">1 d ago</td><td><button class="btn sm">Edit</button></td></tr>
+                  <tr><td><span class="nm">Sam Okafor</span><span class="sub">sam@contractor.example</span></td><td>Viewer</td><td><span class="tag">internal</span></td><td><span class="pill warn">Not set up</span></td><td class="dim">9 d ago</td><td><button class="btn sm">Edit</button></td></tr>
+                  <tr><td><span class="nm">ci-bot</span><span class="sub">API token · deploy only</span></td><td>Developer</td><td><span class="tag">storefront</span></td><td><span class="pill mute nodot">n/a</span></td><td class="dim">2 h ago</td><td><span class="dim" style="font-size:12px">expires 30 Nov</span></td></tr>
+                </tbody></table>
+              </div>
+            </div>
+
+            <div data-tabpanel="acc:roles" hidden>
+              <div class="card" style="overflow:hidden">
+                <table class="t matrix"><thead><tr><th>Permission</th><th style="text-align:center">Owner</th><th style="text-align:center">Admin</th><th style="text-align:center">Developer</th><th style="text-align:center">Viewer</th></tr></thead><tbody>
+                  <tr><td>View apps, metrics and logs</td><td class="c yes">✓</td><td class="c yes">✓</td><td class="c yes">✓</td><td class="c yes">✓</td></tr>
+                  <tr><td>Deploy, scale, restart apps</td><td class="c yes">✓</td><td class="c yes">✓</td><td class="c yes">✓</td><td class="c no">—</td></tr>
+                  <tr><td>Open a shell in a container</td><td class="c yes">✓</td><td class="c yes">✓</td><td class="c part">own projects, recorded</td><td class="c no">—</td></tr>
+                  <tr><td>Read and change secrets</td><td class="c yes">✓</td><td class="c yes">✓</td><td class="c part">write-only</td><td class="c no">—</td></tr>
+                  <tr><td>Edit traffic rules</td><td class="c yes">✓</td><td class="c yes">✓</td><td class="c part">within project</td><td class="c no">—</td></tr>
+                  <tr><td>Server firewall, domains, TLS</td><td class="c yes">✓</td><td class="c yes">✓</td><td class="c no">—</td><td class="c no">—</td></tr>
+                  <tr><td>Add, drain, remove nodes and clusters</td><td class="c yes">✓</td><td class="c yes">✓</td><td class="c no">—</td><td class="c no">—</td></tr>
+                  <tr><td>Download kubeconfig</td><td class="c yes">✓</td><td class="c yes">✓</td><td class="c part">namespace-scoped, 8 h</td><td class="c part">read-only, 8 h</td></tr>
+                  <tr><td>Manage members, SSO and Hetzner API tokens</td><td class="c yes">✓</td><td class="c no">—</td><td class="c no">—</td><td class="c no">—</td></tr>
+                </tbody></table>
+              </div>
+            </div>
+
+            <div data-tabpanel="acc:audit" hidden>
+              <div class="card" style="overflow:hidden">
+                <table class="t"><thead><tr><th>Time (UTC)</th><th>Who</th><th>Action</th><th>Target</th><th>From</th></tr></thead><tbody>
+                  <tr><td class="mono">09:12:44</td><td>Jonas Petrov</td><td>build.deploy</td><td class="mono">storefront/api #117 → rev 42</td><td class="mono">GitHub webhook</td></tr>
+                  <tr><td class="mono">04:03:10</td><td>Jonas Petrov</td><td>networkrule.update</td><td class="mono">internal/internal-egress</td><td class="mono">198.51.100.17</td></tr>
+                  <tr><td class="mono">03 Oct 16:40</td><td>Aiko Tanaka</td><td>pod.exec</td><td class="mono">storefront/api-7c9d8-x2kq</td><td class="mono">198.51.100.22</td></tr>
+                  <tr><td class="mono">03 Oct 11:02</td><td>Mara Lindqvist</td><td>node.create</td><td class="mono">fsn1-node-3 (CPX31)</td><td class="mono">198.51.100.17</td></tr>
+                  <tr><td class="mono">02 Oct 08:15</td><td>Mara Lindqvist</td><td>member.invite</td><td class="mono">sam@contractor.example → Viewer</td><td class="mono">198.51.100.17</td></tr>
+                </tbody></table>
+              </div>
+            </div>
+          </section>
+        </div>
+      </div>
+      </div>
+    </div>
+    </div>
+  </section>
+
+  <!-- =================================================== PLAN -->
+  <section id="page-plan" data-pagepanel="plan" hidden>
+    <div class="doc">
+      <nav class="toc" aria-label="Plan contents">
+        <span class="k">Contents</span>
+        <a href="#goals">Goals &amp; principles</a>
+        <a href="#arch">Architecture</a>
+        <a href="#stack">Technology choices</a>
+        <a href="#installer">The install script</a>
+        <a href="#model">Resource model</a>
+        <a href="#security">Security model</a>
+        <a href="#scale">Nodes &amp; clusters</a>
+        <a href="#roadmap">Roadmap</a>
+        <a href="#repo">Repository &amp; testing</a>
+        <a href="#risks">Risks &amp; decisions</a>
+      </nav>
+
+      <div class="prose">
+        <section id="goals">
+          <p class="eyebrow">Goals &amp; principles</p>
+          <h2>A Hetzner-aware control panel that makes Kubernetes feel like one server</h2>
+          <p>The product has one job: take a freshly rented Hetzner machine to “my containers are running behind HTTPS and I can see what they're doing” in under ten minutes, then grow to multiple nodes and clusters without a re-platform. Five principles shape every decision below.</p>
+          <div class="principles">
+            <div><b>One command, zero follow-up</b><span>The installer is idempotent and fully flag-driven. Running it again repairs or upgrades. Cloud-init can call it unattended.</span></div>
+            <div><b>Kubernetes is the database</b><span>Every app, rule and domain is a custom resource. The UI writes those resources; controllers turn them into native objects. GitOps works for free.</span></div>
+            <div><b>Lean on a 4 GB box</b><span>Platform overhead stays around 2 GB of RAM, so a small cloud server still has room for real workloads.</span></div>
+            <div><b>Secure by default</b><span>Projects are isolated, the Kubernetes API is private, secrets are encrypted, every shell session and change is audited.</span></div>
+            <div class="full" style="grid-column:1/-1"><b>Never a dead end</b><span>Power users get YAML export, a scoped kubeconfig and <code>kubectl</code>. Werft-managed objects are labelled, so hand-made resources live alongside without conflict.</span></div>
+          </div>
+          <h3>Build vs. adopt</h3>
+          <p>Check these before committing: <b>Rancher</b> manages many clusters but is heavy and not Hetzner-aware; <b>Portainer</b> has a friendly UI with thinner network administration; <b>Coolify</b> and <b>Dokploy</b> are Docker/Swarm-based PaaS rather than Kubernetes; <b>hetzner-k3s</b> provisions clusters from a CLI with no console. Werft's niche is the combination: Hetzner-native provisioning and firewalls, Kubernetes underneath, a one-script install and an opinionated UI on top.</p>
+        </section>
+
+        <section id="arch">
+          <p class="eyebrow">Architecture</p>
+          <h2>What runs on the server after the script finishes</h2>
+          <p>Single-node by default. Everything below Werft is stock, upstream software installed at pinned versions; Werft itself is one Go binary deployed as two replicas.</p>
+          <div class="arch">
+            <div class="stack">
+              <div class="lay user"><span class="ln">Clients</span><span class="tag">browser</span><span class="tag">werftctl CLI</span><span class="tag">CI with API token</span><span class="tag">kubectl (scoped kubeconfig)</span></div>
+              <div class="lay"><span class="ln">Edge · 80/443</span><span class="tag">Traefik via Gateway API</span><span class="tag">cert-manager + Let's Encrypt</span></div>
+              <div class="lay werft"><span class="ln">Werft control plane · namespace werft-system</span><span class="tag">REST + WebSocket API</span><span class="tag">reconcilers for App, Project, Rule…</span><span class="tag">embedded React UI</span><span class="tag">SQLite: users, sessions, audit</span><span class="tag">Hetzner API client</span></div>
+              <div class="lay"><span class="ln">Platform services</span><span class="tag">VictoriaMetrics + vmagent</span><span class="tag">VictoriaLogs + Vector</span><span class="tag">vmalert → Alertmanager</span><span class="tag">Hubble relay</span><span class="tag">Velero</span><span class="tag">BuildKit builders</span><span class="tag">zot registry</span><span class="tag">system-upgrade-controller</span></div>
+              <div class="lay"><span class="ln">Kubernetes</span><span class="tag">k3s server · embedded etcd</span><span class="tag">Cilium eBPF dataplane</span><span class="tag">local-path / hcloud CSI</span></div>
+              <div class="lay host"><span class="ln">Host</span><span class="tag">Ubuntu 24.04 / 26.04 LTS</span><span class="tag">nftables baseline</span><span class="tag">chrony</span><span class="tag">unattended-upgrades</span></div>
+              <div class="lay hz"><span class="ln">Hetzner</span><span class="tag">dedicated or cloud server</span><span class="tag">Cloud API: servers, networks, firewalls, volumes, LBs</span><span class="tag">Object Storage (backups)</span><span class="tag">DNS API</span></div>
+            </div>
+            <div class="apps"><span class="ln">Your workloads</span><span style="font-size:12.5px;color:var(--ink-2)">One namespace per project, each with quotas, Pod Security “baseline”, and default-deny traffic.</span><span class="tag">storefront</span><span class="tag">internal</span><span class="tag">staging</span></div>
+          </div>
+          <h3>How a change flows</h3>
+          <ol>
+            <li>The UI sends <code>PUT /api/v1/projects/storefront/apps/api</code>. The API checks the user's role, then writes the <code>App</code> custom resource <b>while impersonating that user</b>, so Kubernetes RBAC is the final gate.</li>
+            <li>The App reconciler renders a Deployment, Service, HTTPRoute, CiliumNetworkPolicy and PVCs, applies them with server-side apply, and writes progress into <code>App.status</code>.</li>
+            <li>The UI is subscribed over WebSocket to a shared informer cache; rollout progress, pod events and log lines stream back without polling.</li>
+          </ol>
+          <h3>Multiple clusters</h3>
+          <pre class="mermaid">flowchart LR
+  B[Browser] -->|HTTPS| W
+  subgraph M["fsn1-prod · management cluster"]
+    W[Werft API + controllers]
+  end
+  subgraph S["hel1-staging · workload cluster"]
+    A[werft-agent]
+  end
+  A -->|outbound WebSocket, mTLS| W
+  W -->|hcloud API| H[(Hetzner Cloud)]
+  W -->|S3| O[(Object Storage)]</pre>
+          <p>Remote clusters run a small agent that dials <em>out</em> to the console and proxies Kubernetes API calls through that tunnel. Remote clusters therefore need no public Kubernetes API, and a cluster behind NAT works the same as one on a public IP.</p>
+        </section>
+
+        <section id="stack">
+          <p class="eyebrow">Technology choices</p>
+          <h2>Pick boring, upstream parts; spend the effort on the console</h2>
+          <div class="tw"><table class="t"><thead><tr><th>Layer</th><th>Choice</th><th>Why</th><th>Considered</th></tr></thead><tbody>
+            <tr><td>Kubernetes</td><td>k3s</td><td>Single binary, ~600 MB RAM, embedded etcd for later HA, shell-friendly install, strong arm64 support (Hetzner CAX).</td><td>kubeadm (more ops), RKE2 (heavier), Talos (needs OS reinstall — conflicts with “Ubuntu + script”)</td></tr>
+            <tr><td>Networking</td><td>Cilium</td><td>eBPF network policies incl. host firewall; Hubble flow data powers “dropped traffic” in the UI; WireGuard node encryption across Hetzner's public network.</td><td>flannel + k3s policy controller (no flow visibility), Calico</td></tr>
+            <tr><td>Ingress</td><td>Traefik, Gateway API</td><td>Ships with k3s; Gateway API is the forward path now that ingress-nginx is retired.</td><td>ingress-nginx (retired), Envoy Gateway</td></tr>
+            <tr><td>TLS</td><td>cert-manager</td><td>HTTP-01 out of the box; DNS-01 through a Hetzner DNS webhook for wildcard certificates.</td><td>Traefik's built-in ACME (harder to observe)</td></tr>
+            <tr><td>Storage</td><td>local-path → hcloud CSI</td><td>Local NVMe on a single node; Hetzner Cloud Volumes once cloud nodes exist. Longhorn as an opt-in for replicated storage on dedicated clusters.</td><td>Rook/Ceph (too heavy here)</td></tr>
+            <tr><td>Metrics</td><td>VictoriaMetrics</td><td>Prometheus-compatible, a fraction of the memory of kube-prometheus-stack. PromQL keeps dashboards portable.</td><td>Prometheus + Grafana stack</td></tr>
+            <tr><td>Logs</td><td>VictoriaLogs + Vector</td><td>Low footprint, fast substring search, LogsQL queried directly by the console.</td><td>Loki + Promtail</td></tr>
+            <tr><td>Builds</td><td>BuildKit + Railpack + zot</td><td>Rootless BuildKit runs each build as a Job; Dockerfile when present, Railpack otherwise. Images go to an in-cluster zot registry with retention and garbage collection.</td><td>Kaniko (archived upstream), Cloud Native Buildpacks (large builder images)</td></tr>
+            <tr><td>Backups</td><td>etcd snapshots + Velero</td><td>Cluster state and volumes (via Kopia) to Hetzner Object Storage, which is S3-compatible.</td><td>Custom scripts</td></tr>
+            <tr><td>Backend</td><td>Go</td><td>client-go and controller-runtime are first-class; static binary; informers give live state cheaply.</td><td>TypeScript/Node (weaker k8s libraries), Rust</td></tr>
+            <tr><td>Frontend</td><td>React + TypeScript</td><td>Vite, TanStack Query/Router, xterm.js for shells, uPlot for charts. Built assets embedded in the Go binary.</td><td>SvelteKit, Vue</td></tr>
+            <tr><td>Platform DB</td><td>SQLite (WAL)</td><td>Only users, sessions, tokens and audit live outside Kubernetes. Litestream streams it to Object Storage.</td><td>Postgres via CloudNativePG (later, for HA)</td></tr>
+            <tr><td>Identity</td><td>Built-in + OIDC</td><td>argon2id passwords, passkeys/TOTP, OIDC for Google, GitHub, Entra ID, Keycloak.</td><td>Embedded Dex (keep as fallback)</td></tr>
+          </tbody></table></div>
+          <h3>Memory budget on a single node (to validate in Phase 0)</h3>
+          <div class="tw"><table class="t" style="min-width:420px"><thead><tr><th>Component</th><th class="num">Approx. RAM</th></tr></thead><tbody>
+            <tr><td>k3s server incl. etcd</td><td class="num">600 MB</td></tr>
+            <tr><td>Cilium agent + operator + Hubble relay</td><td class="num">300 MB</td></tr>
+            <tr><td>Traefik, cert-manager</td><td class="num">180 MB</td></tr>
+            <tr><td>VictoriaMetrics, vmagent, kube-state-metrics, node-exporter</td><td class="num">350 MB</td></tr>
+            <tr><td>VictoriaLogs, Vector</td><td class="num">200 MB</td></tr>
+            <tr><td>Werft (2 replicas)</td><td class="num">150 MB</td></tr>
+            <tr><td>zot registry</td><td class="num">60 MB</td></tr>
+            <tr><td><b>Total platform overhead</b></td><td class="num"><b>≈ 1.9 GB</b></td></tr>
+            <tr><td>Each running build (on demand)</td><td class="num">1–2 GB</td></tr>
+          </tbody></table></div>
+        </section>
+
+        <section id="installer">
+          <p class="eyebrow">The install script</p>
+          <h2>One idempotent bash script, safe to re-run, safe to automate</h2>
+          <p>The script is the product's front door, so it gets the same care as the UI: <code>set -Eeuo pipefail</code>, shellcheck-clean, every step logged to <code>/var/log/werft/install.log</code>, and every download pinned by version and SHA-256.</p>
+<div class="codebox"><span class="c"># interactive-free install</span>
+curl -fsSL https://get.werft.sh | sudo bash -s -- \
+  --domain ops.acme.dev --email ops@acme.dev --yes
+
+<span class="c"># fully headless: no setup wizard, owner account pre-created</span>
+curl -fsSL https://get.werft.sh | sudo bash -s -- --config /root/werft.yaml --yes
+
+<span class="c"># cloud-init (Hetzner "user data" when creating the server)</span>
+<span class="k">#cloud-config</span>
+<span class="k">write_files:</span>
+  - <span class="k">path:</span> /root/werft.yaml
+    <span class="k">permissions:</span> <span class="s">'0600'</span>
+    <span class="k">content:</span> |
+      domain: ops.acme.dev
+      email: ops@acme.dev
+      dns: { solver: hetzner, tokenFile: /root/dns.token }
+      owner: { email: mara@acme.dev, passwordFile: /root/owner.pw }
+<span class="k">runcmd:</span>
+  - curl -fsSL https://get.werft.sh | bash -s -- --config /root/werft.yaml --yes</div>
+          <h3>Flags</h3>
+          <div class="tw"><table class="t"><thead><tr><th>Flag / env</th><th>Purpose</th></tr></thead><tbody>
+            <tr><td><code>--domain</code> · <code>WERFT_DOMAIN</code></td><td>Console hostname. Omit it to try Werft before DNS exists: the installer uses a temporary <code>&lt;ip&gt;.sslip.io</code> name and says so. Re-run with <code>--domain</code> to switch; the chosen name is remembered between runs.</td></tr>
+            <tr><td><code>--email</code></td><td>Let's Encrypt account contact. Optional.</td></tr>
+            <tr><td><code>--config FILE</code></td><td>Pre-seed everything the wizard asks (owner, DNS, Hetzner tokens, backups). Skips the wizard.</td></tr>
+            <tr><td><code>--platform</code></td><td><code>auto</code> (default) detects Hetzner Cloud through its metadata service, otherwise assumes a dedicated server. Sets storage, networking and firewall defaults.</td></tr>
+            <tr><td><code>--private-iface</code></td><td>Interface for node-to-node and Kubernetes API traffic (Cloud Network or vSwitch).</td></tr>
+            <tr><td><code>--version</code> · <code>--channel</code></td><td>Pin a Werft release or follow <code>stable</code>/<code>edge</code>. Component versions come from the release manifest.</td></tr>
+            <tr><td><code>--join URL --token T</code></td><td>Join this server to an existing cluster as worker or control plane (the same script; <code>join.sh</code> is a thin wrapper).</td></tr>
+            <tr><td><code>--dry-run</code> · <code>--yes</code></td><td>Print the plan without changing anything · never prompt.</td></tr>
+            <tr><td><code>--uninstall</code></td><td>Remove Werft and k3s, keep or delete data on request.</td></tr>
+          </tbody></table></div>
+          <h3>Stages</h3>
+          <p>Each stage checks whether its work is already done and records completion in <code>/var/lib/werft/state</code>. A failed run resumes at the failed stage.</p>
+          <ol>
+            <li><b>Preflight</b> — detects Hetzner Cloud vs. dedicated, root, Ubuntu 22.04/24.04/26.04, x86_64 or arm64, ≥ 4 GB RAM, ≥ 30 GB disk, ports 80/443 free, outbound HTTPS, clock sync. Fails with a specific message and exit code.</li>
+            <li><b>System prep</b> — apt packages, kernel modules and sysctls for Cilium, swap off, chrony, unattended-upgrades, optional SSH hardening (<code>--harden-ssh</code>).</li>
+            <li><b>Firewall baseline</b> — nftables allowing 22/80/443 publicly and cluster ports only on the private interface. Cilium host policies take over once running.</li>
+            <li><b>Kubernetes</b> — k3s server with flannel, kube-proxy and the bundled policy controller disabled, secrets encryption on, API bound to the private IP.</li>
+            <li><b>Platform</b> — Helm installs Cilium, cert-manager, Traefik config, the observability stack and CRDs from one release manifest.</li>
+            <li><b>Werft</b> — Helm installs the console, waits for readiness, requests the console certificate.</li>
+            <li><b>Handoff</b> — verifies DNS and TLS end to end, writes a single-use setup token (24 h) to a 0600 file, prints the URL and a summary.</li>
+          </ol>
+          <p>Exit codes are stable for automation: <code>0</code> success, <code>10</code> preflight, <code>20</code> network/DNS, <code>30</code> Kubernetes, <code>40</code> platform, <code>50</code> Werft.</p>
+        </section>
+
+        <section id="model">
+          <p class="eyebrow">Resource model</p>
+          <h2>A handful of custom resources cover everything the UI edits</h2>
+          <div class="tw"><table class="t"><thead><tr><th>Resource</th><th>Becomes</th><th>Notes</th></tr></thead><tbody>
+            <tr><td>Project</td><td>Namespace, ResourceQuota, LimitRange, RoleBindings, default-deny policy</td><td>Pod Security “baseline” by default, “restricted” opt-in.</td></tr>
+            <tr><td>App</td><td>Deployment or StatefulSet, Service, HTTPRoute, PVCs, HPA, CiliumNetworkPolicy</td><td>Source is an image or a Git repository. Stores revisions for one-click rollback. Compose import creates one App per service.</td></tr>
+            <tr><td>Build</td><td>Job running rootless BuildKit, image in the zot registry</td><td>Created by push webhooks or “Build now”; success creates a new App revision. Reports status back to the commit.</td></tr>
+            <tr><td>Domain</td><td>Certificate, DNS record (when DNS-01), Gateway listener</td><td>Redirects, HSTS, rate limits, optional SSO gate (forward-auth to Werft).</td></tr>
+            <tr><td>TrafficRule</td><td>CiliumNetworkPolicy</td><td>Expressed in app/project terms; the UI shows Hubble hit and drop counts per rule.</td></tr>
+            <tr><td>FirewallRule</td><td>CiliumClusterwideNetworkPolicy (host), Hetzner Cloud Firewall</td><td>Lock-out protection: rejects rules that block the caller; auto-revert timer.</td></tr>
+            <tr><td>NodePool · Cluster</td><td>Hetzner servers via API + cloud-init join; agent install for remote clusters</td><td>Robot (dedicated) servers join via script; pools are cloud-only.</td></tr>
+            <tr><td>BackupPlan · AlertRule</td><td>Velero Schedule · VMRule + Alertmanager route</td><td>Notification channels: email, Slack, webhook, ntfy.</td></tr>
+          </tbody></table></div>
+        </section>
+
+        <section id="security">
+          <p class="eyebrow">Security model</p>
+          <h2>Assume the server is on the open internet, because it is</h2>
+          <ul>
+            <li><b>Bootstrap:</b> the console is unusable until someone presents the setup token from the server's disk. No default passwords anywhere.</li>
+            <li><b>Authorization:</b> Werft roles map to Kubernetes ClusterRoles bound per project namespace. The API impersonates the signed-in user, so a bug in Werft's own checks cannot exceed that user's Kubernetes rights.</li>
+            <li><b>Kubernetes API:</b> bound to the private network only; external <code>kubectl</code> goes through Werft's authenticating proxy with short-lived, scoped kubeconfigs.</li>
+            <li><b>Secrets:</b> k3s secrets encryption at rest; developers can write but not read secrets unless granted; values never appear in audit entries or logs.</li>
+            <li><b>Shell access:</b> exec sessions are role-gated, time-limited and recorded (asciinema format) for review.</li>
+            <li><b>Network:</b> default-deny between projects, WireGuard between nodes, host firewall managed as code, Hetzner Cloud Firewall mirrored for cloud nodes.</li>
+            <li><b>API tokens:</b> scoped to projects and verbs, always expiring, shown once, stored hashed.</li>
+            <li><b>Supply chain:</b> signed Werft images (cosign), pinned component digests, SBOMs published per release; the installer verifies checksums before executing anything it downloads.</li>
+            <li><b>Session hygiene:</b> HTTPS only with HSTS, SameSite cookies, CSRF tokens, rate-limited sign-in, passkeys preferred.</li>
+          </ul>
+        </section>
+
+        <section id="scale">
+          <p class="eyebrow">Nodes &amp; clusters</p>
+          <h2>Grow in three steps without reinstalling</h2>
+          <ol>
+            <li><b>Add workers to the first cluster.</b> Cloud servers are created through the Cloud API with cloud-init that runs the join script; dedicated (Robot) servers run the join command shown in the UI. Nodes talk over a Cloud Network or vSwitch where available and WireGuard otherwise.</li>
+            <li><b>Make it highly available.</b> Promote to three control-plane nodes (embedded etcd). Put a Hetzner Load Balancer in front of the ingress, or a Floating IP for dedicated-only setups, and move platform state to replicated storage.</li>
+            <li><b>Add more clusters.</b> Werft provisions a new k3s cluster on Hetzner Cloud (or adopts any existing one) and installs <code>werft-agent</code>. Apps, rules and alerts are scoped by cluster in the UI.</li>
+          </ol>
+          <p>Mixed dedicated + cloud clusters are supported but need care: Hetzner's vSwitch-to-Cloud-Network coupling is per location, so cross-location nodes fall back to WireGuard over public IPs.</p>
+        </section>
+
+        <section id="roadmap">
+          <p class="eyebrow">Roadmap</p>
+          <h2>About 28 weeks to a public beta with 1–2 engineers</h2>
+          <p>Estimates assume engineers comfortable with Go and Kubernetes. Building from Git adds a 4-week phase. Three to four engineers shorten this to roughly 16 weeks, because Phases 3 and 4 can run in parallel with Phase 2.</p>
+          <div class="timeline" role="img" aria-label="Seven phases over 28 weeks">
+            <div class="tl wk"><span></span><span style="grid-column:2">1</span><span style="grid-column:6">5</span><span style="grid-column:11">10</span><span style="grid-column:16">15</span><span style="grid-column:21">20</span><span style="grid-column:26">25</span><span style="grid-column:29">28</span></div>
+            <div class="tl"><span class="nm">0 · Foundations</span><span class="b" style="grid-column:2/4">2 wk</span></div>
+            <div class="tl"><span class="nm">1 · Installer &amp; deploy MVP</span><span class="b" style="grid-column:4/10">6 wk</span></div>
+            <div class="tl"><span class="nm">2 · Builds from Git</span><span class="b" style="grid-column:10/14">4 wk</span></div>
+            <div class="tl"><span class="nm">3 · Monitoring &amp; logs</span><span class="b" style="grid-column:14/17">3 wk</span></div>
+            <div class="tl"><span class="nm">4 · Network &amp; access</span><span class="b" style="grid-column:17/21">4 wk</span></div>
+            <div class="tl"><span class="nm">5 · Nodes &amp; clusters</span><span class="b" style="grid-column:21/26">5 wk</span></div>
+            <div class="tl"><span class="nm">6 · Backups, upgrades, beta</span><span class="b" style="grid-column:26/30">4 wk</span></div>
+          </div>
+          <div class="phases">
+            <div class="phase"><div class="h"><b>Phase 0 · Foundations</b><span>weeks 1–2</span></div>
+              <ul><li>Monorepo, CI, release pipeline, Helm chart skeleton, CRD scaffolding (kubebuilder).</li><li>Installer stages 1–4 on a Hetzner Cloud server <em>and</em> a dedicated server; measure the memory budget.</li><li>Design tokens and component library in the web app.</li></ul>
+              <div class="exit"><b>Exit:</b> a nightly CI job creates a Hetzner Cloud server, runs the script, gets a healthy k3s + Cilium, and destroys the server; a weekly job does the same on a dedicated test server reset through the Robot API.</div></div>
+            <div class="phase"><div class="h"><b>Phase 1 · Installer &amp; deploy MVP</b><span>weeks 3–8</span></div>
+              <ul><li>Full installer incl. platform detection, TLS and setup token; first-run wizard; owner account with passkey/TOTP.</li><li>Project and App reconcilers; deploy from image; env and secrets; domains with automatic TLS.</li><li>Apps list, app detail, live logs, shell, restart/scale/rollback; YAML export.</li></ul>
+              <div class="exit"><b>Exit:</b> fresh server → app on a public HTTPS domain in under 10 minutes, without a terminal after the install command.</div></div>
+            <div class="phase"><div class="h"><b>Phase 2 · Builds from Git</b><span>weeks 9–12</span></div>
+              <ul><li>Git connections: GitHub App, GitLab, Gitea/Forgejo, or any Git URL with a deploy key; push webhooks.</li><li>Build resource and controller: rootless BuildKit Jobs, Dockerfile or Railpack, layer cache on a volume, live build logs.</li><li>In-cluster zot registry with per-app retention; auto-deploy on push; build status reported back to the commit.</li></ul>
+              <div class="exit"><b>Exit:</b> a push to main is live as a new revision in under 3 minutes for a typical Go or Node app, with the build log in the UI and a check on the commit.</div></div>
+            <div class="phase"><div class="h"><b>Phase 3 · Monitoring &amp; logs</b><span>weeks 13–15</span></div>
+              <ul><li>VictoriaMetrics/Logs integration, overview and per-app charts, log search.</li><li>Alert rules, notification channels, “needs attention” feed.</li></ul>
+              <div class="exit"><b>Exit:</b> a crash-looping app raises an alert in Slack within 2 minutes with a link to its logs. <b>Milestone: usable by the team.</b></div></div>
+            <div class="phase"><div class="h"><b>Phase 4 · Network &amp; access</b><span>weeks 16–19</span></div>
+              <ul><li>TrafficRule editor with Hubble hit/drop counts and “create allow rule” from drops.</li><li>Server firewall with lock-out protection; Hetzner Cloud Firewall sync for cloud nodes, host rules for dedicated ones.</li><li>Members, roles, OIDC SSO, API tokens, audit log, scoped kubeconfig download.</li></ul>
+              <div class="exit"><b>Exit:</b> a Developer in one project cannot read another project's pods, secrets or traffic — verified by an automated RBAC test suite.</div></div>
+            <div class="phase"><div class="h"><b>Phase 5 · Nodes &amp; clusters</b><span>weeks 20–24</span></div>
+              <ul><li>Add/drain/remove nodes via Cloud API and join script; hcloud CSI and LB integration; vSwitch ↔ Cloud Network coupling for mixed clusters.</li><li>Optional build node pool: a Cloud server created for builds and deleted after.</li><li>3-node HA control plane; werft-agent tunnel; create and adopt clusters.</li></ul>
+              <div class="exit"><b>Exit:</b> a mixed dedicated + cloud cluster loses a node while apps stay reachable; a second cluster is managed from the same console.</div></div>
+            <div class="phase"><div class="h"><b>Phase 6 · Backups, upgrades, beta</b><span>weeks 25–28</span></div>
+              <ul><li>BackupPlans to Object Storage with tested restore; etcd snapshot schedule.</li><li>One-click Werft and k3s upgrades with automatic rollback; Docker Compose import; templates.</li><li>Docs site, security review, load test of the console with 200 apps; license decided.</li></ul>
+              <div class="exit"><b>Exit:</b> restore a full cluster from Object Storage onto a brand-new server with one script flag. <b>Milestone: public beta.</b></div></div>
+          </div>
+          <p>Later: preview environments per pull request, cost view from the Hetzner API, a Terraform provider for <code>App</code> and <code>Project</code>, and multi-team tenancy.</p>
+        </section>
+
+        <section id="repo">
+          <p class="eyebrow">Repository &amp; testing</p>
+          <h2>One repository, three test layers, a real-Hetzner end-to-end suite</h2>
+<div class="codebox">werft/
+├─ install/              install.sh, join.sh, lib/*.sh, release manifest, bats tests
+├─ charts/werft/         Helm chart: deployment, RBAC, CRDs, platform values
+├─ api/v1alpha1/         CRD Go types (kubebuilder markers)
+├─ cmd/werft/            single binary: API server + controllers + embedded UI
+├─ cmd/werft-agent/      tunnel agent for remote clusters
+├─ cmd/werftctl/         CLI: login, deploy, logs, exec, kubeconfig
+├─ internal/
+│  ├─ build/             Git providers, webhooks, BuildKit jobs, registry GC
+│  ├─ api/               REST + WebSocket handlers, OpenAPI spec
+│  ├─ controllers/       App, Project, Domain, TrafficRule, NodePool, Cluster
+│  ├─ auth/              sessions, passkeys, TOTP, OIDC, impersonation
+│  ├─ hetzner/           hcloud-go and Robot clients, firewall sync
+│  ├─ observability/     VictoriaMetrics/Logs and Hubble query layer
+│  └─ store/             SQLite, migrations, audit writer
+├─ web/                  React + Vite app (TanStack, uPlot, xterm.js)
+└─ test/e2e/             disposable Hetzner Cloud servers per run</div>
+          <ul>
+            <li><b>Unit &amp; controller tests</b> with envtest — reconcilers render the right objects and handle conflicts.</li>
+            <li><b>Installer tests</b> — shellcheck, bats for each stage, and a matrix of Ubuntu 22.04/24.04/26.04 on x86 and arm64 cloud servers.</li>
+            <li><b>End-to-end</b> — Playwright drives the UI against a real server created per run: install, deploy, add a node, break a rule, restore a backup. Servers are destroyed in a <code>finally</code> step and by a nightly sweeper.</li>
+            <li><b>Releases</b> — signed images and Helm chart in an OCI registry; <code>get.werft.sh</code> serves a versioned script with checksums.</li>
+          </ul>
+        </section>
+
+        <section id="risks">
+          <p class="eyebrow">Risks &amp; decisions</p>
+          <h2>What could go wrong, and what we decided</h2>
+          <ul>
+            <li><b>Single node is a single point of failure.</b> Make it explicit in the UI and push automatic etcd snapshots to Object Storage from day one.</li>
+            <li><b>Resource overhead on small servers.</b> Hold the ~1.9 GB budget in CI; offer a “lite” profile (no Hubble, shorter retention) for 4 GB machines.</li>
+            <li><b>Dedicated vs. Cloud asymmetry.</b> The Robot API cannot create servers on demand like the Cloud API; dedicated nodes always join by script, and vSwitch coupling to Cloud Networks only works within one network zone.</li>
+            <li><b>Firewall lock-out.</b> Mitigated by caller-IP checks and an automatic revert timer, plus an <code>install.sh --reset-firewall</code> rescue path via the Hetzner console.</li>
+            <li><b>Upstream churn.</b> k3s, Cilium and Gateway API move quickly; pin versions in a release manifest and test upgrades from N-1 and N-2.</li>
+          <li><b>Builds compete with apps for memory.</b> Builds run as Jobs with limits and queue one at a time on small nodes; heavy users add a build node pool.</li>
+          </ul>
+          <h3>Decisions, 4 Oct 2026</h3>
+          <div class="qs">
+            <div class="q"><b>Hetzner Cloud and dedicated, both first-class</b><span>The installer detects the platform. Storage, private networking and firewall defaults differ per platform; CI covers both.</span></div>
+            <div class="q"><b>One team</b><span>A single organization with projects and roles; no tenant isolation in v1. Records carry an organization ID so tenancy can come later without a migration.</span></div>
+            <div class="q"><b>Images from registries and from Git in v1</b><span>Adds Phase 2, the Build resource, BuildKit and an in-cluster registry.</span></div>
+            <div class="q"><b>License: to be decided before the public beta</b><span>Every dependency chosen so far is Apache-2.0 or MIT, so all options stay open.</span></div>
+          </div>
+        </section>
+      </div>
+    </div>
+  </section>
+</div>
+
+<script>
+(function(){
+  const $ = (s, r=document) => r.querySelector(s);
+  const $$ = (s, r=document) => Array.from(r.querySelectorAll(s));
+
+  /* ---------- page tabs ---------- */
+  function showPage(p){
+    $$('[data-page]').forEach(b => b.setAttribute('aria-selected', b.dataset.page === p));
+    $$('[data-pagepanel]').forEach(s => s.hidden = s.dataset.pagepanel !== p);
+    try{ localStorage.setItem('werft-page', p) }catch(e){}
+  }
+  $$('[data-page]').forEach(b => b.addEventListener('click', () => showPage(b.dataset.page)));
+  let initial = 'mockups';
+  try{ initial = localStorage.getItem('werft-page') || initial }catch(e){}
+  if (location.hash === '#plan' || location.hash === '#mockups') initial = location.hash.slice(1);
+  else if (location.hash && $('#page-plan ' + location.hash)) initial = 'plan';
+  showPage(initial);
+  $$('.toc a').forEach(a => a.addEventListener('click', () => showPage('plan')));
+
+  /* ---------- notes per screen ---------- */
+  const notes = {
+    install:['Install on the server','The only thing an operator types. Every line is a resumable stage; the output ends with the URL and where the one-time setup token lives.','root@fsn1-node-1 — ssh session'],
+    setup:['First-run setup','Runs once, behind the setup token. Every answer here can be pre-seeded with --config, so automated installs skip it entirely.','/setup'],
+    overview:['Overview','Summary before detail: capacity, Hetzner-specific traffic quota, and a “needs attention” feed that links a crash-loop to the network rule causing it.','/overview'],
+    apps:['Apps','All workloads across projects with status pills that read at a glance. Click any row to open the app.','/apps'],
+    app:['App detail','Everything about one app: live replicas, domains, revisions with rollback, streaming logs, Git builds with their logs, and an editable settings form that creates a new revision.','/apps/storefront/api'],
+    deploy:['Deploy wizard','Start from a registry image or a Git repository that Werft builds in-cluster. Five short steps produce one App resource. Networking defaults to deny-all with explicit sources, and the review step shows exactly which Kubernetes objects will be created.','/deploy'],
+    monitoring:['Monitoring','Firing alerts with one-click fixes, top consumers, and alert rules mapped to notification channels.','/monitoring'],
+    clusters:['Clusters & nodes','Clusters as cards, nodes as a table. Add capacity from the Hetzner Cloud API or by running a join command on any existing server.','/clusters/fsn1-prod'],
+    network:['Network','Traffic rules phrased as app-to-app, with observed hit and drop counts from Hubble. The server firewall and domains/TLS live in the same place.','/network'],
+    access:['Access','Members, roles mapped to Kubernetes RBAC, and an append-only audit log of every change and shell session.','/access']
+  };
+  const titles = {overview:'Overview',apps:'Apps',app:'Apps / api',deploy:'Deploy app',monitoring:'Monitoring',clusters:'Clusters & nodes',network:'Network',access:'Access'};
+  function setNote(key){
+    const n = notes[key]; if(!n) return;
+    $('#note-t').textContent = n[0];
+    $('#note-d').textContent = n[1];
+    $('#url').innerHTML = key === 'install' ? '<b>' + n[2] + '</b>' : 'https://<b>ops.acme.dev</b>' + n[2];
+  }
+
+  /* ---------- flow ---------- */
+  let currentScreen = 'overview';
+  function showFlow(f){
+    $$('[data-flow]').forEach(b => b.setAttribute('aria-pressed', b.dataset.flow === f));
+    $$('[data-flowpanel]').forEach(p => p.hidden = p.dataset.flowpanel !== f);
+    setNote(f === 'console' ? currentScreen : f);
+  }
+  $$('[data-flow]').forEach(b => b.addEventListener('click', () => showFlow(b.dataset.flow)));
+
+  /* ---------- console screens ---------- */
+  function showScreen(s){
+    currentScreen = s;
+    $$('[data-view]').forEach(v => v.hidden = v.dataset.view !== s);
+    const navKey = s === 'app' ? 'apps' : s;
+    $$('.nav [data-screen]').forEach(b => b.dataset.screen === navKey ? b.setAttribute('aria-current','page') : b.removeAttribute('aria-current'));
+    $('#crumb').innerHTML = 'fsn1-prod / <b>' + titles[s].replace('&','&amp;') + '</b>';
+    setNote(s);
+  }
+  $$('.nav [data-screen]').forEach(b => b.addEventListener('click', () => showScreen(b.dataset.screen)));
+  $$('[data-go]').forEach(el => el.addEventListener('click', e => { e.stopPropagation(); showScreen(el.dataset.go); }));
+
+  /* ---------- generic tabs ---------- */
+  $$('[data-tabs]').forEach(group => {
+    const g = group.dataset.tabs;
+    $$('[data-tab]', group).forEach(btn => btn.addEventListener('click', () => {
+      $$('[data-tab]', group).forEach(b => b.setAttribute('aria-selected', b === btn));
+      $$('[data-tabpanel^="' + g + ':"]').forEach(p => p.hidden = p.dataset.tabpanel !== g + ':' + btn.dataset.tab);
+    }));
+  });
+
+  /* ---------- segmented + radio groups ---------- */
+  $$('[data-seg]').forEach(seg => $$('button', seg).forEach(b => b.addEventListener('click', () => {
+    $$('button', seg).forEach(x => x.setAttribute('aria-pressed', x === b));
+  })));
+  $$('[data-radio]').forEach(grp => $$(':scope > button', grp).forEach(b => b.addEventListener('click', () => {
+    $$(':scope > button', grp).forEach(x => x.setAttribute('aria-pressed', x === b));
+  })));
+  $$('.toggle').forEach(t => t.addEventListener('click', () => t.classList.toggle('on')));
+  $$('.ccard:not(.new)').forEach(c => c.addEventListener('click', () => $$('.ccard:not(.new)').forEach(x => x.setAttribute('aria-pressed', x === c))));
+
+  /* ---------- deploy source ---------- */
+  $$('[data-src]').forEach(b => b.addEventListener('click', () => {
+    $$('[data-srcpanel]').forEach(p => p.hidden = p.dataset.srcpanel !== b.dataset.src);
+  }));
+
+  /* ---------- add node ---------- */
+  $$('[data-an]').forEach(b => b.addEventListener('click', () => {
+    $$('[data-anpanel]').forEach(p => p.hidden = p.dataset.anpanel !== b.dataset.an);
+  }));
+
+  /* ---------- deploy wizard ---------- */
+  const order = ['src','run','netw','stor','rev'];
+  function showStep(s){
+    const idx = order.indexOf(s);
+    $$('[data-step]').forEach((b,i) => {
+      b.classList.toggle('done', i <= idx);
+      i === idx ? b.setAttribute('aria-current','step') : b.removeAttribute('aria-current');
+    });
+    $$('[data-steppanel]').forEach(p => p.hidden = p.dataset.steppanel !== s);
+  }
+  $$('[data-step]').forEach(b => b.addEventListener('click', () => showStep(b.dataset.step)));
+  $$('[data-next]').forEach(b => b.addEventListener('click', () => showStep(b.dataset.next)));
+
+  /* ---------- app filter ---------- */
+  const filter = $('#app-filter');
+  filter && filter.addEventListener('input', () => {
+    const q = filter.value.toLowerCase();
+    $$('[data-view="apps"] tbody tr').forEach(r => r.hidden = q && !r.textContent.toLowerCase().includes(q));
+  });
+
+  /* ---------- charts ---------- */
+  const NS = 'http://www.w3.org/2000/svg';
+  function rng(seed){ return () => (seed = (seed * 16807) % 2147483647) / 2147483647; }
+  function walk(n, base, amp, seed, wave){
+    const r = rng(seed); const out = []; let v = base;
+    for(let i=0;i<n;i++){
+      const daily = wave ? Math.sin((i/n) * Math.PI * 2 - 1.2) * wave : 0;
+      v += (r() - .5) * amp; v = v * .85 + base * .15;
+      out.push(Math.max(1, v + daily));
+    }
+    return out;
+  }
+  function el(tag, attrs, parent){ const e = document.createElementNS(NS, tag); for(const k in attrs) e.setAttribute(k, attrs[k]); parent && parent.appendChild(e); return e; }
+  function pathFor(data, x, y){ return data.map((v,i) => (i ? 'L' : 'M') + x(i).toFixed(1) + ' ' + y(v).toFixed(1)).join(' '); }
+
+  function areaChart(svg, o){
+    const W = 640, H = o.h || 200, pl = 40, pr = 14, pt = 10, pb = 24;
+    svg.setAttribute('viewBox', `0 0 ${W} ${H}`);
+    const n = o.series[0].data.length;
+    const x = i => pl + i * (W - pl - pr) / (n - 1);
+    const y = v => pt + (1 - v / o.max) * (H - pt - pb);
+    o.ticks.forEach(t => {
+      el('line', {x1:pl, x2:W-pr, y1:y(t), y2:y(t), class:'grid'}, svg);
+      const tx = el('text', {x:pl-8, y:y(t)+3.5, 'text-anchor':'end', class:'ax'}, svg); tx.textContent = o.fmt(t);
+    });
+    o.xLabels.forEach((l,i) => {
+      const xi = pl + i * (W - pl - pr) / (o.xLabels.length - 1);
+      const tx = el('text', {x:xi, y:H-6, 'text-anchor': i === 0 ? 'start' : i === o.xLabels.length-1 ? 'end' : 'middle', class:'ax'}, svg); tx.textContent = l;
+    });
+    if (o.threshold != null){
+      el('line', {x1:pl, x2:W-pr, y1:y(o.threshold), y2:y(o.threshold), class:'thr'}, svg);
+    }
+    o.series.forEach((s, k) => {
+      const line = pathFor(s.data, x, y);
+      el('path', {d: line + ` L${x(n-1)} ${y(0)} L${x(0)} ${y(0)} Z`, class:'a' + (k+1)}, svg);
+      el('path', {d: line, class:'s' + (k+1)}, svg);
+      el('circle', {cx:x(n-1), cy:y(s.data[n-1]), r:3.5, class:'e' + (k+1)}, svg);
+    });
+  }
+  function spark(svg, data, max){
+    const W = 96, H = 30;
+    svg.setAttribute('viewBox', `0 0 ${W} ${H}`);
+    const n = data.length;
+    const x = i => 1 + i * (W - 6) / (n - 1);
+    const y = v => 2 + (1 - v / max) * (H - 4);
+    const line = pathFor(data, x, y);
+    el('path', {d: line + ` L${x(n-1)} ${H} L${x(0)} ${H} Z`, class:'a1'}, svg);
+    el('path', {d: line, class:'s1', 'stroke-width':1.5}, svg);
+    el('circle', {cx:x(n-1), cy:y(data[n-1]), r:2.5, class:'e1'}, svg);
+  }
+
+  const cpu = walk(48, 34, 14, 7, 10); cpu[47] = 38;
+  const mem = walk(48, 39, 4, 19, 2); mem[47] = 40;
+  const hours = ['10:00','16:00','22:00','04:00','now'];
+  areaChart($('[data-chart="cluster"]'), {series:[{data:cpu},{data:mem}], max:100, ticks:[0,25,50,75,100], fmt:v=>v+'%', xLabels:hours, h:210});
+  const appCpu = walk(48, .48, .22, 31, .16).map(v => Math.min(v, .95)); appCpu[47] = .48;
+  areaChart($('[data-chart="app"]'), {series:[{data:appCpu}], max:1.2, ticks:[0,.3,.6,.9,1.2], fmt:v=>v.toFixed(1), xLabels:hours, threshold:1, h:200});
+  spark($('[data-spark="cpu"]'), cpu.slice(-24), 100);
+  spark($('[data-spark="mem"]'), mem.slice(-24), 100);
+
+  showScreen('overview');
+})();
+</script>

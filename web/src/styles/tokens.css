@@ -1,0 +1,24 @@
+/* Design tokens — keep in sync with docs/blueprint.html. */
+:root {
+  color-scheme: light;
+  --bg: #F1F3F7; --surface: #FFFFFF; --surface-2: #F7F8FB; --sunk: #E8ECF2;
+  --ink: #121826; --ink-2: #2C3546; --muted: #5B6679; --faint: #8791A3;
+  --line: #DAE0E9; --line-2: #E9EDF3;
+  --accent: #2F5BD0; --accent-2: #E6ECFB; --accent-ink: #FFFFFF;
+  --c2: #0D857C;
+  --ok: #1B7A4E; --ok-bg: #E2F2E9; --warn: #935C00; --warn-bg: #FBEFD6; --bad: #B4371F; --bad-bg: #FBE5DF;
+  --display: "Bricolage Grotesque Variable", "IBM Plex Sans", system-ui, sans-serif;
+  --sans: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --mono: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    color-scheme: dark;
+    --bg: #0B0F16; --surface: #121824; --surface-2: #161D2A; --sunk: #0E131C;
+    --ink: #E6EBF3; --ink-2: #C3CBD9; --muted: #95A1B5; --faint: #6C788D;
+    --line: #252F42; --line-2: #1C2535;
+    --accent: #7398F6; --accent-2: #1A2747; --accent-ink: #0B0F16;
+    --c2: #3FC1B3;
+    --ok: #5BC98E; --ok-bg: #11281D; --warn: #E3B04B; --warn-bg: #2B220F; --bad: #F27D69; --bad-bg: #331915;
+  }
+}

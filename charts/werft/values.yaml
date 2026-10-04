@@ -1,0 +1,43 @@
+# Set by install.sh; override with --set or a values file for manual installs.
+platform: dedicated            # cloud | dedicated — selects storage and firewall defaults
+
+console:
+  domain: ""                   # e.g. ops.example.com (required)
+
+acme:
+  enabled: true                # issue certificates with Let's Encrypt
+  email: ""                    # optional account contact
+  server: https://acme-v02.api.letsencrypt.org/directory
+
+image:
+  repository: ghcr.io/ehilzinger/werft
+  tag: ""                      # defaults to .Chart.AppVersion
+  pullPolicy: IfNotPresent
+
+resources:
+  requests: { cpu: 50m, memory: 64Mi }
+  limits: { memory: 256Mi }
+
+# The Gateway that all public traffic (console and apps) enters through.
+# Traefik implements it; Werft adds listeners for app domains at runtime.
+gateway:
+  create: true
+  name: werft
+  className: traefik
+
+persistence:
+  # SQLite for users, sessions, tokens and the audit log.
+  size: 2Gi
+  storageClass: ""             # empty = cluster default (local-path)
+
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 65532
+  runAsGroup: 65532
+  fsGroup: 65532
+  seccompProfile: { type: RuntimeDefault }
+
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities: { drop: [ALL] }

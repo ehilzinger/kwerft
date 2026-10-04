@@ -1,0 +1,61 @@
+# Werft acts on behalf of signed-in users through impersonation, so Kubernetes
+# RBAC stays the final authority. Its own service account needs:
+#  - impersonate: to forward user requests with the user's identity
+#  - full access to werft.dev resources: the reconcilers own them
+#  - the objects the reconcilers render (TODO(phase-1): narrow to exact verbs)
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: werft-controller
+  labels: {{- include "werft.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: [users, groups, serviceaccounts]
+    verbs: [impersonate]
+  - apiGroups: [werft.dev]
+    resources: ["*"]
+    verbs: ["*"]
+  - apiGroups: [""]
+    resources: [namespaces, services, secrets, configmaps, persistentvolumeclaims, resourcequotas, limitranges, pods, pods/log, events, nodes]
+    verbs: [get, list, watch, create, update, patch, delete]
+  - apiGroups: [""]
+    resources: [pods/exec]
+    verbs: [create]
+  - apiGroups: [apps]
+    resources: [deployments, statefulsets, replicasets]
+    verbs: [get, list, watch, create, update, patch, delete]
+  - apiGroups: [batch]
+    resources: [jobs]
+    verbs: [get, list, watch, create, update, patch, delete]
+  - apiGroups: [autoscaling]
+    resources: [horizontalpodautoscalers]
+    verbs: [get, list, watch, create, update, patch, delete]
+  - apiGroups: [gateway.networking.k8s.io]
+    resources: [gateways, httproutes]
+    verbs: [get, list, watch, create, update, patch, delete]
+  - apiGroups: [cert-manager.io]
+    resources: [certificates, clusterissuers]
+    verbs: [get, list, watch, create, update, patch, delete]
+  - apiGroups: [cilium.io]
+    resources: [ciliumnetworkpolicies, ciliumclusterwidenetworkpolicies]
+    verbs: [get, list, watch, create, update, patch, delete]
+  - apiGroups: [rbac.authorization.k8s.io]
+    resources: [roles, rolebindings]
+    verbs: [get, list, watch, create, update, patch, delete, bind, escalate]
+  - apiGroups: [coordination.k8s.io]
+    resources: [leases]
+    verbs: [get, list, watch, create, update, patch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: werft-controller
+  labels: {{- include "werft.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: werft-controller
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "werft.fullname" . }}
+    namespace: {{ .Release.Namespace }}

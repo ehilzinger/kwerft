@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "werft",
+      "runtimeExecutable": "go",
+      "runtimeArgs": ["run", "./cmd/werft", "--listen=:8080", "--console-domain=localhost", "--platform=cloud"],
+      "port": 8080
+    }
+  ]
+}

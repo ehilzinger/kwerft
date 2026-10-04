@@ -1,0 +1,7 @@
+apiVersion: v2
+name: werft
+description: Werft console — API server, controllers and web UI
+type: application
+version: 0.1.0-dev
+appVersion: 0.1.0-dev
+kubeVersion: ">=1.32.0-0"
