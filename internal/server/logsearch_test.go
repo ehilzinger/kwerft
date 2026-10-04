@@ -391,6 +391,25 @@ func TestTaskLogFromHistoryWhenThePodsAreGone(t *testing.T) {
 	if conf := vl.confinement(t); !slices.Equal(namespacesOf(conf), []string{"shop"}) || conf["task"] != "done" || len(conf) != 2 {
 		t.Errorf("history scope = %v", conf)
 	}
+	// Task detail asks for the Task's pod by name (status.pod); gone, it
+	// comes from history too, instead of a 404.
+	events, cancel1, res := pe.stream(t, "/api/v1/projects/shop/tasks/done/logs?pod=done-xyz")
+	defer cancel1()
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("history of a named pod: %d", res.StatusCode)
+	}
+	if ln := next(t, events, "line"); ln.data["text"] != "migrated 12 tables" {
+		t.Errorf("line = %v", ln.data)
+	}
+	if conf := vl.confinement(t); conf["pod"] != "done-xyz" || conf["task"] != "done" {
+		t.Errorf("history scope = %v", conf)
+	}
+	vl.set(0, "")
+	_, cancel5, res := pe.stream(t, "/api/v1/projects/shop/tasks/done/logs?pod=done-xyz")
+	cancel5()
+	if res.StatusCode != http.StatusNotFound {
+		t.Errorf("no history for a named pod: %d, want 404 as before", res.StatusCode)
+	}
 
 	// The pod still there: the live log, as before, without asking VictoriaLogs.
 	before := vl.requests()

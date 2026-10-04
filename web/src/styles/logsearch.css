@@ -1,0 +1,38 @@
+/* Log search (components/LogSearch.tsx): the log history from VictoriaLogs,
+   in the terminal panel of the live log viewer (pods.css). */
+
+.logsearchv { display: grid; gap: 10px; min-width: 0; }
+.logsearchv .toolbar .q { flex: 1 1 260px; min-width: 0; width: auto; }
+.vh { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
+
+.logrows { padding: 6px 0; }
+.logt { border-collapse: collapse; width: 100%; font-family: var(--mono); font-size: 12.3px; line-height: 19px; }
+.logt td { padding: 0 8px; vertical-align: top; }
+.logt td:first-child { padding-left: 14px; }
+.logt td:last-child { padding-right: 14px; }
+.logt tr:hover td { background: rgba(255, 255, 255, .04); }
+.logt .ts, .logt .cut { color: var(--term-dim); white-space: nowrap; }
+.logt .src { color: var(--term-acc); white-space: nowrap; max-width: 220px; overflow: hidden; text-overflow: ellipsis; }
+.logt .pod { color: var(--term-dim); white-space: nowrap; }
+.logt .ln { white-space: pre-wrap; overflow-wrap: anywhere; width: 100%; }
+.logt .ln.err-stream { box-shadow: inset 2px 0 0 rgba(255, 142, 122, .45); }
+.logt .er { color: #FF8E7A; }
+.logt .wn { color: #E9BE62; }
+.logt mark { background: rgba(233, 190, 98, .25); color: inherit; border-radius: 2px; }
+.logrows .older { display: flex; gap: 10px; align-items: center; padding: 4px 14px 8px; font-family: var(--mono); font-size: 12px; }
+.logrows .older .err { color: #FF8E7A; }
+
+/* The App Logs tab: live pods or history. */
+.logsource { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+.logsource .dim { font-size: 12.5px; }
+
+@media (max-width: 760px) {
+  .logsearchv .toolbar .q { flex-basis: 100%; }
+  .logsearchv .toolbar select.input { flex: 1 1 140px; }
+  /* One line per entry: time, source and pod above, the text below. */
+  .logt, .logt tbody, .logt tr, .logt td { display: block; }
+  .logt tr { padding: 4px 14px; border-bottom: 1px solid rgba(255, 255, 255, .06); }
+  .logt td, .logt td:first-child, .logt td:last-child { display: inline; padding: 0 8px 0 0; }
+  .logt td.ln { display: block; padding: 0; }
+  .logt .src { max-width: none; }
+}

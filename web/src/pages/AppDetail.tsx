@@ -19,7 +19,8 @@ import "../styles/workloads.css";
 
 const route = getRouteApi("/authed/apps/$project/$name");
 
-type Tab = "overview" | "logs" | "builds" | "settings";
+const tabs = ["overview", "logs", "builds", "settings"] as const;
+type Tab = (typeof tabs)[number];
 
 // phaseOf mirrors the server's summary (api_workloads.go appPhase) for the
 // full App object.
@@ -35,7 +36,8 @@ export function phaseOf(app: App): { phase: Phase; reason?: string; message?: st
 
 export function AppDetail() {
   const { project, name } = route.useParams();
-  const { build } = route.useSearch();
+  const { build, tab: tabParam } = route.useSearch();
+  const linkedTab = tabs.find((t) => t === tabParam); // ?tab=logs from an alert
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const session = useQuery({ queryKey: ["session"], queryFn: api.session });
@@ -43,14 +45,16 @@ export function AppDetail() {
   const key = ["app", project, name];
   const q = useQuery({ queryKey: key, queryFn: () => workloads.app(project, name), refetchInterval: 5000 });
 
-  const [tab, setTab] = useState<Tab>(build ? "builds" : "overview");
-  // A link to a build (a commit check, a revision) opens the Builds tab.
+  const [tab, setTab] = useState<Tab>(build ? "builds" : linkedTab ?? "overview");
+  // A link to a build (a commit check, a revision) opens the Builds tab; a
+  // link with ?tab= (alert notifications: ?tab=logs) opens that tab.
   useEffect(() => {
     if (build) setTab("builds");
-  }, [build]);
+    else if (linkedTab) setTab(linkedTab);
+  }, [build, linkedTab]);
   const showTab = (t: Tab) => {
     setTab(t);
-    if (t !== "builds" && build) void navigate({ to: "/apps/$project/$name", params: { project, name }, search: {}, replace: true });
+    if ((t !== "builds" && build) || (tabParam && t !== tabParam)) void navigate({ to: "/apps/$project/$name", params: { project, name }, search: {}, replace: true });
   };
   const [logPod, setLogPod] = useState<string>(); // a replica's Logs button
   const [dialog, setDialog] = useState<"scale" | "delete" | "run" | { rollback: Revision }>();
@@ -144,7 +148,7 @@ export function AppDetail() {
       )}
 
       <div className="tabs" role="tablist" aria-label="App">
-        {(["overview", "logs", "builds", "settings"] as const).map((t) => (
+        {tabs.map((t) => (
           <button key={t} role="tab" id={`tab-${t}`} aria-selected={tab === t} aria-controls={`panel-${t}`} onClick={() => showTab(t)}>
             {t[0]!.toUpperCase() + t.slice(1)}
           </button>

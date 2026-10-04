@@ -345,12 +345,7 @@ func (s *logSearchAPI) tail(w http.ResponseWriter, r *http.Request) {
 		wg.Wait()
 	}()
 
-	h := w.Header()
-	h.Set("Content-Type", "text/event-stream")
-	h.Set("Cache-Control", "no-store")
-	h.Set("X-Accel-Buffering", "no")
-	w.WriteHeader(http.StatusOK)
-	out := &sseWriter{w: w, rc: http.NewResponseController(w), timeout: s.lim.writeTimeout}
+	out := startSSE(w, s.lim.writeTimeout)
 	if out.event("start", map[string]any{"limits": map[string]any{
 		"maxLine": s.vlogs.Limits.MaxLine, "linesPerSecond": s.lim.rate, "maxSeconds": int(s.lim.maxDuration / time.Second),
 	}}) != nil || out.flush() != nil {
@@ -433,13 +428,11 @@ func (a *api) streamSessionAlive(ctx context.Context, pr *principal) bool {
 
 // ---- history of Task and Build logs ------------------------------------------------
 
-// logHistory sends a finished Task's or Build's log from VictoriaLogs once
-// its pods are gone, as the events of a finished pod log stream: start (with
-// "source": "history"), the lines, and end "complete". The caller has
-// checked that the user may read that log. It returns false, having sent
-// nothing, when the history has no lines or VictoriaLogs did not answer, so
-// the caller answers as it did before.
-func (a *api) logHistory(ctx context.Context, out *sseWriter, scope logs.Scope, start, end time.Time, tail int64, container string) bool {
+// historyLog reads a finished Task's or Build's log from VictoriaLogs once
+// its pods are gone. The caller has checked that the user may read that log
+// and confines scope to its pods. nil means nothing to show: no lines, or
+// VictoriaLogs did not answer; the caller then answers as it did before.
+func (a *api) historyLog(ctx context.Context, scope logs.Scope, start, end time.Time, tail int64, container string) *logs.Result {
 	if tail <= 0 {
 		tail = defaultLogLimits.tailDefault
 	}
@@ -458,11 +451,19 @@ func (a *api) logHistory(ctx context.Context, out *sseWriter, scope logs.Scope, 
 		if ctx.Err() == nil {
 			a.cfg.Logger.Warn("log history unavailable", "scope", scope, "err", err)
 		}
-		return false
+		return nil
 	}
 	if len(res.Entries) == 0 {
-		return false
+		return nil
 	}
+	return &res
+}
+
+// sendHistory answers a log stream request with lines from history, as the
+// events of a finished pod log stream: start (with "source": "history" and
+// a message saying so), the lines, and end "complete".
+func sendHistory(w http.ResponseWriter, timeout time.Duration, res *logs.Result, container string) {
+	out := startSSE(w, timeout)
 	var pods []string
 	for _, e := range res.Entries {
 		if !slices.Contains(pods, e.Pod) {
@@ -471,26 +472,35 @@ func (a *api) logHistory(ctx context.Context, out *sseWriter, scope logs.Scope, 
 	}
 	msg := "From log history: the pod has been removed, so these lines come from VictoriaLogs."
 	if res.Truncated {
-		msg = fmt.Sprintf("From log history: the pod has been removed, so these are the last %d lines from VictoriaLogs.", len(res.Entries))
+		msg = fmt.Sprintf("From log history: the pod has been removed, so these are its last %d lines from VictoriaLogs.", len(res.Entries))
 	}
 	if out.event("start", map[string]any{
 		"pods": pods, "container": container, "follow": false, "previous": false, "source": "history", "message": msg,
 	}) != nil {
-		return true
+		return
 	}
 	for i, e := range res.Entries {
 		ln := logLine{Pod: e.Pod, Container: e.Container, TS: e.Time.Format(time.RFC3339Nano), Text: e.Line, Truncated: e.Truncated}
 		if out.event("line", ln) != nil {
-			return true
+			return
 		}
 		if i%500 == 499 && out.flush() != nil {
-			return true
+			return
 		}
 	}
 	if out.event("end", map[string]string{"reason": "complete", "message": msg}) == nil {
 		_ = out.flush()
 	}
-	return true
+}
+
+// startSSE writes the headers of an event stream.
+func startSSE(w http.ResponseWriter, timeout time.Duration) *sseWriter {
+	h := w.Header()
+	h.Set("Content-Type", "text/event-stream")
+	h.Set("Cache-Control", "no-store")
+	h.Set("X-Accel-Buffering", "no") // no proxy buffering
+	w.WriteHeader(http.StatusOK)
+	return &sseWriter{w: w, rc: http.NewResponseController(w), timeout: timeout}
 }
 
 // historyRange is when a Task's or Build's pods ran: from shortly before it

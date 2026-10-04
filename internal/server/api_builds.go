@@ -384,6 +384,16 @@ func (b *buildsAPI) buildLogs(w http.ResponseWriter, r *http.Request) {
 	if finished {
 		lq.follow = false // nothing more will come
 	}
+	if finished && len(pods) == 0 {
+		// The pod is gone: its log may still be in VictoriaLogs, read with
+		// the console's identity like the pod, confined to this Build's pods.
+		start, end := historyRange(build.CreationTimestamp, build.Status.CompletionTime, b.now())
+		scope := logs.Scope{Namespaces: []string{builds.Namespace}, Fields: map[string]string{logs.FieldBuild: name, logs.FieldProject: project}}
+		if res := b.historyLog(r.Context(), scope, start, end, lq.tail, lq.container); res != nil {
+			sendHistory(w, b.logs.writeTimeout, res, lq.container)
+			return
+		}
+	}
 	release := b.streams.acquire(pr.user.Email)
 	if release == nil {
 		writeError(w, http.StatusTooManyRequests, "Too many log streams are open. Close another log view and try again.")
@@ -407,13 +417,6 @@ func (b *buildsAPI) buildLogs(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 	s.out = &sseWriter{w: w, rc: http.NewResponseController(w), timeout: b.logs.writeTimeout}
 	if finished && len(pods) == 0 {
-		// The pod is gone: its log may still be in VictoriaLogs, read with
-		// the console's identity like the pod, confined to this Build's pods.
-		start, end := historyRange(build.CreationTimestamp, build.Status.CompletionTime, b.now())
-		scope := logs.Scope{Namespaces: []string{builds.Namespace}, Fields: map[string]string{logs.FieldBuild: name, logs.FieldProject: project}}
-		if b.logHistory(r.Context(), s.out, scope, start, end, lq.tail, lq.container) {
-			return
-		}
 		if s.out.event("start", map[string]any{"pods": []string{}, "container": "", "follow": false, "previous": false}) == nil {
 			_ = s.end("gone", "This build's log is no longer available: its pod has been removed.")
 		}

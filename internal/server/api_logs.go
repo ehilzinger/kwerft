@@ -179,6 +179,20 @@ func (p *podsAPI) streamLogs(w http.ResponseWriter, r *http.Request, kind, proje
 		p.kubeError(w, r, pr, kind+".logs", target, targetNotFound(kind, project, name), err)
 		return
 	}
+	if task != nil && task.Status.Phase.Finished() && len(pods) == 0 && !lq.previous {
+		// A finished Task whose pods are gone (the Job was cleaned up): its
+		// log may still be in VictoriaLogs (api_logsearch.go). The user's
+		// RBAC check above covers it: same namespace, same pods.
+		start, end := historyRange(task.CreationTimestamp, task.Status.CompletionTime, p.now())
+		scope := logs.Scope{Namespaces: []string{project}, Fields: map[string]string{logs.FieldTask: name}}
+		if lq.pod != "" {
+			scope.Fields[logs.FieldPod] = lq.pod
+		}
+		if res := p.historyLog(r.Context(), scope, start, end, lq.tail, lq.container); res != nil {
+			sendHistory(w, p.logs.writeTimeout, res, lq.container)
+			return
+		}
+	}
 	if lq.pod != "" && len(pods) == 0 {
 		writeError(w, http.StatusNotFound, fmt.Sprintf("Replica %q is not part of %s %q.", lq.pod, kind, name))
 		return
@@ -206,16 +220,6 @@ func (p *podsAPI) streamLogs(w http.ResponseWriter, r *http.Request, kind, proje
 	h.Set("X-Accel-Buffering", "no") // no proxy buffering
 	w.WriteHeader(http.StatusOK)
 	s.out = &sseWriter{w: w, rc: http.NewResponseController(w), timeout: p.logs.writeTimeout}
-	if task != nil && task.Status.Phase.Finished() && len(pods) == 0 {
-		// A finished Task whose pods are gone (the Job was cleaned up): its
-		// log may still be in VictoriaLogs (api_logsearch.go). The user's
-		// RBAC check above covers it: same namespace, same pods.
-		start, end := historyRange(task.CreationTimestamp, task.Status.CompletionTime, p.now())
-		scope := logs.Scope{Namespaces: []string{project}, Fields: map[string]string{logs.FieldTask: name}}
-		if p.logHistory(r.Context(), s.out, scope, start, end, lq.tail, lq.container) {
-			return
-		}
-	}
 	s.run(r.Context(), pods)
 }
 
