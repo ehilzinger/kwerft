@@ -18,8 +18,19 @@ type GitConnectionStatusApplyConfiguration struct {
 	// WebhookURL receives the host's push and pull-request events.
 	WebhookURL *string `json:"webhookURL,omitempty"`
 	// LastDelivery is when the last valid webhook arrived.
-	LastDelivery *v1.Time                             `json:"lastDelivery,omitempty"`
-	Conditions   []metav1.ConditionApplyConfiguration `json:"conditions,omitempty"`
+	LastDelivery *v1.Time `json:"lastDelivery,omitempty"`
+	// WebhookAutomatic: Kwerft sets up the webhooks itself (the GitHub
+	// App's own, or one per repository) and none failed. False: add the
+	// webhook by hand, with WebhookURL and the webhook secret.
+	WebhookAutomatic *bool `json:"webhookAutomatic,omitempty"`
+	// Webhooks lists the repositories Apps build from with this connection
+	// and whether each has its webhook.
+	Webhooks []GitWebhookStatusApplyConfiguration `json:"webhooks,omitempty"`
+	// WebhookFingerprint identifies the URL and secret the automatic
+	// webhooks were last set to (a truncated hash, not the secret), so a
+	// rotated secret or a moved console reaches them.
+	WebhookFingerprint *string                              `json:"webhookFingerprint,omitempty"`
+	Conditions         []metav1.ConditionApplyConfiguration `json:"conditions,omitempty"`
 }
 
 // GitConnectionStatusApplyConfiguration constructs a declarative configuration of the GitConnectionStatus type for use with
@@ -57,6 +68,35 @@ func (b *GitConnectionStatusApplyConfiguration) WithWebhookURL(value string) *Gi
 // If called multiple times, the LastDelivery field is set to the value of the last call.
 func (b *GitConnectionStatusApplyConfiguration) WithLastDelivery(value v1.Time) *GitConnectionStatusApplyConfiguration {
 	b.LastDelivery = &value
+	return b
+}
+
+// WithWebhookAutomatic sets the WebhookAutomatic field in the declarative configuration to the given value
+// and returns the receiver, so that objects can be built by chaining "With" function invocations.
+// If called multiple times, the WebhookAutomatic field is set to the value of the last call.
+func (b *GitConnectionStatusApplyConfiguration) WithWebhookAutomatic(value bool) *GitConnectionStatusApplyConfiguration {
+	b.WebhookAutomatic = &value
+	return b
+}
+
+// WithWebhooks adds the given value to the Webhooks field in the declarative configuration
+// and returns the receiver, so that objects can be build by chaining "With" function invocations.
+// If called multiple times, values provided by each call will be appended to the Webhooks field.
+func (b *GitConnectionStatusApplyConfiguration) WithWebhooks(values ...*GitWebhookStatusApplyConfiguration) *GitConnectionStatusApplyConfiguration {
+	for i := range values {
+		if values[i] == nil {
+			panic("nil value passed to WithWebhooks")
+		}
+		b.Webhooks = append(b.Webhooks, *values[i])
+	}
+	return b
+}
+
+// WithWebhookFingerprint sets the WebhookFingerprint field in the declarative configuration to the given value
+// and returns the receiver, so that objects can be built by chaining "With" function invocations.
+// If called multiple times, the WebhookFingerprint field is set to the value of the last call.
+func (b *GitConnectionStatusApplyConfiguration) WithWebhookFingerprint(value string) *GitConnectionStatusApplyConfiguration {
+	b.WebhookFingerprint = &value
 	return b
 }
 

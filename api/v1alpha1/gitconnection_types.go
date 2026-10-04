@@ -87,8 +87,35 @@ type GitConnectionStatus struct {
 	// +optional
 	LastDelivery *metav1.Time `json:"lastDelivery,omitempty"`
 
+	// WebhookAutomatic: Kwerft sets up the webhooks itself (the GitHub
+	// App's own, or one per repository) and none failed. False: add the
+	// webhook by hand, with WebhookURL and the webhook secret.
+	// +optional
+	WebhookAutomatic bool `json:"webhookAutomatic,omitempty"`
+
+	// Webhooks lists the repositories Apps build from with this connection
+	// and whether each has its webhook.
+	// +optional
+	Webhooks []GitWebhookStatus `json:"webhooks,omitempty"`
+
+	// WebhookFingerprint identifies the URL and secret the automatic
+	// webhooks were last set to (a truncated hash, not the secret), so a
+	// rotated secret or a moved console reaches them.
+	// +optional
+	WebhookFingerprint string `json:"webhookFingerprint,omitempty"`
+
 	// +optional
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
+}
+
+// GitWebhookStatus is the webhook of one repository.
+type GitWebhookStatus struct {
+	Repository string `json:"repository"`
+	// Automatic: Kwerft created the webhook and keeps it current.
+	Automatic bool `json:"automatic"`
+	// Message says what to do when it is not automatic.
+	// +optional
+	Message string `json:"message,omitempty"`
 }
 
 // GitConnection grants access to repositories on a Git host. Apps with a

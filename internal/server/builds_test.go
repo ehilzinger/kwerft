@@ -188,6 +188,8 @@ func TestGitSourcesAreValidated(t *testing.T) {
 		if err := cluster.admin.Create(ctx, conn); err != nil && !apierrors.IsAlreadyExists(err) {
 			t.Fatal(err)
 		}
+		// Connections are cluster-wide: other tests list them.
+		t.Cleanup(func() { _ = cluster.admin.Delete(context.Background(), conn) })
 	}
 	src := func(git map[string]any) map[string]any {
 		return map[string]any{"name": "svc", "spec": map[string]any{"source": map[string]any{"git": git}}}

@@ -64,7 +64,20 @@ mention them in the commit message.
   Tasks); the reconciler deletes the Job and sets phase `Cancelled`.
 - Credentials: Secret `git-<connection>` in `kwerft-builds`, keys in
   `internal/builds`. Write-only for owners and admins (patch, never get),
-  like the DNS token.
+  like the DNS token. The GitConnection reconciler creates the Secret (with
+  a generated `webhook-secret`, owned by the connection) and keeps the Role
+  `kwerft:git-credentials` in `kwerft-builds` that grants owners and admins
+  `patch` on exactly the existing connections' Secrets; the console patches
+  credentials as the user. A Secret left by a deleted connection of the
+  same name is never adopted (its credentials may be for another host).
+- Commit checks: context `kwerft/<project>/<app>`, target URL
+  `https://<console>/apps/<project>/<app>?build=<build>`. The reporter
+  records the reported phase in the Build annotation
+  `kwerft.dev/reported-phase` (and a GitHub check run in
+  `kwerft.dev/check-run`).
+- Webhook Builds are named deterministically per App, trigger, pull request
+  and commit (redeliveries build nothing new); pull requests from forks are
+  never built.
 
 ## Console API
 
@@ -72,21 +85,32 @@ W3 (Git connections, checks, triggering):
 
 ```
 GET    /api/v1/git/connections                       → [Connection]
-POST   /api/v1/git/connections                       ← ConnectionInput → {connection, webhookSecret}
-PUT    /api/v1/git/connections/{name}                ← ConnectionInput (secrets optional) → Connection
-DELETE /api/v1/git/connections/{name}
+POST   /api/v1/git/connections                       ← ConnectionInput → {connection, webhookSecret, warning?}
+PUT    /api/v1/git/connections/{name}                ← ConnectionInput (secrets optional) → Connection (+ warning?)
+DELETE /api/v1/git/connections/{name}                (409 {error, apps[]} while Apps use it)
 POST   /api/v1/git/connections/{name}/webhook-secret → {webhookSecret}   (rotate; shown once)
-POST   /api/v1/git/check   ← {repository, branch?, connection?, path?, dockerfile?}
+POST   /api/v1/git/check   ← {repository, branch?, connection?, path?, dockerfile?, project?}
                            → {ok, message, defaultBranch?, head?: Commit, dockerfile?: bool, connection?: string}
 POST   /api/v1/projects/{p}/apps/{a}/builds  ← {commit?}  (empty: branch head) → Build
 POST   /api/v1/hooks/git/{connection}        (public; provider signature checked)
+                           → {event, builds[], existing[]?, ignored?}
 
 Connection = {name, provider, url, auth, owner?, projects[], account?, ready, message?,
-              webhookURL?, webhookAutomatic: bool, lastDelivery?, githubApp?: {appID, installationID, slug?}}
+              webhookURL?, webhookAutomatic: bool, webhooks: [{repository, automatic, message?}],
+              lastDelivery?, githubApp?: {appID, installationID, slug?}}
 ConnectionInput = {name, provider, url, auth, owner?, projects?, token?, sshPrivateKey?, knownHosts?,
                    githubApp?: {appID, installationID, privateKey?}}
 Commit = {sha, message, author, time?}
 ```
+
+Notes (W3): field errors are `400 {error, field}` with the ConnectionInput
+field names (`githubApp.appID` etc.). A PUT that changes the host or the
+kind of sign-in needs the new credentials (they never follow to another
+host); credentials of another kind are removed. `/git/check` without
+`connection` picks a ready connection that covers the repository (and
+`project`, if given), else tries anonymously; owners, admins and developers
+may call it. `knownHosts` is optional: the reconciler records the host key
+of the connection URL's host (port 22) on first use.
 
 W4 (reading builds):
 

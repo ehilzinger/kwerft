@@ -50,6 +50,8 @@ func ForKind(kind schema.GroupVersionKind) interface{} {
 		return &apiv1alpha1.GitHubAppSettingsApplyConfiguration{}
 	case v1alpha1.SchemeGroupVersion.WithKind("GitSource"):
 		return &apiv1alpha1.GitSourceApplyConfiguration{}
+	case v1alpha1.SchemeGroupVersion.WithKind("GitWebhookStatus"):
+		return &apiv1alpha1.GitWebhookStatusApplyConfiguration{}
 	case v1alpha1.SchemeGroupVersion.WithKind("ImageSource"):
 		return &apiv1alpha1.ImageSourceApplyConfiguration{}
 	case v1alpha1.SchemeGroupVersion.WithKind("Project"):

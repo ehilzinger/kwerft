@@ -37,7 +37,9 @@ import (
 
 	kwerftv1 "github.com/ehilzinger/kwerft/api/v1alpha1"
 	"github.com/ehilzinger/kwerft/internal/auth"
+	"github.com/ehilzinger/kwerft/internal/builds"
 	"github.com/ehilzinger/kwerft/internal/controllers"
+	"github.com/ehilzinger/kwerft/internal/git"
 	"github.com/ehilzinger/kwerft/internal/kube"
 	"github.com/ehilzinger/kwerft/internal/setup"
 	"github.com/ehilzinger/kwerft/internal/store"
@@ -137,6 +139,15 @@ func runWithCluster(m *testing.M) int {
 	}
 	if err := (&controllers.ScheduleReconciler{Client: mgr.GetClient()}).SetupWithManager(mgr); err != nil {
 		return fail("schedule reconciler", err)
+	}
+	// Git connections (git_test.go): their Secrets and RBAC live in the
+	// builds namespace; the reconciler talks to each test's fake Git host.
+	if err := admin.Create(ctx, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: builds.Namespace}}); err != nil {
+		return fail("create builds namespace", err)
+	}
+	if err := (&controllers.GitConnectionReconciler{Client: mgr.GetClient(), APIReader: mgr.GetAPIReader(),
+		Git: &git.Factory{HTTP: &http.Client{Transport: gitHosts}}, ConsoleDomain: "console.example.com"}).SetupWithManager(mgr); err != nil {
+		return fail("git connection reconciler", err)
 	}
 	go func() { _ = mgr.Start(ctx) }()
 
