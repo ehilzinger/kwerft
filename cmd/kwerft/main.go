@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"sync/atomic"
 	"syscall"
 	"time"
@@ -22,8 +23,11 @@ import (
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 
 	kwerftv1 "github.com/ehilzinger/kwerft/api/v1alpha1"
+	"github.com/ehilzinger/kwerft/internal/auth"
 	"github.com/ehilzinger/kwerft/internal/controllers"
 	"github.com/ehilzinger/kwerft/internal/server"
+	"github.com/ehilzinger/kwerft/internal/setup"
+	"github.com/ehilzinger/kwerft/internal/store"
 	"github.com/ehilzinger/kwerft/internal/version"
 	"github.com/ehilzinger/kwerft/web"
 )
@@ -38,6 +42,7 @@ func main() {
 		leaderElect    = flag.Bool("leader-elect", true, "use leader election so only one replica reconciles")
 		gatewayClass   = flag.String("gateway-class", "traefik", "GatewayClass of the shared Gateway")
 		clusterIssuer  = flag.String("cluster-issuer", "letsencrypt", "cert-manager ClusterIssuer for HTTPS listeners; empty disables certificates")
+		dev            = flag.Bool("dev", false, "local development: plain-HTTP cookies and a setup token printed to the log")
 	)
 	flag.Parse()
 
@@ -49,12 +54,22 @@ func main() {
 		os.Exit(2)
 	}
 
-	// TODO(phase-1): open the SQLite store in dataDir.
-	_ = dataDir
-
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
+	if err := os.MkdirAll(*dataDir, 0o700); err != nil {
+		log.Error("cannot create data directory", "dir", *dataDir, "err", err)
+		os.Exit(1)
+	}
+	st, err := store.Open(ctx, filepath.Join(*dataDir, "kwerft.db"))
+	if err != nil {
+		log.Error("cannot open the database", "err", err)
+		os.Exit(1)
+	}
+	defer st.Close()
+	go cleanSessions(ctx, log, st)
+
+	var tokens setup.TokenSource = setup.NewStaticTokenSource("", 0) // expired: no setup possible
 	var ready atomic.Bool
 	if *runControllers {
 		mgr, err := newManager(log, *leaderElect, &controllers.DomainReconciler{
@@ -66,6 +81,11 @@ func main() {
 			log.Error("cannot start controllers", "err", err)
 			os.Exit(1)
 		}
+		namespace := os.Getenv("POD_NAMESPACE")
+		if namespace == "" {
+			namespace = "kwerft-system"
+		}
+		tokens = &setup.SecretTokenSource{Reader: mgr.GetAPIReader(), Writer: mgr.GetClient(), Namespace: namespace}
 		go waitUntilReady(ctx, log, mgr, &ready)
 		go func() {
 			if err := mgr.Start(ctx); err != nil {
@@ -76,6 +96,11 @@ func main() {
 	} else {
 		ready.Store(true)
 	}
+	if *dev {
+		token := "kwft_setup_" + auth.NewToken()[:24]
+		tokens = setup.NewStaticTokenSource(token, 24*time.Hour)
+		log.Warn("development mode: plain-HTTP cookies; setup token for /setup", "token", token)
+	}
 
 	srv := server.New(server.Config{
 		Listen:        *listen,
@@ -84,6 +109,10 @@ func main() {
 		UI:            web.Assets(),
 		Logger:        log,
 		Ready:         ready.Load,
+
+		Store:           st,
+		SetupTokens:     tokens,
+		InsecureCookies: *dev,
 	})
 
 	go func() {
@@ -102,6 +131,24 @@ func main() {
 		log.Error("graceful shutdown failed", "err", err)
 	}
 	log.Info("kwerft stopped")
+}
+
+// cleanSessions deletes expired sessions once an hour.
+func cleanSessions(ctx context.Context, log *slog.Logger, st *store.Store) {
+	t := time.NewTicker(time.Hour)
+	defer t.Stop()
+	for {
+		if n, err := st.DeleteExpiredSessions(ctx, time.Now()); err != nil {
+			log.Error("session cleanup failed", "err", err)
+		} else if n > 0 {
+			log.Info("expired sessions removed", "count", n)
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+		}
+	}
 }
 
 // waitUntilReady marks the server ready once the caches for Kwerft's own types

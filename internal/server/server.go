@@ -11,6 +11,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ehilzinger/kwerft/internal/setup"
+	"github.com/ehilzinger/kwerft/internal/store"
 	"github.com/ehilzinger/kwerft/internal/version"
 )
 
@@ -24,6 +26,15 @@ type Config struct {
 	// Ready reports whether the server can serve real traffic (controller
 	// caches synced). Nil means always ready.
 	Ready func() bool
+
+	// Store and SetupTokens enable setup, sign-in and the authenticated API.
+	// Without a Store only health, version and the UI are served.
+	Store       *store.Store
+	SetupTokens setup.TokenSource
+	// InsecureCookies drops the Secure flag, for http://localhost development.
+	InsecureCookies bool
+	// Now is the clock; nil means time.Now (tests override it).
+	Now func() time.Time
 }
 
 // New returns an http.Server ready to ListenAndServe.
@@ -61,6 +72,9 @@ func Handler(cfg Config) http.Handler {
 			"platform": cfg.Platform,
 		})
 	})
+	if cfg.Store != nil {
+		newAPI(cfg).register(mux)
+	}
 	// Unknown API paths must not fall through to the SPA.
 	mux.HandleFunc("/api/", func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "not found"})

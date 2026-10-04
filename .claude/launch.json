@@ -4,7 +4,7 @@
     {
       "name": "kwerft",
       "runtimeExecutable": "go",
-      "runtimeArgs": ["run", "./cmd/kwerft", "--listen=:8080", "--console-domain=localhost", "--platform=cloud", "--controllers=false"],
+      "runtimeArgs": ["run", "./cmd/kwerft", "--listen=:8080", "--console-domain=localhost", "--platform=cloud", "--controllers=false", "--dev", "--data-dir=bin/dev-data"],
       "port": 8080
     },
     {

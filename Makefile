@@ -73,7 +73,7 @@ check: lint test test-install helm-lint ## Everything CI runs
 
 .PHONY: dev-api
 dev-api: dist-stub ## Run the API on :8080 (pair with `make dev-web`)
-	$(GO) run ./cmd/kwerft --listen=127.0.0.1:8080 --console-domain=localhost --platform=cloud --controllers=false
+	$(GO) run ./cmd/kwerft --listen=127.0.0.1:8080 --console-domain=localhost --platform=cloud --controllers=false --dev --data-dir=$(CURDIR)/bin/dev-data
 
 .PHONY: dev-server
 dev-server: ## Install/upgrade on a test server: make dev-server HOST=root@1.2.3.4 ARGS="--domain ops.example.com"

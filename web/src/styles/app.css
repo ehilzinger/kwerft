@@ -61,3 +61,63 @@ code { font-family: var(--mono); font-size: .92em; }
   .nav { grid-auto-flow: column; overflow-x: auto; }
   .nav .grp, .side-foot { display: none; }
 }
+
+/* ---------- forms ---------- */
+.field { display: grid; gap: 5px; }
+.field label { font-size: 12.5px; font-weight: 500; color: var(--ink-2); }
+.input { border: 1px solid var(--line); border-radius: 7px; padding: 8px 10px; background: var(--surface); font-size: 14px; width: 100%; }
+.input:focus-visible { outline: 2px solid var(--accent); outline-offset: 0; border-color: var(--accent); }
+.input.mono { font-family: var(--mono); font-size: 13px; }
+.input[aria-invalid="true"] { border-color: var(--bad); }
+.hint { font-size: 12px; color: var(--muted); }
+.field-error, .form-error { font-size: 12.5px; color: var(--bad); margin: 0; }
+.btn.wide { width: 100%; justify-content: center; padding: 9px 12px; }
+.btn.sm { padding: 3px 9px; font-size: 12px; }
+
+/* ---------- setup wizard ---------- */
+.setup { display: grid; grid-template-columns: 280px 1fr; min-height: 100%; background: var(--surface-2); }
+.setup aside { padding: 32px 26px; border-right: 1px solid var(--line); display: grid; gap: 28px; align-content: start; }
+.setup .brand { display: flex; align-items: center; gap: 8px; font-family: var(--display); font-weight: 700; font-size: 17px; }
+.setup .brand svg { width: 22px; height: 22px; color: var(--accent); }
+.vsteps { list-style: none; padding: 0; margin: 0; display: grid; }
+.vsteps li { display: grid; grid-template-columns: 24px 1fr; gap: 10px; padding-bottom: 20px; position: relative; font-size: 13.5px; }
+.vsteps li::before { content: ""; position: absolute; left: 11px; top: 26px; bottom: 2px; width: 2px; background: var(--line); }
+.vsteps li:last-child::before { display: none; }
+.vsteps .dot { width: 24px; height: 24px; border-radius: 50%; border: 2px solid var(--line); display: grid; place-items: center; font-size: 11px; font-family: var(--mono); background: var(--surface); color: var(--muted); }
+.vsteps small { display: block; color: var(--muted); font-size: 12px; }
+.vsteps li.done .dot { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
+.vsteps li.cur .dot { border-color: var(--accent); color: var(--accent); }
+.vsteps li.cur b { color: var(--accent); }
+.vsteps li.later { opacity: .6; }
+.setup main { padding: 48px 56px; }
+.setup-form { display: grid; gap: 22px; max-width: 560px; }
+.setup-form h1, .auth-card h1 { margin: 0; font-family: var(--display); font-size: 26px; font-weight: 700; letter-spacing: -.015em; text-wrap: balance; }
+.setup-form .lead { margin: 6px 0 0; color: var(--muted); max-width: 60ch; }
+.setup-form .fields { display: grid; grid-template-columns: 1fr 1fr; gap: 16px 18px; align-items: start; }
+.command { display: flex; align-items: center; gap: 10px; background: var(--sunk); border: 1px solid var(--line); border-radius: 8px; padding: 9px 12px; }
+.command code { flex: 1; user-select: all; overflow-x: auto; white-space: nowrap; }
+.actions { display: flex; justify-content: flex-end; }
+
+/* ---------- sign in ---------- */
+.auth-page { min-height: 100%; display: grid; place-items: center; padding: 24px 16px; background: var(--surface-2); }
+.auth-card { width: 100%; max-width: 380px; display: grid; gap: 16px; background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 28px; }
+.auth-card .brand { display: flex; align-items: center; gap: 8px; font-family: var(--display); font-weight: 700; font-size: 17px; }
+.auth-card .brand svg { width: 22px; height: 22px; color: var(--accent); }
+.auth-foot { margin: 0; text-align: center; font-size: 12px; color: var(--faint); font-family: var(--mono); }
+
+/* ---------- signed-in user ---------- */
+.side-foot { display: grid; gap: 10px; }
+.who { display: grid; grid-template-columns: auto 1fr auto; gap: 8px; align-items: center; font-family: var(--sans); }
+.who b { display: block; font-size: 12.5px; color: var(--ink); font-weight: 600; }
+.who small { color: var(--muted); font-size: 11px; text-transform: capitalize; }
+.avatar { width: 28px; height: 28px; border-radius: 50%; display: grid; place-items: center; font-size: 11px; font-weight: 600; background: var(--accent-2); color: var(--accent); }
+.ver { font-size: 11px; }
+
+@media (max-width: 760px) {
+  .setup { grid-template-columns: 1fr; }
+  .setup aside { border-right: 0; border-bottom: 1px solid var(--line); padding: 20px 16px; }
+  .vsteps { grid-auto-flow: column; overflow-x: auto; }
+  .vsteps li::before { display: none; }
+  .setup main { padding: 24px 16px; }
+  .setup-form .fields { grid-template-columns: 1fr; }
+}

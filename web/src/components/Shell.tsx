@@ -1,5 +1,5 @@
-import { Link, Outlet, useRouterState } from "@tanstack/react-router";
-import { useQuery } from "@tanstack/react-query";
+import { Link, Outlet, useNavigate, useRouterState } from "@tanstack/react-router";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../api";
 import { Icon, type IconName } from "./Icon";
 
@@ -28,6 +28,18 @@ export function Shell() {
   const path = useRouterState({ select: (s) => s.location.pathname });
   const version = useQuery({ queryKey: ["version"], queryFn: api.version, staleTime: Infinity });
   const section = "/" + (path.split("/")[1] ?? "");
+  const user = useQuery({ queryKey: ["session"], queryFn: api.session });
+  const queryClient = useQueryClient();
+  const navigate = useNavigate();
+
+  async function signOut() {
+    try {
+      await api.logout();
+    } finally {
+      queryClient.removeQueries({ queryKey: ["session"] });
+      await navigate({ to: "/login", search: { next: "/" } });
+    }
+  }
 
   return (
     <div className="shell">
@@ -47,7 +59,14 @@ export function Shell() {
           ))}
         </nav>
         <div className="side-foot">
-          {version.data ? `v${version.data.version} · ${version.data.platform}` : version.isError ? "API unreachable" : "…"}
+          {user.data && (
+            <div className="who">
+              <span className="avatar" aria-hidden="true">{initials(user.data.name)}</span>
+              <div><b>{user.data.name}</b><small>{user.data.role}</small></div>
+              <button className="btn sm" onClick={signOut}>Sign out</button>
+            </div>
+          )}
+          <span className="ver">{version.data ? `v${version.data.version} · ${version.data.platform}` : version.isError ? "API unreachable" : "…"}</span>
         </div>
       </aside>
       <div className="main">
@@ -58,4 +77,8 @@ export function Shell() {
       </div>
     </div>
   );
+}
+
+function initials(name: string) {
+  return name.split(/\s+/).filter(Boolean).slice(0, 2).map((p) => p[0]!.toUpperCase()).join("");
 }
