@@ -278,6 +278,9 @@ func (a *api) totpDisable(w http.ResponseWriter, r *http.Request) {
 		a.internalError(w, r, err)
 		return
 	}
+	if t.Confirmed && !a.keepsRequiredFactor(w, r, u, func(f store.Factors) bool { return f.Passkeys > 0 }) {
+		return
+	}
 	if err := a.store.DeleteTOTP(ctx, u.ID); err != nil {
 		a.internalError(w, r, err)
 		return

@@ -418,11 +418,14 @@ func (a *api) passkeyDelete(w http.ResponseWriter, r *http.Request) {
 		a.internalError(w, r, err)
 		return
 	}
-	name := ""
+	name, found := "", false
 	for _, pk := range list {
 		if pk.ID == r.PathValue("id") {
-			name = pk.Name
+			name, found = pk.Name, true
 		}
+	}
+	if found && !a.keepsRequiredFactor(w, r, p.user, func(f store.Factors) bool { return f.TOTP || f.Passkeys > 1 }) {
+		return
 	}
 	err = a.store.DeletePasskey(ctx, p.user.ID, r.PathValue("id"))
 	if errors.Is(err, store.ErrNotFound) {

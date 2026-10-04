@@ -412,6 +412,16 @@ func (p *podsAPI) recordingList(w http.ResponseWriter, r *http.Request) {
 		p.internalError(w, r, err)
 		return
 	}
+	// Owners and admins (the route's roles) see every project's sessions.
+	// Should the route ever open to other roles, they get their projects'.
+	if pr := principalOf(r); !unconfined(pr) {
+		scope, err := p.projectScope(r.Context(), pr)
+		if err != nil {
+			p.internalError(w, r, err)
+			return
+		}
+		list = slices.DeleteFunc(list, func(m recordingMeta) bool { return !scope.has(m.Project) })
+	}
 	writeJSON(w, http.StatusOK, list)
 }
 

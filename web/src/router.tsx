@@ -68,12 +68,15 @@ const authed = createRoute({
   component: Shell,
   beforeLoad: async ({ context, location }) => {
     if (!(await setupStatus(context.queryClient)).complete) throw redirect({ to: "/setup" });
+    let session;
     try {
-      await context.queryClient.ensureQueryData({ queryKey: ["session"], queryFn: api.session });
+      session = await context.queryClient.ensureQueryData({ queryKey: ["session"], queryFn: api.session });
     } catch (e) {
       if (isUnauthorized(e)) throw redirect({ to: "/login", search: { next: location.href } });
       throw e;
     }
+    // The console requires a second factor this user lacks: set one up first.
+    if (session.mustEnrol && location.pathname !== "/account") throw redirect({ to: "/account" });
   },
 });
 

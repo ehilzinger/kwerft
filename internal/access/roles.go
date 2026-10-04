@@ -6,9 +6,18 @@
 //
 // Mapping: a console user with role R reaches Kubernetes as user
 // "kwerft:<email>" in group "kwerft:role:R" (see internal/kube). The chart
-// binds that group cluster-wide to the ClusterRole "kwerft:R"; every project
-// namespace binds it to "kwerft:pods-read" (all roles) and "kwerft:pods-exec"
-// (owner, admin, developer).
+// binds that group cluster-wide to the ClusterRole "kwerft:R": everything in
+// kwerft.dev for owners and admins, the cluster-scoped kinds only for
+// developers and viewers. Each project namespace adds RoleBindings
+// (controllers.ProjectBindings): with access Team (the default) the groups
+// get "kwerft:project-developer" / "kwerft:project-viewer", "kwerft:pods-read"
+// (all roles) and "kwerft:pods-exec" (owner, admin, developer); with access
+// Members the listed users get the same by their project role instead, and
+// developers and viewers who are not listed get nothing there.
+//
+// The matrix describes a Team project. In a Members project a member's
+// project role (developer or viewer) takes the place of their console role
+// for everything namespaced; owners and admins are unaffected.
 package access
 
 import "slices"
@@ -45,8 +54,8 @@ type Check struct {
 	Resource    string
 	Subresource string
 	Verb        string
-	// Namespaced checks are asked in a project namespace; the rest at
-	// cluster scope.
+	// Namespaced checks are asked in a project namespace (with access
+	// Team); the rest at cluster scope.
 	Namespaced bool
 }
 
@@ -79,8 +88,15 @@ func all(g Grant) map[string]Grant {
 // Permission IDs the console checks itself.
 const (
 	ManageMembers = "members"
-	ReadAudit     = "audit"
-	SilenceAlerts = "silence"
+	// ProjectAccess: Team or Members, and who the members are. Kubernetes
+	// decides (update on the Project); the console asks for owner or admin
+	// first.
+	ProjectAccess = "project-access"
+	// RequireTwoFactor: the console setting that sends everyone without a
+	// second factor to enrol after the password.
+	RequireTwoFactor = "require-2fa"
+	ReadAudit        = "audit"
+	SilenceAlerts    = "silence"
 	// AlertRules is enforced by Kubernetes, but the console also checks it
 	// for Custom rules (owners and admins only).
 	AlertRules = "alert-rules"
@@ -89,7 +105,7 @@ const (
 // Matrix is the source of truth, in the order the Access page shows it.
 var Matrix = []Permission{
 	{
-		ID: "view", Label: "View projects, apps, jobs, pods and logs", Enforced: ByKubernetes,
+		ID: "view", Label: "View apps, jobs, pods and logs of the projects they reach", Enforced: ByKubernetes,
 		Grants: all(yes),
 		Kube: []Check{
 			{Group: "kwerft.dev", Resource: "projects", Verb: "list"},
@@ -133,11 +149,32 @@ var Matrix = []Permission{
 		},
 	},
 	{
+		// A TrafficRule lives in its project's namespace, so a developer
+		// writes the rules of the projects they work in only.
+		ID: "traffic", Label: "Edit traffic rules", Enforced: ByKubernetes,
+		Grants: map[string]Grant{Owner: yes, Admin: yes, Developer: {Level: Partial, Note: "within their projects"}, Viewer: no},
+		Kube: []Check{
+			{Group: "kwerft.dev", Resource: "trafficrules", Verb: "create", Namespaced: true},
+			{Group: "kwerft.dev", Resource: "trafficrules", Verb: "update", Namespaced: true},
+			{Group: "kwerft.dev", Resource: "trafficrules", Verb: "delete", Namespaced: true},
+		},
+	},
+	{
 		ID: "projects", Label: "Create and delete projects", Enforced: ByKubernetes,
 		Grants: map[string]Grant{Owner: yes, Admin: yes, Developer: no, Viewer: no},
 		Kube: []Check{
 			{Group: "kwerft.dev", Resource: "projects", Verb: "create"},
 			{Group: "kwerft.dev", Resource: "projects", Verb: "delete"},
+		},
+	},
+	{
+		// Members of a project are console users; the project role
+		// (developer or viewer) replaces their console role there.
+		ID: ProjectAccess, Label: "Limit a project to its members and manage them", Enforced: ByKubernetes,
+		Grants: map[string]Grant{Owner: yes, Admin: yes, Developer: no, Viewer: no},
+		Kube: []Check{
+			{Group: "kwerft.dev", Resource: "projects", Verb: "update"},
+			{Group: "kwerft.dev", Resource: "projects", Verb: "patch"},
 		},
 	},
 	{
@@ -187,8 +224,12 @@ var Matrix = []Permission{
 		},
 	},
 	{
-		ID: ManageMembers, Label: "Invite members, change roles, remove members", Enforced: ByConsole,
+		ID: ManageMembers, Label: "Invite members, change roles, remove members, reset their second factors", Enforced: ByConsole,
 		Grants: map[string]Grant{Owner: yes, Admin: {Level: Partial, Note: "not owners"}, Developer: no, Viewer: no},
+	},
+	{
+		ID: RequireTwoFactor, Label: "Require two-factor sign-in for everyone", Enforced: ByConsole,
+		Grants: map[string]Grant{Owner: yes, Admin: no, Developer: no, Viewer: no},
 	},
 	{
 		ID: ReadAudit, Label: "Read the audit log and shell recordings", Enforced: ByConsole,

@@ -41,6 +41,48 @@ the contract between them. Shared, already on main: `api/v1alpha1`
   Project, audited). Changing a project from Team to Members asks who keeps
   access.
 
+### As built (W1)
+
+- RBAC: `kwerft:developer`/`kwerft:viewer` (cluster-wide) list only the
+  cluster-scoped kinds by name — never `"*"`, which a ClusterRoleBinding
+  would apply to every namespace. Namespaced rights moved to
+  `kwerft:project-developer` / `kwerft:project-viewer` (apps, domains,
+  tasks, schedules, volumes, trafficrules write; builds create/patch; `"*"`
+  read), bound per project with `kwerft:pods-read`/`-exec` by
+  `controllers.ProjectBindings` — the one function the reconciler, the
+  access matrix tests and the isolation suite share. RoleBinding subjects
+  are atomic, so a removed member or a switch to Members takes old subjects
+  away on the next apply. Owners and admins get pods/exec through their
+  groups in every project, Team or Members.
+- Upgrade: a Project without `spec.access` is Team; the reconciler adds the
+  two new bindings on its startup resync. Between the chart upgrade and that
+  resync (seconds) developers and viewers lack namespaced access.
+- Members are console accounts, stored with the account's own spelling of
+  the address (Kubernetes compares `kwerft:<email>` byte for byte); owners
+  and admins cannot be listed (they reach everything). Switching to Team
+  clears the list, so a later switch back never revives stale grants.
+  Removing a console account takes it off every project (as the remover).
+- `projectScope` (`internal/server/scope.go`): projects reached (from the
+  spec, as the reconciler binds), their namespaces only when labelled by the
+  reconciler for that project, a role per project, a platform flag for
+  owners and admins, and `restrict(projects)` for project-limited API
+  tokens (W4 wires it at merge). Used by: project list, apps, tasks,
+  schedules, volumes, domains (cache-backed, filtered; without a cache:
+  per-namespace lists as the user), metrics overview/explorer, log search
+  and tail, alerts, silences, alert rules, recordings. Developers write
+  alert rules only for projects where their role allows it (a rule without
+  scope needs every project) and see only rules about projects they reach;
+  silencing follows the role in the alert's project.
+- "Require two-factor sign-in" is an owner-only setting in SQLite
+  (`settings` table, migration after W4's). It is enforced per request in
+  `requireUser` (any session, however it signed in: password, passkey,
+  SSO): without a factor only session, account enrolment and sign-out
+  routes answer (`403 code=enrolSecondFactor`), and the UI routes to the
+  Account page. Turning it on needs a factor of one's own; with it on,
+  nobody removes their last factor.
+- Behaviour change: a developer writing into a namespace they do not reach
+  (also a missing project) now gets 403 instead of 404.
+
 ## Traffic (W2)
 
 - Cilium is the CNI (kube-proxy replacement); policies move to

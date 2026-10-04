@@ -199,31 +199,27 @@ func (a *api) trafficOverview(w http.ResponseWriter, r *http.Request) {
 // trafficScope is what the cluster-wide drop list may show: everything for
 // owners and admins, otherwise the namespaces of the projects the user can
 // list. TODO(phase-4 W1): use projectScope.
-func (a *api) trafficScope(ctx context.Context, c client.Client, p *principal) (hubble.Scope, error) {
-	if unconfined(p) {
-		return hubble.Unconfined(), nil
-	}
-	var projects kwerftv1.ProjectList
-	if err := a.list(ctx, c, &projects); err != nil {
+func (a *api) trafficScope(ctx context.Context, p *principal) (hubble.Scope, error) {
+	s, err := a.projectScope(ctx, p)
+	if err != nil {
 		return hubble.Scope{}, err
 	}
-	names := make([]string, 0, len(projects.Items))
-	for _, pr := range projects.Items {
-		names = append(names, pr.Name)
+	if s.platform {
+		return hubble.Unconfined(), nil
 	}
-	return hubble.Namespaces(names...), nil
+	return hubble.Namespaces(s.namespaces()...), nil
 }
 
 // trafficDrops lists dropped connections across the user's projects (the
 // Overview's "needs attention").
 func (a *api) trafficDrops(w http.ResponseWriter, r *http.Request) {
-	c, p, ctx, cancel, err := a.userClient(r)
+	_, p, ctx, cancel, err := a.userClient(r)
 	defer cancel()
 	if err != nil {
 		a.internalError(w, r, err)
 		return
 	}
-	scope, err := a.trafficScope(ctx, c, p)
+	scope, err := a.trafficScope(ctx, p)
 	if err != nil {
 		a.kubeError(w, r, p, "traffic.read", "", "No projects found.", err)
 		return

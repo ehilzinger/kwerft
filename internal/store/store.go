@@ -190,6 +190,14 @@ var migrations = []string{
 		PRIMARY KEY (issuer, subject)
 	);
 	CREATE UNIQUE INDEX user_identities_user ON user_identities(user_id, issuer);`,
+	// Console-wide settings that are about sign-in rather than the cluster,
+	// such as "require two-factor sign-in" (see policy.go).
+	`CREATE TABLE settings (
+		org_id TEXT NOT NULL,
+		key    TEXT NOT NULL,
+		value  TEXT NOT NULL,
+		PRIMARY KEY (org_id, key)
+	);`,
 }
 
 func (s *Store) migrate(ctx context.Context) error {

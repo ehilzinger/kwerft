@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"net"
 	"net/http"
 	"net/url"
@@ -41,11 +42,16 @@ import (
 //   - Alerts and silences live in Alertmanager, which has no users. The
 //     console reads and writes them with its own access (in-cluster) and
 //     confines them itself, like metrics and logs: alerts carrying the
-//     namespace of a project the user may read are that project's; all
-//     others (nodes, the console's certificate, platform namespaces) are
-//     platform alerts, for owners and admins only. Developers silence alerts
-//     of projects (a silence must match namespace=<project> exactly); owners
-//     and admins any alert. Viewers only look. Every change is audited.
+//     namespace of a project the user reaches (scope.go) are that project's;
+//     all others (nodes, the console's certificate, platform namespaces,
+//     projects the user does not reach) are not shown, except to owners and
+//     admins. Developers silence alerts of their projects (a silence must
+//     match namespace=<project> exactly; in a Members project the role given
+//     there counts); owners and admins any alert. Viewers only look. Every
+//     change is audited.
+//   - Rules are cluster-wide. Developers and viewers see the rules that
+//     watch only projects they reach (or every project, naming none), and
+//     developers write only rules watching projects they work in.
 //   - AlertRules and NotificationChannels are written as the signed-in user
 //     (impersonated), so Kubernetes RBAC decides (roles.yaml): owners and
 //     admins write both, developers write rules. RBAC cannot see a rule's
@@ -89,8 +95,11 @@ func (a *api) registerAlerts(mux *http.ServeMux) {
 
 	mux.HandleFunc("GET /api/v1/alerts", read(al.list))
 	mux.HandleFunc("GET /api/v1/alerts/silences", read(al.silences))
-	mux.HandleFunc("POST /api/v1/alerts/silences", may(access.SilenceAlerts, al.silenceCreate))
-	mux.HandleFunc("DELETE /api/v1/alerts/silences/{id}", may(access.SilenceAlerts, al.silenceDelete))
+	// Everyone who sees an alert may ask; maySilence decides by the role in
+	// the alert's project (a console viewer can be a developer in a Members
+	// project).
+	mux.HandleFunc("POST /api/v1/alerts/silences", write(al.silenceCreate))
+	mux.HandleFunc("DELETE /api/v1/alerts/silences/{id}", write(al.silenceDelete))
 
 	mux.HandleFunc("GET /api/v1/alerts/conditions", read(al.conditions))
 	mux.HandleFunc("GET /api/v1/alerts/rules", read(al.rules))
@@ -118,24 +127,94 @@ func (al *alertsAPI) upstreamError(w http.ResponseWriter, r *http.Request, err e
 
 // ---- who sees what -------------------------------------------------------------------
 
-// visibility is what a user may see of alerts: project namespaces, and
-// whether platform alerts too.
+// visibility is what a user may see of alerts: the namespaces of the
+// projects they reach (scope.go), and whether platform alerts too.
 type visibility struct {
 	projects map[string]bool
 	platform bool
+	scope    *projectScope
 }
 
-func (al *alertsAPI) visibility(ctx context.Context, c client.Client, p *principal) (visibility, error) {
-	// Every role reads every project today (Phase 4 narrows this list).
-	var list kwerftv1.ProjectList
-	if err := al.api.list(ctx, c, &list); err != nil {
+func (al *alertsAPI) visibility(ctx context.Context, _ client.Client, p *principal) (visibility, error) {
+	scope, err := al.projectScope(ctx, p)
+	if err != nil {
 		return visibility{}, err
 	}
-	v := visibility{projects: map[string]bool{}, platform: p.user.Role == store.RoleOwner || p.user.Role == store.RoleAdmin}
-	for _, pr := range list.Items {
-		v.projects[pr.Name] = true
+	v := visibility{projects: map[string]bool{}, platform: scope.platform, scope: scope}
+	for _, ns := range scope.namespaces() {
+		v.projects[ns] = true
 	}
 	return v, nil
+}
+
+// maySilence: owners and admins silence anything they see; others the
+// alerts of a project where their role (in a Members project, the one given
+// there) may silence.
+func (v visibility) maySilence(project string) bool {
+	return v.platform || (project != "" && access.Allowed(v.scope.role(project), access.SilenceAlerts))
+}
+
+// ruleProjects are the projects an alert rule watches; nil means all of them
+// (no scope), including any created later.
+func ruleProjects(spec *kwerftv1.AlertRuleSpec) []string {
+	if len(spec.Scope.Projects) == 0 && len(spec.Scope.Apps) == 0 {
+		return nil
+	}
+	out := slices.Clone(spec.Scope.Projects)
+	for _, a := range spec.Scope.Apps {
+		project, _, _ := strings.Cut(a, "/")
+		out = append(out, project)
+	}
+	return out
+}
+
+// seesRule: a rule watching only projects the user reaches, or everything
+// when the user reaches every project. Rules about other projects are not
+// shown: their scope names those projects and apps.
+func (v visibility) seesRule(spec *kwerftv1.AlertRuleSpec) bool {
+	if v.scope.reachesAll() {
+		return true // nothing to hide (a project that does not exist yet included)
+	}
+	projects := ruleProjects(spec)
+	if projects == nil {
+		return true // "every project" names none
+	}
+	for _, p := range projects {
+		if !v.scope.reaches(p) {
+			return false
+		}
+	}
+	return true
+}
+
+// mayWriteRule: owners and admins any rule; others only rules that watch
+// nothing but projects where their role may write rules, so a rule cannot be
+// pointed at (or notify from) a project they do not reach. A rule without a
+// scope watches every project, so only someone who reaches all of them may
+// write one.
+func (v visibility) mayWriteRule(spec *kwerftv1.AlertRuleSpec) bool {
+	if v.platform {
+		return true
+	}
+	projects := ruleProjects(spec)
+	if projects == nil {
+		if !v.scope.reachesAll() {
+			return false
+		}
+		projects = slices.Collect(maps.Keys(v.scope.roles))
+	}
+	for _, p := range projects {
+		role := v.scope.role(p)
+		if role == "" && v.scope.reachesAll() {
+			// No such project (yet): someone who reaches every project
+			// may name one, as they may write a rule for all of them.
+			continue
+		}
+		if !access.Allowed(role, access.AlertRules) {
+			return false
+		}
+	}
+	return true
 }
 
 // project is the project an alert belongs to ("" for platform alerts).
@@ -527,6 +606,11 @@ func (al *alertsAPI) silenceCreate(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusForbidden, "Your role may silence alerts of projects only.")
 		return
 	}
+	if project := v.silenceProject(matchers); !v.maySilence(project) {
+		al.audit(r, p.user.Email, "alerts.silence_create.denied", project, "role in the project may not silence")
+		writeError(w, http.StatusForbidden, "Your role in this project does not allow silencing alerts.")
+		return
+	}
 	now := al.now()
 	s := alerting.Silence{Matchers: matchers, StartsAt: now, EndsAt: now.Add(d), CreatedBy: p.user.Email, Comment: comment}
 	id, err := al.am.CreateSilence(ctx, s)
@@ -585,6 +669,11 @@ func (al *alertsAPI) silenceDelete(w http.ResponseWriter, r *http.Request) {
 	}
 	if err != nil {
 		al.upstreamError(w, r, err)
+		return
+	}
+	if project := v.silenceProject(s.Matchers); !v.maySilence(project) {
+		al.audit(r, p.user.Email, "alerts.silence_delete.denied", id, "role in the project may not silence")
+		writeError(w, http.StatusForbidden, "Your role in this project does not allow silencing alerts.")
 		return
 	}
 	if err := al.am.DeleteSilence(ctx, id); err != nil && !errors.Is(err, alerting.ErrNotFound) {
@@ -729,6 +818,9 @@ func (al *alertsAPI) rules(w http.ResponseWriter, r *http.Request) {
 	firing := al.firingByRule(ctx, v)
 	out := make([]ruleJSON, 0, len(list.Items))
 	for i := range list.Items {
+		if !v.seesRule(&list.Items[i].Spec) {
+			continue // about projects the user does not reach
+		}
 		out = append(out, ruleView(&list.Items[i], firing[list.Items[i].Name]))
 	}
 	slices.SortFunc(out, func(a, b ruleJSON) int { return strings.Compare(a.Name, b.Name) })
@@ -809,6 +901,28 @@ func (al *alertsAPI) customAllowed(w http.ResponseWriter, r *http.Request, p *pr
 	return true
 }
 
+// scopeAllowed: rules of developers watch only projects they work in
+// (visibility.mayWriteRule), checked for the rule as it is and as it will be.
+func (al *alertsAPI) scopeAllowed(w http.ResponseWriter, r *http.Request, ctx context.Context, p *principal, name string, specs ...kwerftv1.AlertRuleSpec) bool {
+	if unconfined(p) {
+		return true
+	}
+	v, err := al.visibility(ctx, nil, p)
+	if err != nil {
+		al.kubeError(w, r, p, "alerts.rule", name, "Projects not found.", err)
+		return false
+	}
+	for i := range specs {
+		if !v.mayWriteRule(&specs[i]) {
+			al.audit(r, p.user.Email, "alerts.rule.denied", name, "watches projects beyond the user's")
+			writeJSON(w, http.StatusForbidden, map[string]string{"field": "scope",
+				"error": "Rules you write may only watch projects you work in. Pick them under Scope."})
+			return false
+		}
+	}
+	return true
+}
+
 func ruleDetail(spec kwerftv1.AlertRuleSpec) string {
 	d := alerting.Describe(&spec) + "; severity " + string(spec.Severity)
 	if len(spec.Channels) > 0 {
@@ -843,7 +957,7 @@ func (al *alertsAPI) ruleCreate(w http.ResponseWriter, r *http.Request) {
 		al.internalError(w, r, err)
 		return
 	}
-	if !al.customAllowed(w, r, p, name, spec) {
+	if !al.customAllowed(w, r, p, name, spec) || !al.scopeAllowed(w, r, ctx, p, name, spec) {
 		return
 	}
 	rule := &kwerftv1.AlertRule{ObjectMeta: metav1.ObjectMeta{Name: name}, Spec: spec}
@@ -880,7 +994,7 @@ func (al *alertsAPI) ruleUpdate(w http.ResponseWriter, r *http.Request) {
 		al.kubeError(w, r, p, "alerts.rule_update", name, ruleNotFound(name), err)
 		return
 	}
-	if !al.customAllowed(w, r, p, name, rule.Spec, spec) {
+	if !al.customAllowed(w, r, p, name, rule.Spec, spec) || !al.scopeAllowed(w, r, ctx, p, name, rule.Spec, spec) {
 		return
 	}
 	old := rule.Spec
@@ -913,7 +1027,7 @@ func (al *alertsAPI) ruleDelete(w http.ResponseWriter, r *http.Request) {
 		al.kubeError(w, r, p, "alerts.rule_delete", name, ruleNotFound(name), err)
 		return
 	}
-	if !al.customAllowed(w, r, p, name, rule.Spec) {
+	if !al.customAllowed(w, r, p, name, rule.Spec) || !al.scopeAllowed(w, r, ctx, p, name, rule.Spec) {
 		return
 	}
 	uid := rule.UID

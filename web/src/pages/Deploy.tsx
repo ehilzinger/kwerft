@@ -156,8 +156,8 @@ export function Deploy() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const session = useQuery({ queryKey: ["session"], queryFn: api.session });
-  const can = abilities(session.data);
   const projects = useQuery({ queryKey: ["projects"], queryFn: workloads.projects });
+  const can = abilities(session.data, undefined, projects.data);
 
   const [step, setStep] = useState<Step>("source");
   const [visited, setVisited] = useState<Set<Step>>(new Set(["source"]));

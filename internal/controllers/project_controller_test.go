@@ -235,33 +235,82 @@ func TestProjectRefusesForeignNamespace(t *testing.T) {
 	}
 }
 
-func TestProjectBindsPodAccessForConsoleRoles(t *testing.T) {
+// expectBinding waits until a project RoleBinding's subjects, as
+// "Group:name" / "User:name", equal want.
+func expectBinding(t *testing.T, p *kwerftv1.Project, role string, want []string) {
+	t.Helper()
+	ctx := context.Background()
+	var rb rbacv1.RoleBinding
+	eventually(t, func() error {
+		if err := k8s.Get(ctx, client.ObjectKey{Namespace: p.Name, Name: role}, &rb); err != nil {
+			return err
+		}
+		got := []string{}
+		for _, s := range rb.Subjects {
+			got = append(got, s.Kind+":"+s.Name)
+		}
+		if fmt.Sprint(got) != fmt.Sprint(want) {
+			return fmt.Errorf("%s: subjects = %v, want %v", role, got, want)
+		}
+		return nil
+	})
+	if rb.RoleRef.Kind != "ClusterRole" || rb.RoleRef.Name != role {
+		t.Errorf("%s: roleRef = %+v", role, rb.RoleRef)
+	}
+	if !metav1.IsControlledBy(&rb, p) {
+		t.Errorf("%s: not controlled by the Project", role)
+	}
+}
+
+func TestProjectBindsTeamRolesByDefault(t *testing.T) {
+	requireEnvtest(t)
+	p := createProject(t, "pod-access", kwerftv1.ProjectSpec{})
+	const owner, admin, dev, viewer = "Group:kwerft:role:owner", "Group:kwerft:role:admin", "Group:kwerft:role:developer", "Group:kwerft:role:viewer"
+	expectBinding(t, p, ProjectDeveloperRole, []string{dev})
+	expectBinding(t, p, ProjectViewerRole, []string{viewer})
+	expectBinding(t, p, PodsReadRole, []string{owner, admin, dev, viewer})
+	expectBinding(t, p, PodsExecRole, []string{owner, admin, dev})
+}
+
+// TestProjectMembersReplaceTheTeam: access Members binds the listed users
+// with their project role and drops the developer and viewer groups; back to
+// Team restores them.
+func TestProjectMembersReplaceTheTeam(t *testing.T) {
 	requireEnvtest(t)
 	ctx := context.Background()
-	p := createProject(t, "pod-access", kwerftv1.ProjectSpec{})
+	p := createProject(t, "members-only", kwerftv1.ProjectSpec{
+		Access: kwerftv1.ProjectAccessMembers,
+		Members: []kwerftv1.ProjectMember{
+			{User: "vic@example.com", Role: "viewer"},
+			{User: "dana@example.com", Role: "developer"},
+		},
+	})
+	const owner, admin = "Group:kwerft:role:owner", "Group:kwerft:role:admin"
+	const dana, vic = "User:kwerft:dana@example.com", "User:kwerft:vic@example.com"
+	expectBinding(t, p, ProjectDeveloperRole, []string{dana})
+	expectBinding(t, p, ProjectViewerRole, []string{vic})
+	expectBinding(t, p, PodsReadRole, []string{owner, admin, dana, vic})
+	expectBinding(t, p, PodsExecRole, []string{owner, admin, dana})
 
-	want := map[string][]string{
-		PodsReadRole: {"kwerft:role:owner", "kwerft:role:admin", "kwerft:role:developer", "kwerft:role:viewer"},
-		PodsExecRole: {"kwerft:role:owner", "kwerft:role:admin", "kwerft:role:developer"},
+	// Removing the last developer leaves the binding without subjects.
+	if err := k8s.Get(ctx, client.ObjectKeyFromObject(p), p); err != nil {
+		t.Fatal(err)
 	}
-	for role, groups := range want {
-		var rb rbacv1.RoleBinding
-		eventually(t, func() error { return k8s.Get(ctx, client.ObjectKey{Namespace: "pod-access", Name: role}, &rb) })
-		if rb.RoleRef.Kind != "ClusterRole" || rb.RoleRef.Name != role {
-			t.Errorf("%s: roleRef = %+v", role, rb.RoleRef)
-		}
-		var got []string
-		for _, s := range rb.Subjects {
-			if s.Kind != rbacv1.GroupKind {
-				t.Errorf("%s: subject %+v is not a group", role, s)
-			}
-			got = append(got, s.Name)
-		}
-		if fmt.Sprint(got) != fmt.Sprint(groups) {
-			t.Errorf("%s: subjects = %v, want %v", role, got, groups)
-		}
-		if !metav1.IsControlledBy(&rb, p) {
-			t.Errorf("%s: not controlled by the Project", role)
-		}
+	p.Spec.Members = p.Spec.Members[:1]
+	if err := k8s.Update(ctx, p); err != nil {
+		t.Fatal(err)
 	}
+	expectBinding(t, p, ProjectDeveloperRole, []string{})
+	expectBinding(t, p, PodsExecRole, []string{owner, admin})
+	expectBinding(t, p, PodsReadRole, []string{owner, admin, vic})
+
+	if err := k8s.Get(ctx, client.ObjectKeyFromObject(p), p); err != nil {
+		t.Fatal(err)
+	}
+	p.Spec.Access = kwerftv1.ProjectAccessTeam
+	if err := k8s.Update(ctx, p); err != nil {
+		t.Fatal(err)
+	}
+	expectBinding(t, p, ProjectViewerRole, []string{"Group:kwerft:role:viewer"})
+	expectBinding(t, p, PodsReadRole, []string{owner, admin, "Group:kwerft:role:developer", "Group:kwerft:role:viewer"})
 }

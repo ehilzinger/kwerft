@@ -1,6 +1,6 @@
 import { createContext, useContext, useState, type FormEvent, type ReactNode } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { ApiError, accountApi, type Account as AccountData, type AccountSession, type Passkey, type SSOIdentity, type TOTPSetup, type User } from "../api";
+import { ApiError, accountApi, api, type Account as AccountData, type AccountSession, type Passkey, type SSOIdentity, type TOTPSetup, type User } from "../api";
 import { Field } from "../components/Field";
 import { Icon } from "../components/Icon";
 import { identityApi, issuerHost, ssoPasswordHint } from "../identity";
@@ -19,6 +19,7 @@ const HasPassword = createContext(true);
 // API tokens and sessions.
 export function Account() {
   const account = useQuery({ queryKey: ["account"], queryFn: accountApi.get });
+  const session = useQuery({ queryKey: ["session"], queryFn: api.session });
   if (account.isPending) return <div className="view"><p className="dim">Loading…</p></div>;
   if (account.isError) return <div className="view"><p className="form-error" role="alert">{errText(account.error)}</p></div>;
   const a = account.data;
@@ -30,6 +31,12 @@ export function Account() {
           <p>{a.user.email} · <span className="cap">{a.user.role}</span></p>
         </div>
       </div>
+      {session.data?.mustEnrol && (
+        <div className="banner warn" role="alert">
+          <Icon name="alert" />
+          <span>This console requires two-factor sign-in. Add a passkey or an authenticator app below to continue; the rest of the console opens once you have one.</span>
+        </div>
+      )}
       <HasPassword.Provider value={a.hasPassword}>
         <ProfileCard user={a.user} />
         <PasswordCard hasPassword={a.hasPassword} />
@@ -44,7 +51,11 @@ export function Account() {
 
 function useRefresh() {
   const queryClient = useQueryClient();
-  return () => queryClient.invalidateQueries({ queryKey: ["account"] });
+  // The session too: a new second factor ends "set one up first" (mustEnrol).
+  return () => Promise.all([
+    queryClient.invalidateQueries({ queryKey: ["account"] }),
+    queryClient.invalidateQueries({ queryKey: ["session"] }),
+  ]);
 }
 
 function Card({ title, children, note }: { title: string; note?: ReactNode; children: ReactNode }) {

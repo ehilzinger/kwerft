@@ -42,7 +42,9 @@ export function AppDetail() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const session = useQuery({ queryKey: ["session"], queryFn: api.session });
-  const can = abilities(session.data);
+  // In a Members project the role given there counts, not the console role.
+  const projects = useQuery({ queryKey: ["projects"], queryFn: workloads.projects });
+  const can = abilities(session.data, projects.data?.find((p) => p.name === project));
   const key = ["app", project, name];
   const q = useQuery({ queryKey: key, queryFn: () => workloads.app(project, name), refetchInterval: 5000 });
 

@@ -33,11 +33,10 @@ import (
 //     kwerft:<role> ClusterRoles in the chart — decides; the console only
 //     translates its answer.
 //   - Lists of Projects and Apps (polled every few seconds by the console)
-//     may be served from the controller manager's informer cache. That is
-//     safe only because every console role may list every kwerft.dev
-//     resource cluster-wide, and the summaries leave out env and commands.
-//     When roles become per-project (Phase 4), these lists must filter by the
-//     user's projects or go through impersonation as well.
+//     may be served from the controller manager's informer cache, which holds
+//     every project's objects. Each list is confined to the user's project
+//     scope (scope.go): the projects they reach, Team or Members. The
+//     summaries leave out env and commands.
 //   - Nothing here reads Secrets, Pods or logs.
 
 const kubeTimeout = 20 * time.Second
@@ -79,8 +78,10 @@ func (a *api) userClient(r *http.Request) (client.Client, *principal, context.Co
 	return c, p, ctx, cancel, err
 }
 
-// list reads from the informer cache when there is one (see the rule above)
-// and falls back to the user's own client before the cache has started.
+// list reads from the informer cache when there is one and falls back to the
+// user's own client before the cache has started. Only for cluster-scoped
+// kinds every role may list (Projects, alert rules); namespaced kinds go
+// through scopedList.
 func (a *api) list(ctx context.Context, c client.Client, list client.ObjectList, opts ...client.ListOption) error {
 	if a.cfg.KubeCache != nil {
 		err := a.cfg.KubeCache.List(ctx, list, opts...)
@@ -174,10 +175,31 @@ type projectJSON struct {
 	Message     string    `json:"message,omitempty"`
 	Apps        int       `json:"apps"`
 	Created     time.Time `json:"created"`
+	// Access is Team or Members (docs/phase4.md); Role is the signed-in
+	// user's role in the project, which in a Members project is the one
+	// given there.
+	Access string `json:"access"`
+	Role   string `json:"role,omitempty"`
+	// Members, for owners and admins (who manage them).
+	Members []projectMemberJSON `json:"members,omitempty"`
+}
+
+type projectMemberJSON struct {
+	User string `json:"user"`
+	Name string `json:"name,omitempty"` // "" when no console account has this address
+	Role string `json:"role"`
+}
+
+func projectAccess(p *kwerftv1.Project) string {
+	if p.Spec.Access == kwerftv1.ProjectAccessMembers {
+		return string(kwerftv1.ProjectAccessMembers)
+	}
+	return string(kwerftv1.ProjectAccessTeam)
 }
 
 func projectSummary(p *kwerftv1.Project, apps int) projectJSON {
-	out := projectJSON{Name: p.Name, DisplayName: p.Spec.DisplayName, Apps: apps, Created: p.CreationTimestamp.UTC(), Phase: "pending"}
+	out := projectJSON{Name: p.Name, DisplayName: p.Spec.DisplayName, Apps: apps, Created: p.CreationTimestamp.UTC(), Phase: "pending",
+		Access: projectAccess(p)}
 	if c := meta.FindStatusCondition(p.Status.Conditions, controllers.ConditionReady); c != nil {
 		out.Reason, out.Message = c.Reason, c.Message
 		switch {
@@ -203,8 +225,14 @@ func (a *api) projectList(w http.ResponseWriter, r *http.Request) {
 		a.kubeError(w, r, p, "project.list", "", "No projects found.", err)
 		return
 	}
+	owned, err := a.projectNamespaces(ctx)
+	if err != nil {
+		a.kubeError(w, r, p, "project.list", "", "No projects found.", err)
+		return
+	}
+	scope := principalScope(p, projects.Items, owned)
 	var apps kwerftv1.AppList
-	if err := a.list(ctx, c, &apps); err != nil {
+	if err := a.scopedList(ctx, c, scope, &apps); err != nil {
 		a.kubeError(w, r, p, "project.list", "", "No apps found.", err)
 		return
 	}
@@ -212,9 +240,30 @@ func (a *api) projectList(w http.ResponseWriter, r *http.Request) {
 	for _, app := range apps.Items {
 		count[app.Namespace]++
 	}
+	var names map[string]string // email → name, for owners and admins
+	if scope.platform {
+		names = map[string]string{}
+		users, err := a.store.Members(ctx)
+		if err != nil {
+			a.internalError(w, r, err)
+			return
+		}
+		for _, u := range users {
+			names[u.Email] = u.Name
+		}
+	}
 	out := make([]projectJSON, 0, len(projects.Items))
 	for i := range projects.Items {
-		out = append(out, projectSummary(&projects.Items[i], count[projects.Items[i].Name]))
+		pr := &projects.Items[i]
+		if !scope.reaches(pr.Name) {
+			continue
+		}
+		j := projectSummary(pr, count[pr.Name])
+		j.Role = scope.role(pr.Name)
+		if names != nil {
+			j.Members = projectMembers(pr, names)
+		}
+		out = append(out, j)
 	}
 	slices.SortFunc(out, func(x, y projectJSON) int { return strings.Compare(x.Name, y.Name) })
 	writeJSON(w, http.StatusOK, out)
@@ -257,7 +306,9 @@ func (a *api) projectCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	a.audit(r, p.user.Email, "project.create", req.Name, "")
-	writeJSON(w, http.StatusCreated, projectSummary(proj, 0))
+	out := projectSummary(proj, 0)
+	out.Role = p.user.Role
+	writeJSON(w, http.StatusCreated, out)
 }
 
 func (a *api) projectDelete(w http.ResponseWriter, r *http.Request) {
@@ -396,12 +447,12 @@ func (a *api) appList(w http.ResponseWriter, r *http.Request) {
 		a.internalError(w, r, err)
 		return
 	}
-	var opts []client.ListOption
-	if project := r.URL.Query().Get("project"); project != "" {
-		opts = append(opts, client.InNamespace(project))
+	scope, ok := a.requestScope(w, r, ctx, p, "app.list")
+	if !ok {
+		return
 	}
 	var apps kwerftv1.AppList
-	if err := a.list(ctx, c, &apps, opts...); err != nil {
+	if err := a.scopedList(ctx, c, scope, &apps, inProject(r)...); err != nil {
 		a.kubeError(w, r, p, "app.list", "", "No apps found.", err)
 		return
 	}

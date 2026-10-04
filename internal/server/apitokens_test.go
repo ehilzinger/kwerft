@@ -252,9 +252,18 @@ func TestAPITokenProjectRestriction(t *testing.T) {
 	if code, _ := e.bearer(t, tok, "GET", "/api/v1/projects/shop/apps/web", nil); code != http.StatusServiceUnavailable {
 		t.Errorf("own project: %d", code)
 	}
-	// Another project, and lists across projects: refused by the console.
-	for _, path := range []string{"/api/v1/projects/blog/apps/web", "/api/v1/apps", "/api/v1/projects", "/api/v1/logs", "/api/v1/alerts", "/api/v1/settings"} {
+	// Another project, and routes that are neither a project's nor a list
+	// projectScope narrows: refused by the console.
+	for _, path := range []string{"/api/v1/projects/blog/apps/web", "/api/v1/settings"} {
 		if code, out := e.bearer(t, tok, "GET", path, nil); code != http.StatusForbidden {
+			t.Errorf("GET %s: %d %v", path, code, out)
+		}
+	}
+	// Lists across projects pass the token check; projectScope narrows them
+	// to the token's projects (no cluster here: 503 after authorization;
+	// isolation_test.go checks what they return).
+	for _, path := range []string{"/api/v1/apps", "/api/v1/projects", "/api/v1/logs", "/api/v1/alerts"} {
+		if code, out := e.bearer(t, tok, "GET", path, nil); code == http.StatusForbidden {
 			t.Errorf("GET %s: %d %v", path, code, out)
 		}
 	}

@@ -73,7 +73,7 @@ rules:
   - apiGroups: [rbac.authorization.k8s.io]
     resources: [clusterroles]
     verbs: [bind]
-    resourceNames: ["kwerft:pods-read", "kwerft:pods-exec"]
+    resourceNames: ["kwerft:pods-read", "kwerft:pods-exec", "kwerft:project-developer", "kwerft:project-viewer"]
   - apiGroups: [coordination.k8s.io]
     resources: [leases]
     verbs: [get, list, watch, create, update, patch]

@@ -71,6 +71,9 @@ func (a *api) registerMembers(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/v1/members", may(access.ManageMembers, m.list))
 	mux.HandleFunc("PATCH /api/v1/members/{id}", manage(m.setRole))
 	mux.HandleFunc("DELETE /api/v1/members/{id}", manage(m.remove))
+	mux.HandleFunc("POST /api/v1/members/{id}/reset-second-factor", manage(m.resetSecondFactor))
+	mux.HandleFunc("GET /api/v1/sign-in-policy", a.requireUser(m.policyGet))
+	mux.HandleFunc("PUT /api/v1/sign-in-policy", a.sameOrigin(may(access.RequireTwoFactor, m.policySet)))
 	mux.HandleFunc("GET /api/v1/invites", may(access.ManageMembers, m.invites))
 	mux.HandleFunc("POST /api/v1/invites", manage(m.invite))
 	mux.HandleFunc("POST /api/v1/invites/{id}/reissue", manage(m.reissue))
@@ -102,10 +105,17 @@ func (m *membersAPI) roles(w http.ResponseWriter, _ *http.Request) {
 		Role        string `json:"role"`
 		Group       string `json:"group"`
 		ClusterRole string `json:"clusterRole"`
+		// ProjectRole is bound in each project namespace the role reaches
+		// (controllers.ProjectBindings); owners and admins need none.
+		ProjectRole string `json:"projectRole,omitempty"`
 	}
 	roles := make([]roleJSON, 0, len(access.Roles))
 	for _, r := range access.Roles {
-		roles = append(roles, roleJSON{Role: r, Group: kube.RoleGroup(r), ClusterRole: "kwerft:" + r})
+		j := roleJSON{Role: r, Group: kube.RoleGroup(r), ClusterRole: "kwerft:" + r}
+		if r == access.Developer || r == access.Viewer {
+			j.ProjectRole = "kwerft:project-" + r
+		}
+		roles = append(roles, j)
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"roles": roles, "permissions": access.Matrix})
 }
@@ -207,10 +217,113 @@ func (m *membersAPI) remove(w http.ResponseWriter, r *http.Request) {
 	}
 	m.mfa.dropPendingFor(gone.ID) // a half-finished sign-in must not complete
 	m.audit(r, me.Email, "member.removed", gone.Email, fmt.Sprintf("was %s; %d sessions signed out", gone.Role, sessions))
+	m.dropFromProjects(r, p, gone.Email)
 	if gone.ID == me.ID {
 		m.clearCookie(w, m.cookies.session)
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// resetSecondFactor removes a member's authenticator app, passkeys and
+// recovery codes, e.g. after a lost phone, and signs them out everywhere.
+// They sign in with their password next and set up a factor again (at once,
+// when the console requires one). Owners and admins may, admins not for
+// owners; nobody for themselves (the Account page manages one's own).
+func (m *membersAPI) resetSecondFactor(w http.ResponseWriter, r *http.Request) {
+	me := principalOf(r).user
+	if r.PathValue("id") == me.ID {
+		writeError(w, http.StatusConflict, "Manage your own second factors on your Account page.")
+		return
+	}
+	u, had, sessions, err := m.store.ResetSecondFactors(r.Context(), r.PathValue("id"), func(cur *store.User) error {
+		if !mayAssign(me, cur.Role) {
+			return errOwnerOnly
+		}
+		return nil
+	})
+	switch {
+	case errors.Is(err, store.ErrNotFound):
+		writeError(w, http.StatusNotFound, "That member no longer exists. Reload the page.")
+		return
+	case errors.Is(err, errOwnerOnly):
+		writeError(w, http.StatusForbidden, "Only an owner can reset an owner's second factors.")
+		return
+	case err != nil:
+		m.internalError(w, r, err)
+		return
+	}
+	m.mfa.dropPendingFor(u.ID) // a sign-in waiting for the old factor must not complete
+	var gone []string
+	if had.TOTP {
+		gone = append(gone, "authenticator app")
+	}
+	if had.Passkeys > 0 {
+		gone = append(gone, fmt.Sprintf("%d passkeys", had.Passkeys))
+	}
+	if had.RecoveryCodes > 0 {
+		gone = append(gone, fmt.Sprintf("%d recovery codes", had.RecoveryCodes))
+	}
+	if len(gone) == 0 {
+		gone = append(gone, "none set up")
+	}
+	m.audit(r, me.Email, "member.second_factor_reset", u.Email, fmt.Sprintf("%s; %d sessions signed out", strings.Join(gone, ", "), sessions))
+	writeJSON(w, http.StatusOK, map[string]any{"signedOut": sessions})
+}
+
+// ---- sign-in policy -------------------------------------------------------------
+
+// policyGet tells everyone whether a second factor is required (the Account
+// page explains it); policySet is for owners. Turning the requirement on
+// needs a second factor of one's own, so the owner who flips it is never
+// the first one sent to enrol; nobody is locked out either way, because a
+// member without a factor still signs in with their password and is then
+// sent to set one up (requireUser).
+func (m *membersAPI) policyGet(w http.ResponseWriter, r *http.Request) {
+	on, err := m.store.RequireTwoFactor(r.Context())
+	if err != nil {
+		m.internalError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]bool{"requireTwoFactor": on})
+}
+
+func (m *membersAPI) policySet(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		RequireTwoFactor *bool `json:"requireTwoFactor"`
+	}
+	if !decode(w, r, &req) {
+		return
+	}
+	if req.RequireTwoFactor == nil {
+		writeFieldError(w, "requireTwoFactor", "Say whether a second factor is required (true or false).")
+		return
+	}
+	ctx, me := r.Context(), principalOf(r).user
+	on := *req.RequireTwoFactor
+	if on {
+		f, err := m.store.Factors(ctx, me.ID)
+		if err != nil {
+			m.internalError(w, r, err)
+			return
+		}
+		if !f.Any() {
+			writeError(w, http.StatusConflict, "Set up a passkey or an authenticator app for your own account first.")
+			return
+		}
+	}
+	was, err := m.store.RequireTwoFactor(ctx)
+	if err != nil {
+		m.internalError(w, r, err)
+		return
+	}
+	if err := m.store.SetRequireTwoFactor(ctx, on); err != nil {
+		m.internalError(w, r, err)
+		return
+	}
+	if was != on {
+		m.audit(r, me.Email, "settings.require_two_factor", "sign-in", map[bool]string{true: "on", false: "off"}[on])
+	}
+	writeJSON(w, http.StatusOK, map[string]bool{"requireTwoFactor": on})
 }
 
 // ---- invites -----------------------------------------------------------------

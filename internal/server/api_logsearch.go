@@ -12,12 +12,10 @@ import (
 	"sync/atomic"
 	"time"
 
-	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 
 	kwerftv1 "github.com/ehilzinger/kwerft/api/v1alpha1"
-	"github.com/ehilzinger/kwerft/internal/controllers"
 	"github.com/ehilzinger/kwerft/internal/logs"
 )
 
@@ -33,10 +31,10 @@ import (
 // VictoriaLogs is read with the console's own identity; what a user sees is
 // decided here (see internal/logs for how the scope is enforced):
 //
-//   - the scope is the project namespaces the user may read: Projects the
-//     user can list (impersonated), whose namespace carries the
-//     kwerft.dev/project label for that project (read with the console's
-//     identity), minus platform namespaces;
+//   - the scope is the project namespaces the user reaches (scope.go):
+//     Projects with access Team or listing the user as a member, whose
+//     namespace carries the kwerft.dev/project label for that project (read
+//     with the console's identity), minus platform namespaces;
 //   - project= narrows it to one of those; app= additionally needs the
 //     user's impersonated get of the App;
 //   - platform=1 lets owners and admins search every namespace (kube-system,
@@ -85,39 +83,11 @@ func platformNamespace(ns string) bool {
 }
 
 func (s *logSearchAPI) kubeProjectNamespaces(ctx context.Context, pr *principal) ([]string, error) {
-	c, err := s.cfg.Kube.For(pr.user.Email, pr.user.Role)
+	scope, err := s.projectScope(ctx, pr)
 	if err != nil {
 		return nil, err
 	}
-	var projects kwerftv1.ProjectList
-	if err := c.List(ctx, &projects); err != nil {
-		if apierrors.IsForbidden(err) {
-			return nil, nil // no projects to read
-		}
-		return nil, err
-	}
-	cs, err := s.cfg.Kube.Self()
-	if err != nil {
-		return nil, err
-	}
-	list, err := cs.CoreV1().Namespaces().List(ctx, metav1.ListOptions{LabelSelector: controllers.LabelProject})
-	if err != nil {
-		return nil, err
-	}
-	labelled := map[string]bool{}
-	for _, ns := range list.Items {
-		if ns.Labels[controllers.LabelProject] == ns.Name && ns.DeletionTimestamp == nil {
-			labelled[ns.Name] = true
-		}
-	}
-	var out []string
-	for _, p := range projects.Items {
-		if labelled[p.Name] && !platformNamespace(p.Name) {
-			out = append(out, p.Name)
-		}
-	}
-	slices.Sort(out)
-	return out, nil
+	return scope.namespaces(), nil
 }
 
 func (s *logSearchAPI) kubeAllNamespaces(ctx context.Context) ([]string, error) {

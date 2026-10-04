@@ -150,9 +150,17 @@ var tokenDeniedPrefixes = []string{
 }
 
 // tokenProjectless are the routes without a project that a project-restricted
-// token may use. Lists across projects are not among them until they filter
-// by the token's projects (W1's projectScope, see docs/phase4.md).
-var tokenProjectless = []string{"GET /api/v1/session", "GET /api/v1/roles"}
+// token may use: its identity, and the lists and searches across projects,
+// which projectScope narrows to the token's projects.
+var tokenProjectless = []string{
+	"GET /api/v1/session", "GET /api/v1/roles",
+	"GET /api/v1/projects", "GET /api/v1/apps", "GET /api/v1/tasks", "GET /api/v1/volumes",
+	"GET /api/v1/schedules", "GET /api/v1/domains",
+	"GET /api/v1/metrics/overview", "GET /api/v1/metrics/query",
+	"GET /api/v1/logs", "GET /api/v1/logs/tail",
+	"GET /api/v1/alerts", "GET /api/v1/alerts/silences", "GET /api/v1/alerts/rules",
+	"GET /api/v1/recordings", "GET /api/v1/traffic/drops",
+}
 
 // tokenMayUse applies the token rules above to the matched route. It answers
 // the request itself (403) when they refuse.
