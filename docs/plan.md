@@ -210,7 +210,8 @@ Exit codes: 0 ok · 2 usage · 10 preflight · 20 network/DNS · 30 Kubernetes �
 - [x] Members: invites by single-use link (7 days, hashed, rate-limited), role changes effective immediately (also for Kubernetes and open shells/streams), removal ends sessions, last owner protected; admins manage everyone but owners. Access page: Members, Roles (matrix in `internal/access`, tested against the chart), Audit log (filters, paging)
 - [x] Settings: console hostname move (new listener and certificate first, old name redirects for 24 h, refused while a member would be locked out by host-bound passkeys) and an apps domain with a DNS-01 wildcard via Hetzner — one shared listener, no per-app DNS record; per-host listeners now cap at 59
 - [x] Managed DNS records via Hetzner DNS (Cloud API RRsets, labelled): console hostname incl. a move's new and previous name, `*.<appsDomain>`; a console move into a managed zone no longer waits for DNS
-- [ ] Try managed records and the DNS-01 wildcard on the test server with kwerft.dev (zone at Hetzner)
+- [x] Managed records and the DNS-01 wildcard on the test server with kwerft.dev (2026-10-04): `*.apps.kwerft.dev` record created, wildcard certificate in ~1.5 min, an app moved onto it
+- [x] Certificate secrets of hostnames no longer served are removed after 7 days unused (`kwerft.dev/unused-since`), so a returning hostname reuses its certificate instead of spending Let's Encrypt quota
 - [x] Release pipeline: tag `v*` → multi-arch image (ko) and chart on GHCR, stamped install/join scripts to the public `kwerft-install` repo, GitHub Release; signing opt-in (`SIGN_RELEASES`); see RELEASING.md
 - [ ] Cut the first release and do the one-time GitHub setup (packages public, install repo, token)
 - [ ] Exit criterion on a fresh Cloud server from the published release: app on HTTPS in < 10 min; a schedule restarts an app on success — then automate it as the e2e test

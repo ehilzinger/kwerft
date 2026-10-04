@@ -7,8 +7,11 @@ import (
 	"testing"
 	"time"
 
+	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	gwv1 "sigs.k8s.io/gateway-api/apis/v1"
 
@@ -266,4 +269,68 @@ func countHost(ls []gwv1.Listener, host string) int {
 		}
 	}
 	return n
+}
+
+func TestUnusedCertificateSecretsGoAfterAGracePeriod(t *testing.T) {
+	requireEnvtest(t)
+	ctx := context.Background()
+	projectNamespace(t, "secret-sweep")
+	t.Cleanup(domainClock.Reset)
+
+	tlsSecret := func(name string, issued bool) *corev1.Secret {
+		sec := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: GatewayNamespace},
+			Type: corev1.SecretTypeTLS, Data: map[string][]byte{"tls.crt": []byte("c"), "tls.key": []byte("k")}}
+		if issued {
+			sec.Annotations = map[string]string{certManagerCertName: name}
+		}
+		if err := k8s.Create(ctx, sec); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = k8s.Delete(ctx, sec) })
+		return sec
+	}
+	live := tlsSecret(ListenerName("live.example.com")+"-tls", true)
+	gone := tlsSecret(ListenerName("gone.example.com")+"-tls", true)
+	handMade := tlsSecret(ListenerName("hand.example.com")+"-tls", false) // not cert-manager's
+	other := tlsSecret("someone-elses-tls", true)                         // not a listener's
+
+	get := func(sec *corev1.Secret) (*corev1.Secret, error) {
+		var got corev1.Secret
+		err := k8s.Get(ctx, client.ObjectKeyFromObject(sec), &got)
+		return &got, err
+	}
+	d := createDomain(t, "secret-sweep", "live", "live.example.com")
+	eventually(t, func() error {
+		got, err := get(gone)
+		if err != nil {
+			return err
+		}
+		if got.Annotations[AnnotationUnusedSince] == "" {
+			return fmt.Errorf("unused secret not marked: %v", got.Annotations)
+		}
+		return nil
+	})
+	for _, sec := range []*corev1.Secret{live, handMade, other} {
+		if got, err := get(sec); err != nil || got.Annotations[AnnotationUnusedSince] != "" {
+			t.Errorf("%s: %v %v", sec.Name, err, got.Annotations)
+		}
+	}
+
+	// A week later (any Gateway change triggers the sweep), it is gone; the
+	// others stay.
+	domainClock.Advance(unusedSecretGrace + time.Hour)
+	if err := k8s.Patch(ctx, d, client.RawPatch(types.MergePatchType, []byte(`{"metadata":{"annotations":{"test/poke":"1"}}}`))); err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, func() error {
+		if _, err := get(gone); !apierrors.IsNotFound(err) {
+			return fmt.Errorf("unused secret still there: %v", err)
+		}
+		return nil
+	})
+	for _, sec := range []*corev1.Secret{live, handMade, other} {
+		if _, err := get(sec); err != nil {
+			t.Errorf("%s: %v", sec.Name, err)
+		}
+	}
 }

@@ -170,6 +170,10 @@ func (r *DomainReconciler) Reconcile(ctx context.Context, _ ctrl.Request) (ctrl.
 	if err := r.reconcileConsoleRoutes(ctx, console); err != nil {
 		return ctrl.Result{}, err
 	}
+	cleanup, err := r.cleanupListenerSecrets(ctx, referencedSecrets(listeners))
+	if err != nil {
+		return ctrl.Result{}, fmt.Errorf("clean up certificate secrets: %w", err)
+	}
 
 	// Report per-Domain state; certificates are polled while issuing.
 	requeue := false
@@ -209,6 +213,9 @@ func (r *DomainReconciler) Reconcile(ctx context.Context, _ ctrl.Request) (ctrl.
 			after = wait
 		}
 		return ctrl.Result{RequeueAfter: after}, nil
+	}
+	if cleanup > 0 {
+		return ctrl.Result{RequeueAfter: cleanup}, nil
 	}
 	return ctrl.Result{}, nil
 }
