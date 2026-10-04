@@ -1,0 +1,129 @@
+{{- if .Values.registry.enabled }}
+{{- $r := .Values.registry }}
+# zot, the in-cluster registry for images built from Git (Phase 2). Build pods
+# push to it, every node's containerd pulls from it through the k3s mirror for
+# registry.kwerft.internal:5000 (install.sh writes it). Plain HTTP and no
+# authentication: the CiliumNetworkPolicy below admits only build pods, the
+# console and the nodes.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: kwerft-registry
+  namespace: {{ .Release.Namespace }}
+  labels: {{- include "kwerft.registry.labels" . | nindent 4 }}
+  annotations:
+    helm.sh/resource-policy: keep
+spec:
+  accessModes: [ReadWriteOnce]
+  {{- with $r.storage.storageClass }}
+  storageClassName: {{ . }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ $r.storage.size }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: kwerft-registry
+  namespace: {{ .Release.Namespace }}
+  labels: {{- include "kwerft.registry.labels" . | nindent 4 }}
+spec:
+  type: ClusterIP
+  # Fixed: the nodes' registries.yaml points at it (see values.yaml).
+  clusterIP: {{ required "registry.clusterIP is required" $r.clusterIP }}
+  selector: {{- include "kwerft.registry.selectorLabels" . | nindent 4 }}
+  ports:
+    - name: http
+      port: 5000
+      targetPort: http
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: kwerft-registry
+  namespace: {{ .Release.Namespace }}
+  labels: {{- include "kwerft.registry.labels" . | nindent 4 }}
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate             # single RWO volume
+  selector:
+    matchLabels: {{- include "kwerft.registry.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels: {{- include "kwerft.registry.labels" . | nindent 8 }}
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/registry-config.yaml") . | sha256sum | trunc 16 }}
+    spec:
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      securityContext: {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: zot
+          image: {{ $r.image.repository }}:{{ $r.image.tag }}
+          imagePullPolicy: {{ $r.image.pullPolicy }}
+          args: [serve, /etc/zot/config.json]
+          env:
+            - name: GOMEMLIMIT
+              valueFrom: { resourceFieldRef: { resource: limits.memory } }
+          ports:
+            - name: http
+              containerPort: 5000
+          startupProbe:
+            httpGet: { path: /startupz, port: http }
+            periodSeconds: 5
+            failureThreshold: 60
+          readinessProbe:
+            httpGet: { path: /readyz, port: http }
+            periodSeconds: 10
+          livenessProbe:
+            httpGet: { path: /livez, port: http }
+            periodSeconds: 20
+          resources: {{- toYaml $r.resources | nindent 12 }}
+          securityContext: {{- toYaml .Values.securityContext | nindent 12 }}
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/registry
+            - name: config
+              mountPath: /etc/zot
+              readOnly: true
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: kwerft-registry
+        - name: config
+          configMap:
+            name: kwerft-registry
+        - name: tmp
+          emptyDir: {}
+---
+# Ingress to zot: build pods (push, cache), the console (reads tags and
+# digests) and the nodes, whose containerd pulls through the mirror — from
+# this node (host) or another (remote-node). A Kubernetes NetworkPolicy
+# cannot name nodes, hence Cilium's own kind. Everything else in the cluster,
+# app pods included, is denied.
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: kwerft-registry
+  namespace: {{ .Release.Namespace }}
+  labels: {{- include "kwerft.registry.labels" . | nindent 4 }}
+spec:
+  endpointSelector:
+    matchLabels: {{- include "kwerft.registry.selectorLabels" . | nindent 6 }}
+  ingress:
+    - fromEndpoints:
+        - matchLabels:
+            k8s:io.kubernetes.pod.namespace: kwerft-builds
+        - matchLabels:
+            k8s:io.kubernetes.pod.namespace: {{ .Release.Namespace }}
+            {{- include "kwerft.selectorLabels" . | nindent 12 }}
+      toPorts:
+        - ports: [{ port: "5000", protocol: TCP }]
+    - fromEntities: [host, remote-node]
+      toPorts:
+        - ports: [{ port: "5000", protocol: TCP }]
+{{- end }}

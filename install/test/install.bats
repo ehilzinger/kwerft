@@ -38,7 +38,7 @@ setup() {
 @test "--dry-run lists every install stage in order" {
   run "$SCRIPT" --dry-run --platform cloud --domain ops.example.com
   [ "$status" -eq 0 ]
-  expected="Preflight System Firewall Kubernetes Helm Network Ingress Observability Kwerft Handoff"
+  expected="Preflight System Firewall Kubernetes Registry Helm Network Ingress Observability Kwerft Handoff"
   actual=$(printf '%s\n' "$output" | sed -n 's/^→ \([A-Za-z]*\).*/\1/p' | tr '\n' ' ' | sed 's/ $//')
   [ "$actual" = "$expected" ]
 }
@@ -47,6 +47,7 @@ setup() {
   run "$SCRIPT" --dry-run --platform dedicated --join https://ops.example.com --token t
   [ "$status" -eq 0 ]
   [[ "$output" == *"Join cluster"* ]]
+  [[ "$output" == *"Registry mirror"* ]]
   [[ "$output" != *"Kubernetes"* ]]
 }
 
@@ -464,4 +465,136 @@ summary_env() {
   run print_summary
   [ "$status" -eq 0 ]
   [[ "$output" == *"(wildcard certificate via Hetzner DNS) · DNS records kept by Kwerft"* ]]
+}
+
+# The registry mirror: REGISTRIES_FILE in the test directory, systemctl and kc
+# stubbed; SYSTEMCTL_LOG records restarts, ACTIVE names the running k3s unit.
+mirror_env() {
+  KWERFT_SOURCED=1 source "$SCRIPT"
+  REGISTRIES_FILE="$BATS_TEST_TMPDIR/rancher/k3s/registries.yaml"
+  LOG_FILE="$BATS_TEST_TMPDIR/install.log"; : >"$LOG_FILE"
+  SYSTEMCTL_LOG="$BATS_TEST_TMPDIR/systemctl.log"; : >"$SYSTEMCTL_LOG"
+  ACTIVE=""
+  systemctl() {
+    case "$1" in
+      is-active) [[ "$3" == "$ACTIVE" ]] ;;
+      *) printf '%s\n' "$*" >>"$SYSTEMCTL_LOG" ;;
+    esac
+  }
+  kc() { return 0; }
+}
+
+@test "write_registry_mirror: maps the registry name to zot's ClusterIP over plain HTTP" {
+  mirror_env
+  [ "$(write_registry_mirror)" = "changed" ]
+  grep -qx '  "registry.kwerft.internal:5000":' "$REGISTRIES_FILE"
+  grep -qx '      - "http://10.43.0.50:5000"' "$REGISTRIES_FILE"
+  [ "$(write_registry_mirror)" = "unchanged" ]
+  # An older version of Kwerft's own file is replaced.
+  sed -i.bak 's/10.43.0.50/10.43.0.99/' "$REGISTRIES_FILE"
+  [ "$(write_registry_mirror)" = "changed" ]
+  grep -q '10.43.0.50' "$REGISTRIES_FILE"
+}
+
+@test "write_registry_mirror: never touches the operator's own registries.yaml" {
+  mirror_env
+  mkdir -p "$(dirname "$REGISTRIES_FILE")"
+  printf 'mirrors:\n  docker.io:\n    endpoint: ["https://mirror.example.com"]\n' >"$REGISTRIES_FILE"
+  cp "$REGISTRIES_FILE" "$BATS_TEST_TMPDIR/before"
+  [ "$(write_registry_mirror)" = "foreign" ]
+  cmp -s "$REGISTRIES_FILE" "$BATS_TEST_TMPDIR/before"
+  printf '  "registry.kwerft.internal:5000":\n    endpoint: ["http://10.43.0.50:5000"]\n' >>"$REGISTRIES_FILE"
+  [ "$(write_registry_mirror)" = "operator" ]
+}
+
+@test "stage_registry_mirror: restarts k3s only when the file changed" {
+  mirror_env
+  ACTIVE=k3s
+  run stage_registry_mirror
+  [ "$status" -eq 0 ]
+  [ "$output" = "registry.kwerft.internal:5000 → zot at 10.43.0.50:5000 · k3s restarted" ]
+  grep -qx "restart k3s" "$SYSTEMCTL_LOG"
+
+  : >"$SYSTEMCTL_LOG"
+  run stage_registry_mirror
+  [ "$status" -eq 0 ]
+  [ "$output" = "registry.kwerft.internal:5000 → zot at 10.43.0.50:5000" ]
+  [ ! -s "$SYSTEMCTL_LOG" ]
+}
+
+@test "stage_registry_mirror: a joined worker restarts k3s-agent; nothing restarts before k3s runs" {
+  mirror_env
+  ACTIVE=k3s-agent
+  run stage_registry_mirror
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"· k3s-agent restarted" ]]
+  grep -qx "restart k3s-agent" "$SYSTEMCTL_LOG"
+
+  rm -f "$REGISTRIES_FILE"; : >"$SYSTEMCTL_LOG"; ACTIVE=""
+  run stage_registry_mirror
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"restarted"* ]]
+  [ ! -s "$SYSTEMCTL_LOG" ]
+}
+
+@test "stage_registry_mirror: an operator's file is reported, not changed" {
+  mirror_env
+  ACTIVE=k3s
+  mkdir -p "$(dirname "$REGISTRIES_FILE")"
+  printf 'mirrors: {}\n' >"$REGISTRIES_FILE"
+  run stage_registry_mirror
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"was not written by Kwerft"* ]]
+  [[ "$output" == *'"http://10.43.0.50:5000"'* ]]
+  [[ "$output" == *"registry.kwerft.internal:5000 not configured (see warning)" ]]
+  [ "$(cat "$REGISTRIES_FILE")" = "mirrors: {}" ]
+  [ ! -s "$SYSTEMCTL_LOG" ]
+}
+
+@test "remove_registry_mirror: removes Kwerft's file only" {
+  mirror_env
+  write_registry_mirror >/dev/null
+  remove_registry_mirror
+  [ ! -e "$REGISTRIES_FILE" ]
+  printf 'mirrors: {}\n' >"$REGISTRIES_FILE"
+  remove_registry_mirror
+  [ -e "$REGISTRIES_FILE" ]
+}
+
+@test "registry_address_taken: zot's own Service does not count" {
+  KWERFT_SOURCED=1 source "$SCRIPT"
+  kc() { printf '%s\n' "${SERVICES[@]}"; }
+  SERVICES=()
+  [ -z "$(registry_address_taken)" ]
+  SERVICES=(kwerft-system/kwerft-registry)
+  [ -z "$(registry_address_taken)" ]
+  SERVICES=(shop/db)
+  [ "$(registry_address_taken)" = "shop/db" ]
+}
+
+@test "adopt_namespace: an existing kwerft-builds is handed to the Helm release" {
+  settings_env
+  kc() { printf 'kc %s\n' "$*" >>"$KC_LOG"; [[ "$*" != "get namespace"* || -n "$EXISTING" ]]; }
+  adopt_namespace kwerft-builds
+  absent "annotate" "$KC_LOG"
+  EXISTING=yes
+  adopt_namespace kwerft-builds
+  grep -q "annotate namespace kwerft-builds --overwrite meta.helm.sh/release-name=kwerft meta.helm.sh/release-namespace=kwerft-system" "$KC_LOG"
+  grep -q "label namespace kwerft-builds --overwrite app.kubernetes.io/managed-by=Helm" "$KC_LOG"
+}
+
+# The pins at the top of install.sh, the chart's defaults and internal/builds
+# must name the same registry and images.
+@test "registry and build pins agree with the chart and internal/builds" {
+  KWERFT_SOURCED=1 source "$SCRIPT"
+  root="$BATS_TEST_DIRNAME/../.."
+  values="$root/charts/kwerft/values.yaml"
+  grep -qE "^    tag: $ZOT_VERSION( |$)" "$values"
+  grep -qE "^  clusterIP: $REGISTRY_CLUSTER_IP( |$)" "$values"
+  grep -qE "^  buildkitImage: docker.io/moby/buildkit:${BUILDKIT_VERSION}-rootless( |$)" "$values"
+  grep -qE "^  railpackImage: ghcr.io/railwayapp/railpack-frontend:${RAILPACK_VERSION}( |$)" "$values"
+  grep -qF "RegistryHost = \"$REGISTRY_HOST\"" "$root/internal/builds/builds.go"
+  grep -qF "RegistryClusterIP = \"$REGISTRY_CLUSTER_IP\"" "$root/internal/builds/builds.go"
+  # Inside the service CIDR (10.43.0.0/16), in its low range kept for fixed addresses.
+  [[ "$REGISTRY_CLUSTER_IP" == 10.43.0.* ]]
 }

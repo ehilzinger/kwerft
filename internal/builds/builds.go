@@ -27,6 +27,11 @@ const (
 	RegistryService   = "kwerft-registry"
 	RegistryNamespace = "kwerft-system"
 	RegistryPort      = 5000
+	// RegistryClusterIP is the Service's fixed address (chart value
+	// registry.clusterIP, REGISTRY_CLUSTER_IP in install.sh): the nodes'
+	// registries.yaml points at it, and build pods can map RegistryHost to
+	// it with hostAliases, since cluster DNS does not know that name.
+	RegistryClusterIP = "10.43.0.50"
 
 	// LabelBuild marks a build Job and its pod with the Build's name; the
 	// Build's namespace is in LabelProject (controllers.LabelProject).

@@ -1,0 +1,49 @@
+{{- if .Values.registry.enabled }}
+{{- $r := .Values.registry }}
+# zot's configuration (https://zotregistry.dev). The registry Deployment
+# restarts when it changes.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: kwerft-registry
+  namespace: {{ .Release.Namespace }}
+  labels: {{- include "kwerft.registry.labels" . | nindent 4 }}
+data:
+  # storage.retention: the first keepTags entry whose patterns match a tag
+  # decides about it (no patterns = every tag); its rules are ORed. Tags no
+  # entry keeps are deleted, then gc removes their blobs after gcDelay.
+  config.json: |
+    {
+      "storage": {
+        "rootDirectory": "/var/lib/registry",
+        "dedupe": true,
+        "gc": true,
+        "gcDelay": {{ $r.gc.delay | quote }},
+        "gcInterval": {{ $r.gc.interval | quote }},
+        "retention": {
+          "delay": {{ $r.retention.untaggedDelay | quote }},
+          "policies": [
+            {
+              "repositories": ["**"],
+              "deleteReferrers": true,
+              "deleteUntagged": true,
+              "keepTags": [
+                { "patterns": ["^buildcache$"] },
+                {
+                  "mostRecentlyPushedCount": {{ int $r.retention.keepNewest }},
+                  "pulledWithin": {{ $r.retention.keepPulledWithin | quote }}
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "http": {
+        "address": "0.0.0.0",
+        "port": "5000"
+      },
+      "log": {
+        "level": "info"
+      }
+    }
+{{- end }}
