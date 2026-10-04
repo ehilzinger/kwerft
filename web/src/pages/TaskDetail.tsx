@@ -7,7 +7,7 @@ import { Icon } from "../components/Icon";
 import { TaskStatus, phaseOfTask } from "../components/TaskStatus";
 import { duration, jobs, prettyDuration, type Task } from "../jobs";
 import { podsApi, type Replicas } from "../pods";
-import { abilities, ago, sizes, words, type EnvVar } from "../workloads";
+import { abilities, ago, sizes, words, workloads, type EnvVar } from "../workloads";
 import { errorText } from "./Apps";
 import { RunNowDialog, type RunSource } from "./RunNowDialog";
 import { TaskLogs } from "./TaskLogs";
@@ -25,7 +25,8 @@ export function TaskDetail() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const session = useQuery({ queryKey: ["session"], queryFn: api.session });
-  const can = abilities(session.data);
+  const projects = useQuery({ queryKey: ["projects"], queryFn: workloads.projects });
+  const can = abilities(session.data, projects.data?.find((p) => p.name === project));
   const key = ["task", project, name];
   const q = useQuery({
     queryKey: key,

@@ -52,7 +52,9 @@ export type Permission = {
   enforcedBy: "kubernetes" | "console";
   grants: Record<Role, { level: Level; note?: string }>;
 };
-export type RoleMatrix = { roles: { role: Role; group: string; clusterRole: string }[]; permissions: Permission[] };
+/** projectRole: bound in each project namespace the role reaches; owners and admins need none. */
+export type RoleMatrix = { roles: { role: Role; group: string; clusterRole: string; projectRole?: string }[]; permissions: Permission[] };
+export type SignInPolicy = { requireTwoFactor: boolean };
 
 export type AuditEntry = { id: number; at: string; actor: string; action: string; target: string; ip: string; detail: string };
 export type AuditPage = { entries: AuditEntry[]; next: number | null };
@@ -64,6 +66,12 @@ export const accessApi = {
   members: () => request<Member[]>("/members"),
   setRole: (memberId: string, role: Role) => request<User>(`/members/${id(memberId)}`, { method: "PATCH", json: { role } }),
   remove: (memberId: string) => request<void>(`/members/${id(memberId)}`, { method: "DELETE" }),
+  /** Removes their passkeys, authenticator app and recovery codes and signs them out; they set one up again. */
+  resetSecondFactor: (memberId: string) =>
+    request<{ signedOut: number }>(`/members/${id(memberId)}/reset-second-factor`, { method: "POST", json: {} }),
+
+  signInPolicy: () => request<SignInPolicy>("/sign-in-policy"),
+  setSignInPolicy: (requireTwoFactor: boolean) => request<SignInPolicy>("/sign-in-policy", { method: "PUT", json: { requireTwoFactor } }),
 
   invites: () => request<Invite[]>("/invites"),
   invite: (email: string, role: Role) => request<IssuedInvite>("/invites", { method: "POST", json: { email, role } }),

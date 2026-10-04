@@ -11,6 +11,7 @@ import { Dialog } from "../components/Dialog";
 import { Field } from "../components/Field";
 import { Icon } from "../components/Icon";
 import { errorText } from "./Apps";
+import { workloads, type Project } from "../workloads";
 import "../styles/workloads.css";
 import "../styles/jobs.css";
 import "../styles/access.css";
@@ -85,6 +86,7 @@ export function AccessMembers() {
   const [inviting, setInviting] = useState(false);
   const [editing, setEditing] = useState<Member>();
   const [issued, setIssued] = useState<IssuedInvite>();
+  const projects = useQuery({ queryKey: ["projects"], queryFn: workloads.projects, enabled: manage });
 
   if (!me) return <AccessLayout current="members"><p className="loading">Loading…</p></AccessLayout>;
   if (!manage) return <AccessLayout current="members"><OwnersAndAdminsOnly what="the member list" role={me.role} /></AccessLayout>;
@@ -103,7 +105,7 @@ export function AccessMembers() {
                 <tr key={m.id}>
                   <td><span className="nm">{m.name}</span>{m.you && <span className="you">you</span>}<span className="sub">{m.email}</span></td>
                   <td>{roleLabel[m.role]}</td>
-                  <td title="One team for now: every role applies to all projects">All</td>
+                  <ProjectsCell m={m} projects={projects.data} />
                   <td><SecondFactor m={m} /></td>
                   <td className="dim nowrap" title={m.lastActive ? new Date(m.lastActive).toLocaleString() : "No active session"}>{m.lastActive ? ago(m.lastActive) : "—"}</td>
                   <td className="dim nowrap">{shortDate(m.createdAt)}</td>
@@ -119,14 +121,71 @@ export function AccessMembers() {
         </div>
       )}
       <Invites q={invites} onIssued={setIssued} />
+      <SignInPolicyCard owner={me.role === "owner"} />
       <p className="dim note">
         Roles apply at once, also to Kubernetes: the console acts as <code>kwerft:&lt;email&gt;</code> in the group <code>kwerft:role:&lt;role&gt;</code>.
+        A project limited to its members (Apps, select the project, Access) gives its members the role chosen there instead.
         Removing a member signs them out everywhere.
       </p>
       {inviting && <InviteDialog myRole={me.role} onClose={() => setInviting(false)} onIssued={(i) => { setInviting(false); setIssued(i); }} />}
       {editing && <EditMemberDialog m={editing} myRole={me.role} onClose={() => setEditing(undefined)} />}
       {issued && <LinkDialog issued={issued} onClose={() => setIssued(undefined)} />}
     </AccessLayout>
+  );
+}
+
+/** The projects a member reaches: owners and admins all; others every Team project and the Members projects listing them. */
+function ProjectsCell({ m, projects }: { m: Member; projects?: Project[] }) {
+  if (m.role === "owner" || m.role === "admin") return <td title="Owners and admins reach every project">All</td>;
+  if (!projects) return <td className="dim">…</td>;
+  const listed = (p: Project) => p.members?.find((x) => x.user.toLowerCase() === m.email.toLowerCase());
+  const team = projects.filter((p) => p.access !== "Members");
+  const limited = projects.filter((p) => p.access === "Members");
+  const mine = limited.filter((p) => listed(p));
+  const label = limited.length === 0 ? "All"
+    : [team.length > 0 ? `${team.length} team ${team.length === 1 ? "project" : "projects"}` : "", ...mine.map((p) => p.name)].filter(Boolean).join(", ") || "None";
+  const title = mine.length > 0
+    ? mine.map((p) => `${p.name}: ${listed(p)?.role}`).join(", ")
+    : limited.length > 0 ? `Not a member of ${limited.map((p) => p.name).join(", ")}` : "Every project is open to the whole team";
+  return <td title={title}>{label}</td>;
+}
+
+/** Owners can require a second factor of everyone; members without one are sent to set one up after their password. */
+function SignInPolicyCard({ owner }: { owner: boolean }) {
+  const queryClient = useQueryClient();
+  const policy = useQuery({ queryKey: ["sign-in-policy"], queryFn: accessApi.signInPolicy });
+  const [error, setError] = useState<string>();
+  const [busy, setBusy] = useState(false);
+  if (!policy.data) return null;
+  const on = policy.data.requireTwoFactor;
+  async function toggle() {
+    setBusy(true);
+    setError(undefined);
+    try {
+      queryClient.setQueryData(["sign-in-policy"], await accessApi.setSignInPolicy(!on));
+    } catch (e) {
+      setError(errorText(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+  return (
+    <div className="card">
+      <div className="ch-h"><h3>Two-factor sign-in</h3></div>
+      <div className="bd stack">
+        <p className="note">
+          {on
+            ? "Required: members without a passkey or authenticator app are sent to set one up right after their password, and nobody can remove their last one."
+            : "Optional: each member decides. Members who set one up are asked for it at every sign-in."}
+        </p>
+        {owner ? (
+          <div><button className={on ? "btn" : "btn pri"} disabled={busy} onClick={toggle}>
+            {busy ? "Saving…" : on ? "Make it optional" : "Require two-factor sign-in"}
+          </button></div>
+        ) : <p className="dim note">Only owners change this.</p>}
+        {error && <p className="form-error" role="alert">{error}</p>}
+      </div>
+    </div>
   );
 }
 
@@ -277,8 +336,25 @@ function EditMemberDialog({ m, myRole, onClose }: { m: Member; myRole: Role; onC
   const navigate = useNavigate();
   const [role, setRole] = useState<Role>(m.role);
   const [confirmRemove, setConfirmRemove] = useState(false);
+  const [confirmReset, setConfirmReset] = useState(false);
+  const [resetDone, setResetDone] = useState(false);
   const [error, setError] = useState<string>();
   const [busy, setBusy] = useState(false);
+
+  async function resetFactors() {
+    setBusy(true);
+    setError(undefined);
+    try {
+      await accessApi.resetSecondFactor(m.id);
+      setResetDone(true);
+      setConfirmReset(false);
+      await queryClient.invalidateQueries({ queryKey: ["members"] });
+    } catch (e) {
+      setError(errorText(e));
+    } finally {
+      setBusy(false);
+    }
+  }
 
   async function done() {
     await queryClient.invalidateQueries({ queryKey: ["members"] });
@@ -325,6 +401,22 @@ function EditMemberDialog({ m, myRole, onClose }: { m: Member; myRole: Role; onC
       <RolePick value={role} onChange={setRole} myRole={myRole} name="member-role" />
       {m.you && role !== m.role && <p className="note warn-text">You are changing your own role. It applies at once.</p>}
       {error && <p className="form-error" role="alert">{error}</p>}
+      {!m.you && (m.secondFactor.length > 0 || resetDone) && (
+        <div className="danger-zone">
+          <p>
+            Lost phone or security key? Resetting removes {m.name}'s passkeys, authenticator app and recovery codes and signs them out
+            everywhere. They sign in with their password and set up a second factor again.
+          </p>
+          {resetDone ? <p className="note">Done: {m.name} sets up a second factor at the next sign-in.</p> : confirmReset ? (
+            <div className="confirm-row">
+              <button type="button" className="btn pri danger" disabled={busy} onClick={resetFactors}>{busy ? "Resetting…" : "Yes, reset second factors"}</button>
+              <button type="button" className="btn" onClick={() => setConfirmReset(false)}>Keep</button>
+            </div>
+          ) : (
+            <div><button type="button" className="btn danger" onClick={() => setConfirmReset(true)}><Icon name="key" />Reset second factors</button></div>
+          )}
+        </div>
+      )}
       <div className="danger-zone">
         <p>
           {m.you ? "Leaving the team" : "Removing a member"} deletes the account with its passkeys and authenticator app and
@@ -373,14 +465,14 @@ export function AccessRoles() {
           <div className="card scroll-x">
             <div className="ch-h"><h3>How roles reach Kubernetes</h3></div>
             <table className="t">
-              <thead><tr><th>Role</th><th>Kubernetes group</th><th>Cluster role</th><th>In every project namespace</th></tr></thead>
+              <thead><tr><th>Role</th><th>Kubernetes group</th><th>Cluster role</th><th>In each project namespace it reaches</th></tr></thead>
               <tbody>
                 {matrix.data.roles.map((r) => (
                   <tr key={r.role}>
                     <td>{roleLabel[r.role]}</td>
                     <td className="mono">{r.group}</td>
                     <td className="mono">{r.clusterRole}</td>
-                    <td className="mono">kwerft:pods-read{shell && shell.grants[r.role].level !== "no" && ", kwerft:pods-exec"}</td>
+                    <td className="mono">{r.projectRole && `${r.projectRole}, `}kwerft:pods-read{shell && shell.grants[r.role].level !== "no" && ", kwerft:pods-exec"}</td>
                   </tr>
                 ))}
               </tbody>
@@ -388,8 +480,9 @@ export function AccessRoles() {
           </div>
           <p className="dim note">
             The console reaches Kubernetes as <code>kwerft:&lt;email&gt;</code> in the role's group, so Kubernetes RBAC is the final say for
-            everything marked “Kubernetes”; the rest the console checks itself. One team for now: roles apply to all projects.
-            Per-project roles, SSO and API tokens come later.
+            everything marked “Kubernetes”; the rest the console checks itself. Owners and admins reach every project. Developers and
+            viewers reach the projects open to the whole team with their role, and projects limited to members only when listed, with
+            the role given there (the project's RoleBindings name them as <code>kwerft:&lt;email&gt;</code>).
           </p>
         </>
       )}

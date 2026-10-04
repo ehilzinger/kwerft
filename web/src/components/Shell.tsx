@@ -37,7 +37,7 @@ export function Shell() {
   const queryClient = useQueryClient();
   const navigate = useNavigate();
   // The Monitoring badge: firing alerts. Without alerting (yet), no badge.
-  const firing = useQuery({ queryKey: alertKeys.alerts("firing"), queryFn: () => alertsApi.alerts("firing"), refetchInterval: 15000, retry: false, enabled: !!user.data });
+  const firing = useQuery({ queryKey: alertKeys.alerts("firing"), queryFn: () => alertsApi.alerts("firing"), refetchInterval: 15000, retry: false, enabled: !!user.data && !user.data.mustEnrol });
   const firingCount = firing.data?.length ?? 0;
 
   async function signOut() {

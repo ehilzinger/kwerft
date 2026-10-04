@@ -5,6 +5,7 @@ import { ApiError, api } from "../api";
 import { AppStatus } from "../components/AppStatus";
 import { AppsTabs } from "../components/AppsTabs";
 import { CreateProjectDialog } from "../components/CreateProjectDialog";
+import { ProjectAccessDialog } from "../components/ProjectAccessDialog";
 import { Dialog } from "../components/Dialog";
 import { Icon } from "../components/Icon";
 import { abilities, ago, hostOf, workloads, type AppSummary, type Project } from "../workloads";
@@ -16,7 +17,6 @@ const POLL = 5000;
 export function Apps() {
   const navigate = useNavigate();
   const session = useQuery({ queryKey: ["session"], queryFn: api.session });
-  const can = abilities(session.data);
   const projects = useQuery({ queryKey: ["projects"], queryFn: workloads.projects, refetchInterval: POLL });
   const apps = useQuery({ queryKey: ["apps"], queryFn: () => workloads.apps(), refetchInterval: POLL });
 
@@ -25,6 +25,7 @@ export function Apps() {
   const [q, setQ] = useState("");
   const [creating, setCreating] = useState(false);
   const [deleting, setDeleting] = useState<Project>();
+  const [managing, setManaging] = useState<Project>();
 
   const all = apps.data ?? [];
   const query = q.trim().toLowerCase();
@@ -35,6 +36,7 @@ export function Apps() {
       (!query || `${a.name} ${a.project} ${a.image} ${a.source.repository ?? ""}`.toLowerCase().includes(query)),
   );
   const selected = projects.data?.find((p) => p.name === project);
+  const can = abilities(session.data, selected, projects.data);
   const noProjects = projects.isSuccess && projects.data.length === 0;
 
   const deployButton = (
@@ -53,6 +55,11 @@ export function Apps() {
           <p>Deployments and stateful services across your projects.</p>
         </div>
         <div className="acts">
+          {can.manageProjects && selected && (
+            <button className="btn" onClick={() => setManaging(selected)} title="Who reaches this project">
+              <Icon name="users" />Access to {selected.name}
+            </button>
+          )}
           {can.manageProjects && <button className="btn" onClick={() => setCreating(true)}><Icon name="plus" />New project</button>}
           {deployButton}
         </div>
@@ -80,7 +87,9 @@ export function Apps() {
             <div className="seg" role="group" aria-label="Project">
               <button aria-pressed={!project} onClick={() => setProject(undefined)}>All projects</button>
               {projects.data?.map((p) => (
-                <button key={p.name} aria-pressed={project === p.name} onClick={() => setProject(p.name)} title={p.displayName}>
+                <button key={p.name} aria-pressed={project === p.name} onClick={() => setProject(p.name)}
+                  title={[p.displayName, p.access === "Members" ? "Members only" : ""].filter(Boolean).join(" · ") || undefined}>
+                  {p.access === "Members" && <Icon name="shield" />}{p.access === "Members" && <span className="sr">Members only: </span>}
                   {p.name}<span className="n">{p.apps}</span>
                 </button>
               ))}
@@ -134,6 +143,7 @@ export function Apps() {
       )}
 
       {creating && <CreateProjectDialog onClose={() => setCreating(false)} onCreated={(p) => setProject(p.name)} />}
+      {managing && <ProjectAccessDialog project={managing} onClose={() => setManaging(undefined)} />}
       {deleting && <DeleteProjectDialog project={deleting} onClose={() => setDeleting(undefined)} onDeleted={() => setProject(undefined)} />}
     </section>
   );

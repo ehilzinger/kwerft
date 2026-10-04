@@ -44,7 +44,8 @@ export async function request<T>(path: string, init?: RequestInit & { json?: unk
 }
 
 export type VersionInfo = { version: string; commit: string; platform: "cloud" | "dedicated" };
-export type User = { id: string; email: string; name: string; role: "owner" | "admin" | "developer" | "viewer" };
+/** mustEnrol: the console requires a second factor this user has not set up; only the Account page works until they do. */
+export type User = { id: string; email: string; name: string; role: "owner" | "admin" | "developer" | "viewer"; mustEnrol?: boolean };
 /** consoleDomain: where the console is served (Settings can move it). */
 export type SetupStatus = { complete: boolean; consoleDomain?: string };
 /** A right password for an account with a second factor: these methods can finish the sign-in. */

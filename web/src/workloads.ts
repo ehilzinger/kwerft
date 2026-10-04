@@ -13,7 +13,17 @@ export type Project = {
   message?: string;
   apps: number;
   created: string;
+  /** Team: every console member with their console role. Members: only the listed users. */
+  access: ProjectAccess;
+  /** The signed-in user's role here; in a Members project the one given there. */
+  role?: User["role"];
+  /** Owners and admins only. */
+  members?: ProjectMember[];
 };
+
+export type ProjectAccess = "Team" | "Members";
+export type ProjectMember = { user: string; name?: string; role: "developer" | "viewer" };
+export type ProjectAccessInfo = { project: string; access: ProjectAccess; members: ProjectMember[] };
 
 export type AppSummary = {
   name: string;
@@ -117,6 +127,14 @@ export const workloads = {
   projects: () => request<Project[]>("/projects"),
   createProject: (p: { name: string; displayName?: string }) => request<Project>("/projects", { method: "POST", json: p }),
   deleteProject: (name: string) => request<void>(`/projects/${encodeURIComponent(name)}`, { method: "DELETE" }),
+  // Who reaches a project (owners and admins manage it).
+  projectAccess: (name: string) => request<ProjectAccessInfo>(`/projects/${encodeURIComponent(name)}/access`),
+  setProjectAccess: (name: string, access: ProjectAccess, members: { user: string; role: ProjectMember["role"] }[]) =>
+    request<ProjectAccessInfo>(`/projects/${encodeURIComponent(name)}/access`, { method: "PUT", json: { access, members } }),
+  addProjectMember: (name: string, user: string, role: ProjectMember["role"]) =>
+    request<ProjectAccessInfo>(`/projects/${encodeURIComponent(name)}/members`, { method: "POST", json: { user, role } }),
+  removeProjectMember: (name: string, user: string) =>
+    request<ProjectAccessInfo>(`/projects/${encodeURIComponent(name)}/members/${encodeURIComponent(user)}`, { method: "DELETE" }),
 
   apps: (project?: string) => request<AppSummary[]>(project ? `/apps?project=${encodeURIComponent(project)}` : "/apps"),
   app: (project: string, name: string) => request<App>(appPath(project, name)),
@@ -133,11 +151,16 @@ export const workloads = {
     request<App>(`${appPath(project, name)}/scale`, { method: "PATCH", json: { replicas } }),
 };
 
-/** What the signed-in user's role allows. The server enforces it; the UI only avoids dead ends. */
-export function abilities(user?: User) {
+/**
+ * What the signed-in user's role allows. The server enforces it; the UI only
+ * avoids dead ends. With a project, its role there counts (in a Members
+ * project, the one given there); without one, deploy means "somewhere".
+ */
+export function abilities(user?: User, project?: Project, projects?: Project[]) {
   const role = user?.role;
+  const writes = (r?: string) => r === "owner" || r === "admin" || r === "developer";
   return {
-    deploy: role === "owner" || role === "admin" || role === "developer",
+    deploy: project ? writes(project.role ?? role) : writes(role) || !!projects?.some((p) => writes(p.role)),
     manageProjects: role === "owner" || role === "admin",
   };
 }
