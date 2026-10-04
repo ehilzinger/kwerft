@@ -5,6 +5,7 @@ import { Icon } from "../components/Icon";
 import { jobs, shortDate, type Domain } from "../jobs";
 import { words } from "../workloads";
 import { errorText } from "./Apps";
+import { TrafficRules } from "./NetworkTraffic";
 import { settingsApi, type CertificateState } from "../settings";
 import "../styles/workloads.css";
 import "../styles/jobs.css";
@@ -32,12 +33,7 @@ export function Network() {
         ))}
       </div>
       <div className="tabpanel" role="tabpanel" id={`panel-${tab}`} aria-labelledby={`tab-${tab}`}>
-        {tab === "rules" && (
-          <div className="empty">
-            <h2>Traffic rules arrive in Phase 4</h2>
-            <p>Rules between apps and projects as Cilium policies, with the connections each one allowed and dropped from Hubble. Until then, an app's “who may connect” setting decides, and projects are isolated from each other.</p>
-          </div>
-        )}
+        {tab === "rules" && <TrafficRules />}
         {tab === "firewall" && (
           <div className="empty">
             <h2>The server firewall arrives in Phase 4</h2>

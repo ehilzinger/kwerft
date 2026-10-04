@@ -96,6 +96,7 @@ func TestMain(m *testing.M) {
 	}
 	must((&ProjectReconciler{Client: mgr.GetClient()}).SetupWithManager(mgr))
 	must((&AppReconciler{Client: mgr.GetClient()}).SetupWithManager(mgr))
+	must((&TrafficRuleReconciler{Client: mgr.GetClient(), Counts: counts}).SetupWithManager(mgr))
 	must((&DomainReconciler{
 		Client:        mgr.GetClient(),
 		APIReader:     mgr.GetAPIReader(),

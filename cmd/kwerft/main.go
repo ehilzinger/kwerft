@@ -26,6 +26,7 @@ import (
 	"github.com/ehilzinger/kwerft/internal/auth"
 	"github.com/ehilzinger/kwerft/internal/controllers"
 	"github.com/ehilzinger/kwerft/internal/git"
+	"github.com/ehilzinger/kwerft/internal/hubble"
 	"github.com/ehilzinger/kwerft/internal/metrics"
 	"github.com/ehilzinger/kwerft/internal/observability"
 	"github.com/ehilzinger/kwerft/internal/server"
@@ -54,6 +55,7 @@ func main() {
 		maxConcurrentBuilds = flag.Int("max-concurrent-builds", 1, "builds running at once in the cluster; more wait in a queue")
 		buildTimeout        = flag.Duration("build-timeout", controllers.DefaultBuildTimeout, "a build running longer fails")
 		buildAppArmor       = flag.String("build-apparmor-profile", "kwerft-buildkit", "AppArmor profile (loaded on every node) build containers run under; empty runs them unconfined")
+		hubbleRelay         = flag.String("hubble-relay", hubble.DefaultRelayAddress, "Hubble relay (host:port, plain gRPC) for traffic rule counts and dropped connections; empty turns them off (install.sh --lite has no Hubble)")
 	)
 	flag.Parse()
 
@@ -92,8 +94,20 @@ func main() {
 	var tokens setup.TokenSource = setup.NewStaticTokenSource("", 0) // expired: no setup possible
 	var ready atomic.Bool
 	var mgr ctrl.Manager
+	// Cilium's flows, read in-cluster from the Hubble relay: the console's
+	// traffic views and the TrafficRules' status counts.
+	var flows *hubble.Aggregator
+	if *runControllers && *hubbleRelay != "" {
+		flows = hubble.NewAggregator()
+		flows.Logger = log
+		go flows.Run(ctx, hubble.NewRelay(*hubbleRelay))
+	}
 	if *runControllers {
-		mgr, err = newManager(log, *leaderElect, *metricsListen, &controllers.DomainReconciler{
+		traffic := &controllers.TrafficRuleReconciler{}
+		if flows != nil {
+			traffic.Counts = flows
+		}
+		mgr, err = newManager(log, *leaderElect, *metricsListen, traffic, &controllers.DomainReconciler{
 			ConsoleDomain: *consoleDomain,
 			GatewayClass:  *gatewayClass,
 			ClusterIssuer: *clusterIssuer,
@@ -170,6 +184,7 @@ func main() {
 		SystemReader: systemReader,
 		Git:          gitFactory,
 		Metrics:      metricsClient,
+		Hubble:       flows,
 
 		ActiveConsoleDomain: activeConsoleDomain(mgr, *dev),
 	})
@@ -237,7 +252,7 @@ func waitUntilReady(ctx context.Context, log *slog.Logger, mgr ctrl.Manager, rea
 	}
 }
 
-func newManager(log *slog.Logger, leaderElect bool, metricsListen string, domains *controllers.DomainReconciler, builds *controllers.BuildReconciler) (ctrl.Manager, error) {
+func newManager(log *slog.Logger, leaderElect bool, metricsListen string, traffic *controllers.TrafficRuleReconciler, domains *controllers.DomainReconciler, builds *controllers.BuildReconciler) (ctrl.Manager, error) {
 	ctrl.SetLogger(logr.FromSlogHandler(log.Handler()))
 	cfg, err := ctrl.GetConfig()
 	if err != nil {
@@ -267,6 +282,11 @@ func newManager(log *slog.Logger, leaderElect bool, metricsListen string, domain
 	}
 	apps := &controllers.AppReconciler{Client: mgr.GetClient(), Registry: &controllers.RegistryKeeper{URL: controllers.DefaultRegistryURL}}
 	if err := apps.SetupWithManager(mgr); err != nil {
+		return nil, err
+	}
+	// TrafficRules → CiliumNetworkPolicies, with Hubble's counts (Phase 4).
+	traffic.Client = mgr.GetClient()
+	if err := traffic.SetupWithManager(mgr); err != nil {
 		return nil, err
 	}
 	domains.Client = mgr.GetClient()

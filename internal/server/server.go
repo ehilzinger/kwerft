@@ -14,6 +14,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/ehilzinger/kwerft/internal/git"
+	"github.com/ehilzinger/kwerft/internal/hubble"
 	"github.com/ehilzinger/kwerft/internal/kube"
 	"github.com/ehilzinger/kwerft/internal/metrics"
 	"github.com/ehilzinger/kwerft/internal/setup"
@@ -80,6 +81,9 @@ type Config struct {
 	// Metrics reads VictoriaMetrics for charts and the explorer (see
 	// api_metrics.go); nil turns the metrics endpoints off.
 	Metrics *metrics.Client
+	// Hubble is the console's view of Cilium's flows (traffic rule counts,
+	// dropped connections; see api_traffic.go); nil when Hubble is off.
+	Hubble *hubble.Aggregator
 
 	// ActiveConsoleDomain returns the hostname the console is served on now
 	// (ConsoleSettings.status, which Settings can change); nil or "" means

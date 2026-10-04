@@ -120,3 +120,15 @@ observability:
   namespace: kwerft-observability
   # Admit only the stack itself, the console and the nodes to it (Cilium).
   networkPolicy: true
+
+# Hubble (Cilium's flow log): the console reads it from the relay for traffic
+# rule counts and dropped connections. install.sh turns it off with --lite,
+# which installs Cilium without Hubble.
+hubble:
+  enabled: true
+  relayAddress: hubble-relay.kube-system.svc:80   # plain gRPC (Cilium's default for the relay's own server)
+  relayNamespace: kube-system
+  # The relay answers anyone who reaches it, about every flow in the
+  # cluster. Admit only the console and the nodes (kubectl port-forward), so
+  # app pods cannot read other projects' traffic (Cilium).
+  relayPolicy: true

@@ -173,17 +173,36 @@ func TestAppPublicPortGetsDomainHTTPSListenerAndRedirect(t *testing.T) {
 		t.Errorf("certificateRefs = %+v", l.TLS.CertificateRefs)
 	}
 
-	// Plain HTTP redirects to HTTPS.
+	// Plain HTTP redirects to HTTPS through the Gateway's own route; the
+	// App has none, and no project may attach to the HTTP listener.
 	var redirect gwv1.HTTPRoute
 	eventually(t, func() error {
-		return k8s.Get(ctx, client.ObjectKey{Namespace: "shopfront", Name: "web-8080-redirect"}, &redirect)
+		return k8s.Get(ctx, client.ObjectKey{Namespace: GatewayNamespace, Name: HTTPRedirectRoute}, &redirect)
 	})
 	if sn := redirect.Spec.ParentRefs[0].SectionName; sn == nil || string(*sn) != httpListener {
 		t.Errorf("redirect attaches to %v, want the http listener", sn)
 	}
+	if len(redirect.Spec.Hostnames) != 0 {
+		t.Errorf("redirect hostnames = %v, want every hostname", redirect.Spec.Hostnames)
+	}
 	f := redirect.Spec.Rules[0].Filters
 	if len(f) != 1 || f[0].RequestRedirect == nil || *f[0].RequestRedirect.Scheme != "https" {
 		t.Errorf("redirect filters = %+v", f)
+	}
+	if http := listener(gw, httpListener); http.AllowedRoutes == nil || http.AllowedRoutes.Namespaces == nil ||
+		*http.AllowedRoutes.Namespaces.From != gwv1.NamespacesFromSame {
+		t.Errorf("http listener allowedRoutes = %+v, want only the Gateway's namespace", http.AllowedRoutes)
+	}
+	var routes gwv1.HTTPRouteList
+	if err := k8s.List(ctx, &routes, client.InNamespace("shopfront")); err != nil {
+		t.Fatal(err)
+	}
+	for _, r := range routes.Items {
+		for _, p := range r.Spec.ParentRefs {
+			if p.SectionName != nil && string(*p.SectionName) == httpListener {
+				t.Errorf("route %s attaches to the http listener", r.Name)
+			}
+		}
 	}
 
 	d = waitForDomain(t, d, "CertificatePending")

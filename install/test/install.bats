@@ -720,3 +720,30 @@ JSON
   grep -q "upgrade --install vm vm/victoria-metrics-k8s-stack .*--set alertmanager.spec.disableNamespaceMatcher=true" "$HELM_LOG"
   [[ "$output" == VictoriaMetrics* ]]
 }
+
+# The console reads traffic counts and dropped connections from the Hubble
+# relay over plain gRPC; --lite installs neither.
+@test "stage_network: Hubble and its relay unless --lite, relay without TLS" {
+  KWERFT_SOURCED=1 source "$SCRIPT"
+  LOG_FILE="$BATS_TEST_TMPDIR/install.log"; : >"$LOG_FILE"
+  HELM_LOG="$BATS_TEST_TMPDIR/helm.log"; : >"$HELM_LOG"
+  PUBLIC_IP=203.0.113.10
+  helmk() { printf 'helm %s\n' "$*" >>"$HELM_LOG"; }
+  kc() { :; }
+  LITE=0
+  run stage_network
+  [ "$status" -eq 0 ]
+  grep -q "upgrade --install cilium .*--set hubble.enabled=true --set hubble.relay.enabled=true" "$HELM_LOG"
+  grep -q "upgrade --install cilium .*--set hubble.relay.tls.server.enabled=false" "$HELM_LOG"
+  [[ "$output" == *"· Hubble" ]]
+  : >"$HELM_LOG"
+  LITE=1
+  run stage_network
+  [ "$status" -eq 0 ]
+  grep -q "upgrade --install cilium .*--set hubble.enabled=false --set hubble.relay.enabled=false" "$HELM_LOG"
+  [[ "$output" != *"Hubble"* ]]
+  # The Kwerft chart follows (stage_kwerft), and expects the relay where
+  # Cilium's chart puts it.
+  grep -q -- '--set hubble.enabled="$(hubble_enabled)"' "$SCRIPT"
+  grep -q '^  relayAddress: hubble-relay.kube-system.svc:80 ' "$BATS_TEST_DIRNAME/../../charts/kwerft/values.yaml"
+}
