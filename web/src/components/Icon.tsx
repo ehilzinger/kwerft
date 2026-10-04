@@ -1,6 +1,6 @@
 // Inline stroke icons shared by the console. 16×16 grid, currentColor.
 const paths = {
-  logo: <><path d="M4 9h24M7 15h18M10 21h12" /><path d="M4 9l5 16h14l5-16" /></>,
+  logo: <><path d="M5 9h22l-4 11H9z" /><path d="M9 14h14" /><path d="M3 27l26-4" /></>,
   grid: <><rect x="2" y="2" width="5" height="5" rx="1" /><rect x="9" y="2" width="5" height="5" rx="1" /><rect x="2" y="9" width="5" height="5" rx="1" /><rect x="9" y="9" width="5" height="5" rx="1" /></>,
   box: <><path d="M8 1.8l5.6 3.1v6.2L8 14.2 2.4 11.1V4.9z" /><path d="M2.6 5L8 8l5.4-3M8 8v6" /></>,
   pulse: <path d="M1.5 8.5h3l2-5 3 9 2-4h3" />,

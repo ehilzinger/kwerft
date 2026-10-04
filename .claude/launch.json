@@ -6,6 +6,12 @@
       "runtimeExecutable": "go",
       "runtimeArgs": ["run", "./cmd/kwerft", "--listen=:8080", "--console-domain=localhost", "--platform=cloud", "--controllers=false"],
       "port": 8080
+    },
+    {
+      "name": "web",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["--prefix", "web", "run", "dev", "--", "--port", "5173", "--strictPort"],
+      "port": 5173
     }
   ]
 }
