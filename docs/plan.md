@@ -105,12 +105,13 @@ Exit codes: 0 ok · 2 usage · 10 preflight · 20 network/DNS · 30 Kubernetes �
 | Resource | Becomes | Status |
 |---|---|---|
 | `Project` (cluster-scoped) | Namespace, quota, Pod Security level, default-deny policy; RoleBindings in Phase 4 | reconciler ✔ |
-| `App` | Deployment, or StatefulSet when it has volumes; Service, HTTPRoute per public port, NetworkPolicy; source = image **or** Git | reconciler ✔ (HPA later) |
-| `Task` | Job: a one-off run of an image with App's source, command, env, volumes and resources; "run now" with env overrides | Phase 1 |
-| `Schedule` | CronJob creating Tasks on a cron schedule | Phase 1 |
+| `App` | Deployment, or StatefulSet when it has disks of its own (shared Volumes keep it a Deployment); Service, HTTPRoute per public port, NetworkPolicy; source = image **or** Git. Rollback runs an earlier revision's image again as a new revision (`GitSource.pinnedImage` for Git apps); restart via the `kwerft.dev/restarted-at` annotation, no new revision | reconciler ✔, API ✔ (HPA later) |
+| `Volume` | PVC (local-path / hcloud-volumes) that Apps and Tasks of a project mount by name; deletion waits while mounted | reconciler ✔ |
+| `Task` | Job (kwerft-batch priority, deny-ingress policy): a one-off run with App's shape, or `fromApp`; "run now" with `envOverrides` | reconciler ✔ |
+| `Schedule` | Tasks on a cron schedule, scheduled by the reconciler (a CronJob could not create Tasks without RBAC in pods) | reconciler ✔ |
 | `Build` | Job running rootless BuildKit; pushes to zot; success creates an App revision | types ✔ |
 | `GitConnection` | GitHub App / GitLab / Gitea / deploy key credentials and webhooks | Phase 2 |
-| `Domain` | Gateway listener, Certificate, DNS record | Phase 1 |
+| `Domain` | Gateway listener + certificate via cert-manager; Apps create one per public port; the older claim wins a hostname; max 62 per Gateway | reconciler ✔ (DNS records with DNS-01 later) |
 | `TrafficRule` | CiliumNetworkPolicy, with Hubble hit/drop counts | Phase 4 |
 | `FirewallRule` | Cilium host policy + Hetzner Cloud Firewall | Phase 4 |
 | `NodePool`, `Cluster` | Hetzner Cloud servers + cloud-init join; agent for remote clusters | Phase 5 |
@@ -144,14 +145,29 @@ Exit codes: 0 ok · 2 usage · 10 preflight · 20 network/DNS · 30 Kubernetes �
 - **Batch priority:** Tasks run in a `kwerft-batch` PriorityClass below Apps,
   so under memory pressure the scheduler and kubelet pick a job before a
   service.
-- **Depends on** volumes that Apps and Tasks can share (today each App owns
-  its PVCs through a StatefulSet template); without them a job cannot hand
-  data to a running service.
+- **Shared volumes:** a `Volume` is a ReadWriteOnce disk that Apps and Tasks
+  mount by name (`volumes: [{path, volume}]`); an entry with `size` stays a
+  per-replica disk. Pods sharing a Volume prefer one node. Deleting a
+  mounted Volume waits (finalizer, reason `InUse`).
+- **As built (2026-10-04):** `fromApp` inherits the App's image, command,
+  env, size, egress and shared Volumes (env order App → `env` →
+  `envOverrides`), and its pods get the App's network identity, so whatever
+  `allowFrom` admits the App also admits its Tasks. The Task spec is
+  immutable; a finished Task without a Schedule is deleted after its TTL.
+  Schedules default `timeZone` to the server's (UTC in the container) and
+  have `startingDeadline` (default 1h): only the latest missed run within it
+  starts, and with `Forbid` a due run waits for the active one until then.
+  `history` keeps 3 succeeded and 3 failed by default. Verified on the test
+  server: a writer Task fills a shared Volume and restarts an App, a reader
+  Task sees the data, a Schedule fires on the minute.
 
 ## Security model
 
 - Console unusable until the setup token from the server's disk is presented; no default passwords.
-- Kwerft roles → ClusterRoles bound per project namespace; the API impersonates the user.
+- **Identity:** the API reaches Kubernetes as user `kwerft:<email>` in groups `kwerft:role:<role>` and `system:authenticated`; the console's service account may impersonate only those groups (never `system:masters`). Writes and single-object reads go through impersonation; only the polled list views (Projects, Apps, which omit env) read the informer cache — per-project roles in Phase 4 must filter them.
+- **Roles (single team, cluster-wide for now):** owner and admin manage everything in kwerft.dev; developer writes Apps, Domains, Tasks, Schedules and Volumes and reads the rest; viewer reads. No role reaches Secrets through the API. Per-project RoleBindings come in Phase 4.
+- **Sign-in:** argon2id passwords; optional TOTP, passkeys (also passwordless) and single-use recovery codes, which exist only while a TOTP app or passkey does. Adding a factor needs the password again. Sessions are `__Host-` HttpOnly cookies, 7 days idle / 30 days absolute; same-origin check on every write; rate limits on setup tokens, passwords and second factors.
+- **Secrets at rest:** TOTP seeds in SQLite are encrypted (AES-GCM) with `KWERFT_DATA_KEY` from the Secret `kwerft-data-key`, which the chart creates once and keeps across upgrades and uninstalls. Back it up together with the database.
 - Kubernetes API on the private network only; external `kubectl` through Kwerft's proxy with short-lived scoped kubeconfigs.
 - k3s secrets encryption; developers write but cannot read secrets unless granted.
 - Exec sessions role-gated, time-limited and recorded.
@@ -170,6 +186,19 @@ Exit codes: 0 ok · 2 usage · 10 preflight · 20 network/DNS · 30 Kubernetes �
 | 5 Nodes & clusters | 20–24 | Cloud API nodes, join script, hcloud CSI/LB, vSwitch coupling, build node pool, HA, agent | Mixed cluster survives losing a node; second cluster managed |
 | 6 Backups, upgrades, beta | 25–28 | Velero to Object Storage, upgrades with rollback, Compose import, templates, docs, license | Full restore onto a new server — **public beta** |
 | 7 Kwerft for Mac | 29–36 | Spike on Apple `container`, `local` profile, SwiftUI app around the console, push/pull Projects between instances | A Project runs on a Mac without a terminal and goes live on a Hetzner server with one push |
+
+### Phase 1 checklist
+
+- [x] Setup wizard: one-time token from the installer, owner account; installer renews an expired token and recognises a finished setup
+- [x] Sign-in, sessions, audit log; TOTP, passkeys, recovery codes; account page
+- [x] Domain reconciler: HTTPS listener and certificate per app hostname, HTTP→HTTPS redirect
+- [x] Workload API acting as the user; Kubernetes roles for owner/admin/developer/viewer
+- [x] Apps UI: list, detail, settings, deploy wizard, projects, restart, scale, rollback
+- [x] Volume, Task and Schedule reconcilers; `kwerft-batch` PriorityClass
+- [ ] Jobs API and UI (Tasks, Schedules, Volumes; run now from an App or Schedule)
+- [ ] Logs (live), shell (recorded), replicas table in App detail
+- [ ] Domain endpoints in the API
+- [ ] Not yet: admin reset of a member's second factors, data-key rotation, a per-org "require 2FA" setting (Phase 4); shared storage for pending logins before running more than one replica
 
 ### Phase 0 checklist
 
