@@ -8,9 +8,11 @@ import (
 	"fmt"
 	"net/http"
 	"sync"
+	"time"
 
 	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/transport"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -54,8 +56,9 @@ type Impersonator struct {
 	mapper meta.RESTMapper
 	scheme *runtime.Scheme
 
-	mu      sync.Mutex
-	clients map[identity]client.Client
+	mu         sync.Mutex
+	clients    map[identity]client.Client
+	clientsets map[identity]kubernetes.Interface
 }
 
 type identity struct{ email, role string }
@@ -78,40 +81,51 @@ func NewImpersonator(cfg *rest.Config, httpClient *http.Client, mapper meta.REST
 			return nil, err
 		}
 	}
-	return &Impersonator{cfg: rest.CopyConfig(cfg), http: httpClient, mapper: mapper, scheme: scheme, clients: map[identity]client.Client{}}, nil
+	return &Impersonator{cfg: rest.CopyConfig(cfg), http: httpClient, mapper: mapper, scheme: scheme,
+		clients: map[identity]client.Client{}, clientsets: map[identity]kubernetes.Interface{}}, nil
+}
+
+func checkIdentity(email, role string) error {
+	if email == "" {
+		return fmt.Errorf("impersonate: empty user")
+	}
+	for _, r := range Roles {
+		if r == role {
+			return nil
+		}
+	}
+	return fmt.Errorf("impersonate: unknown role %q", role)
+}
+
+func impersonation(email, role string) transport.ImpersonationConfig {
+	return transport.ImpersonationConfig{
+		UserName: UserName(email),
+		Groups:   []string{RoleGroup(role), Authenticated},
+	}
+}
+
+// httpClient is the shared transport with the user's Impersonate-* headers.
+// timeout 0 suits long-lived streams (logs), which their context bounds.
+func (i *Impersonator) httpClient(email, role string, timeout time.Duration) *http.Client {
+	base := i.http.Transport
+	if base == nil {
+		base = http.DefaultTransport
+	}
+	return &http.Client{Transport: transport.NewImpersonatingRoundTripper(impersonation(email, role), base), Timeout: timeout}
 }
 
 // For returns a client acting as the console user with this email and role.
 func (i *Impersonator) For(email, role string) (client.Client, error) {
-	if email == "" {
-		return nil, fmt.Errorf("impersonate: empty user")
+	if err := checkIdentity(email, role); err != nil {
+		return nil, err
 	}
-	known := false
-	for _, r := range Roles {
-		known = known || r == role
-	}
-	if !known {
-		return nil, fmt.Errorf("impersonate: unknown role %q", role)
-	}
-
 	id := identity{email, role}
 	i.mu.Lock()
 	defer i.mu.Unlock()
 	if c, ok := i.clients[id]; ok {
 		return c, nil
 	}
-	base := i.http.Transport
-	if base == nil {
-		base = http.DefaultTransport
-	}
-	hc := &http.Client{
-		Transport: transport.NewImpersonatingRoundTripper(transport.ImpersonationConfig{
-			UserName: UserName(email),
-			Groups:   []string{RoleGroup(role), Authenticated},
-		}, base),
-		Timeout: i.http.Timeout,
-	}
-	c, err := client.New(i.cfg, client.Options{HTTPClient: hc, Mapper: i.mapper, Scheme: i.scheme})
+	c, err := client.New(i.cfg, client.Options{HTTPClient: i.httpClient(email, role, i.http.Timeout), Mapper: i.mapper, Scheme: i.scheme})
 	if err != nil {
 		return nil, err
 	}
@@ -120,4 +134,41 @@ func (i *Impersonator) For(email, role string) (client.Client, error) {
 	}
 	i.clients[id] = c
 	return c, nil
+}
+
+// Clientset returns a typed clientset acting as the user, for what the
+// controller-runtime client cannot do: log streams, subresource URLs and raw
+// requests to aggregated APIs such as metrics.k8s.io. Its HTTP client has no
+// overall timeout, so streams last as long as their context.
+func (i *Impersonator) Clientset(email, role string) (kubernetes.Interface, error) {
+	if err := checkIdentity(email, role); err != nil {
+		return nil, err
+	}
+	id := identity{email, role}
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	if cs, ok := i.clientsets[id]; ok {
+		return cs, nil
+	}
+	cs, err := kubernetes.NewForConfigAndClient(i.cfg, i.httpClient(email, role, 0))
+	if err != nil {
+		return nil, err
+	}
+	if len(i.clientsets) >= maxCached {
+		i.clientsets = map[identity]kubernetes.Interface{}
+	}
+	i.clientsets[id] = cs
+	return cs, nil
+}
+
+// RESTConfig returns a copy of the console's config that impersonates the
+// user, for code that builds its own connections (exec over WebSocket or
+// SPDY). Every request made with it carries the user's identity.
+func (i *Impersonator) RESTConfig(email, role string) (*rest.Config, error) {
+	if err := checkIdentity(email, role); err != nil {
+		return nil, err
+	}
+	cfg := rest.CopyConfig(i.cfg)
+	cfg.Impersonate = rest.ImpersonationConfig{UserName: UserName(email), Groups: []string{RoleGroup(role), Authenticated}}
+	return cfg, nil
 }
