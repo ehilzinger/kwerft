@@ -303,6 +303,7 @@ before the beta or move them into a phase.
 - A resolved notification after an alert stops firing; silences from the Alerts tab.
 
 **Small fixes**
+- **Bug (found by the e2e harness, 2026-10-05):** `install.sh --config` with an `owner:` section is documented, but the console never reads the `kwerft-bootstrap` Secret, and `--config` stops the installer from creating a setup token — such an install has no way to create its owner. Fix before relying on `--config` for automation (the e2e uses the setup token).
 - ntfy notifications: set the logs link as the tap target (ntfy `click`), not only in the text.
 - Reconcilers log "object has been modified" conflicts as errors since status writes are guarded (`patchStatus`); retry them quietly instead.
 - After an upgrade, developers and viewers have no project access for the seconds until the Project reconciler's resync writes the per-project RoleBindings; keep the old binding until then or have the installer wait for them.
