@@ -38,6 +38,9 @@ type Config struct {
 	InsecureCookies bool
 	// Now is the clock; nil means time.Now (tests override it).
 	Now func() time.Time
+	// InviteSender delivers invite links (e.g. SMTP); nil means the link is
+	// only shown to the inviter. See api_members.go.
+	InviteSender InviteSender
 	// DataKey (32 bytes) encrypts secrets at rest, such as TOTP seeds. Without
 	// it, authenticator apps cannot be set up or checked.
 	DataKey []byte
@@ -183,7 +186,11 @@ func logRequests(log *slog.Logger, next http.Handler) http.Handler {
 		if r.URL.Path == "/healthz" || r.URL.Path == "/readyz" {
 			return
 		}
-		log.Info("http", "method", r.Method, "path", r.URL.Path, "status", rec.status, "duration", time.Since(start))
+		p := r.URL.Path
+		if strings.HasPrefix(p, "/invite/") {
+			p = "/invite/…" // the rest is a single-use invite token
+		}
+		log.Info("http", "method", r.Method, "path", p, "status", rec.status, "duration", time.Since(start))
 	})
 }
 
