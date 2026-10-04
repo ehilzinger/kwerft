@@ -232,7 +232,9 @@ Work split and contracts: `docs/phase4.md`.
 - [x] W2 Traffic rules: TrafficRule → CiliumNetworkPolicy, App/Project policies on Cilium (old NetworkPolicies removed on upgrade), Hubble counts and drops from the relay, "create allow rule", project isolation toggle, plain HTTP only from the Gateway's namespace
 - [x] W3 Server firewall: FirewallRules through a node agent (`kwerft node-agent` DaemonSet filling two chains of the installer's nftables table) with lock-out protection and auto-rollback, required rules, Network › Server firewall (try on the test server: `docs/phase4.md` › As built). Hetzner Cloud Firewall sync and the Cloud API token setting moved to Phase 5 (2026-10-04)
 - [x] W4 Identity: OIDC SSO (Google, Entra, Keycloak, generic; fake-issuer tests), API tokens (`kwft_`, hashed, role cap, project scope, expiry), scoped kubeconfig through the `/k8s/` proxy, X-Real-IP only from node addresses, data-key rotation (Settings or by hand). Notes in `docs/phase4.md` › As built
-- [ ] Exit criterion: the isolation suite proves a developer in one project cannot read another project's pods, logs, secrets, metrics, alerts, builds or traffic
+- [x] Exit criterion: the isolation suite (`internal/server/isolation_test.go`, in `make check`) proves a developer in one project cannot read another project's pods, logs, secrets, metrics, alerts, builds or traffic — through Kubernetes and through every console list, search and stream; also for project-limited API tokens
+- [x] On the test server (2026-10-04): upgrade keeps Team projects working (per-project RoleBindings after the controller's resync), App and Project policies moved to Cilium, Hubble relay closed to app pods; firewall agent in sync, a rule that adds access applies at once, a removal rolls back after 60 s without confirmation, a confirmed one sticks
+- [ ] Still to try in the browser: the firewall tab's "your address" and SSH narrowing (W3's plan in `docs/phase4.md`), single sign-on with a real provider, a downloaded kubeconfig
 - Moved to Phase 5 (2026-10-04): e2e install runs on Hetzner Cloud, Hetzner Cloud Firewall sync and the Cloud API token setting
 
 ### Phase 3 checklist
