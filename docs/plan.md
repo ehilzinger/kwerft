@@ -213,8 +213,9 @@ Exit codes: 0 ok · 2 usage · 10 preflight · 20 network/DNS · 30 Kubernetes �
 - [x] Managed records and the DNS-01 wildcard on the test server with kwerft.dev (2026-10-04): `*.apps.kwerft.dev` record created, wildcard certificate in ~1.5 min, an app moved onto it
 - [x] Certificate secrets of hostnames no longer served are removed after 7 days unused (`kwerft.dev/unused-since`), so a returning hostname reuses its certificate instead of spending Let's Encrypt quota
 - [x] Release pipeline: tag `v*` → multi-arch image (ko) and chart on GHCR, stamped install/join scripts to the public `kwerft-install` repo, GitHub Release; signing opt-in (`SIGN_RELEASES`); see RELEASING.md
-- [ ] Cut the first release and do the one-time GitHub setup (packages public, install repo, token)
-- [ ] Exit criterion on a fresh Cloud server from the published release: app on HTTPS in < 10 min; a schedule restarts an app on success — then automate it as the e2e test
+- [x] Cut the first release and do the one-time GitHub setup (packages public, install repo, token): v0.1.0-rc.1/rc.2, then **v0.1.0** (2026-10-04, the first stable: top-level `install.sh` in kwerft-install, image `:latest`)
+- [x] Exit criterion on a fresh Cloud server from the published release (rc.2, 2026-10-04): app on HTTPS in 7:06; a schedule restarted an app on success
+- [ ] Automate the exit criterion as the e2e test (fresh Cloud server per release tag, install, assert, destroy)
 - [ ] Not yet: admin reset of a member's second factors, data-key rotation, a per-org "require 2FA" setting (Phase 4); shared storage for pending logins before running more than one replica
 
 ### Phase 0 checklist
