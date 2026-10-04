@@ -43,8 +43,8 @@ import (
 	"github.com/ehilzinger/kwerft/internal/store"
 )
 
-// cluster is a real kube-apiserver (envtest, with RBAC) running the Project
-// and App reconcilers. nil when KUBEBUILDER_ASSETS is not set.
+// cluster is a real kube-apiserver (envtest, with RBAC) running the Project,
+// App, Volume, Task and Schedule reconcilers. nil when KUBEBUILDER_ASSETS is not set.
 var cluster *testCluster
 
 type testCluster struct {
@@ -123,6 +123,16 @@ func runWithCluster(m *testing.M) int {
 	}
 	if err := (&controllers.AppReconciler{Client: mgr.GetClient()}).SetupWithManager(mgr); err != nil {
 		return fail("app reconciler", err)
+	}
+	// Jobs (jobs_test.go). Nothing runs pods here, so Tasks stay Pending.
+	if err := (&controllers.VolumeReconciler{Client: mgr.GetClient()}).SetupWithManager(mgr); err != nil {
+		return fail("volume reconciler", err)
+	}
+	if err := (&controllers.TaskReconciler{Client: mgr.GetClient(), APIReader: mgr.GetAPIReader()}).SetupWithManager(mgr); err != nil {
+		return fail("task reconciler", err)
+	}
+	if err := (&controllers.ScheduleReconciler{Client: mgr.GetClient()}).SetupWithManager(mgr); err != nil {
+		return fail("schedule reconciler", err)
 	}
 	go func() { _ = mgr.Start(ctx) }()
 

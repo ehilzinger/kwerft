@@ -75,6 +75,7 @@ func (a *api) register(mux *http.ServeMux) {
 	a.registerMFA(mux)
 
 	a.registerWorkloads(mux)
+	a.registerJobs(mux)
 }
 
 // ---- setup -----------------------------------------------------------------
