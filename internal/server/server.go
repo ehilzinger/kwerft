@@ -2,6 +2,7 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"io/fs"
@@ -15,6 +16,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
+	"github.com/ehilzinger/kwerft/internal/clusters"
 	"github.com/ehilzinger/kwerft/internal/git"
 	"github.com/ehilzinger/kwerft/internal/hubble"
 	"github.com/ehilzinger/kwerft/internal/kube"
@@ -67,6 +69,14 @@ type Config struct {
 	// (see api_workloads.go for when that is allowed).
 	Kube      *kube.Impersonator
 	KubeCache client.Reader
+	// Clusters are the clusters this console manages (Phase 5,
+	// docs/phase5.md): Kube and KubeCache reach the local one; for the
+	// others the console builds the same from the Registry's RESTConfig (see
+	// clusters.go). Nil or clusters.Static: the local cluster only.
+	Clusters clusters.Registry
+	// BaseContext bounds background work such as remote clusters' informer
+	// caches; nil means the process lifetime.
+	BaseContext context.Context
 	// RecordingsDir keeps the asciinema recordings of shell sessions; empty
 	// disables shells, since none may run unrecorded (see api_shell.go).
 	RecordingsDir string
@@ -132,6 +142,9 @@ type Config struct {
 	// firewallHook lets tests set the client address the lock-out check
 	// sees; see api_firewall.go.
 	firewallHook func(*firewallAPI)
+	// clusterHook lets tests adjust a remote cluster's connection once
+	// built (point its observability at fakes); see clusters.go.
+	clusterHook func(*clusterConn)
 }
 
 // New returns an http.Server ready to ListenAndServe.

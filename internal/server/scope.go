@@ -32,6 +32,11 @@ import (
 // Single-object reads and every write go through impersonation instead, so
 // Kubernetes decides those; this scope only ever narrows what a list,
 // search or stream returns.
+//
+// A scope is one cluster's (clusters.go): the Projects and namespaces of the
+// cluster in the context. Project names are unique across clusters, so the
+// scopes of a user's clusters never overlap; lists across clusters compute
+// one per cluster they visit (visitClusters).
 
 // projectScope is what one user reaches.
 type projectScope struct {
@@ -136,26 +141,35 @@ func (s *projectScope) namespaces() []string {
 // reachesAll: there is no project the user does not reach.
 func (s *projectScope) reachesAll() bool { return s.platform || !s.partial }
 
-// projectScope reads the user's scope. Projects come from the informer cache
-// (every role may list them, see roles.yaml); the namespace labels with the
-// console's own identity, since users cannot read namespaces.
+// projectScope reads the user's scope in the context's cluster. Projects
+// come from the informer cache (every role may list them, see roles.yaml);
+// the namespace labels with the console's own identity, since users cannot
+// read namespaces.
 func (a *api) projectScope(ctx context.Context, pr *principal) (*projectScope, error) {
-	if a.cfg.Kube == nil {
-		return nil, errors.New("no Kubernetes cluster")
+	s, _, err := a.scopeAndProjects(ctx, pr)
+	return s, err
+}
+
+// scopeAndProjects is projectScope with the cluster's Projects it was made
+// from.
+func (a *api) scopeAndProjects(ctx context.Context, pr *principal) (*projectScope, []kwerftv1.Project, error) {
+	conn := a.conn(ctx)
+	if conn.kube == nil {
+		return nil, nil, errors.New("no Kubernetes cluster")
 	}
-	c, err := a.cfg.Kube.For(pr.user.Email, pr.user.Role)
+	c, err := conn.kube.For(pr.user.Email, pr.user.Role)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	var projects kwerftv1.ProjectList
 	if err := a.list(ctx, c, &projects); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	owned, err := a.projectNamespaces(ctx)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	return principalScope(pr, projects.Items, owned), nil
+	return principalScope(pr, projects.Items, owned), projects.Items, nil
 }
 
 // principalScope is scopeOf for a request: a project-restricted API token
@@ -172,11 +186,12 @@ func principalScope(pr *principal, projects []kwerftv1.Project, owned map[string
 // projectNamespaces are the namespaces the Project reconciler made: labelled
 // kwerft.dev/project=<their own name> and not being deleted.
 func (a *api) projectNamespaces(ctx context.Context) (map[string]bool, error) {
+	conn := a.conn(ctx)
 	var items []corev1.Namespace
 	listed := false
-	if a.cfg.KubeCache != nil {
+	if conn.cache != nil {
 		var list corev1.NamespaceList
-		err := a.cfg.KubeCache.List(ctx, &list, client.HasLabels{controllers.LabelProject})
+		err := conn.cache.List(ctx, &list, client.HasLabels{controllers.LabelProject})
 		var notStarted *cache.ErrCacheNotStarted
 		switch {
 		case err == nil:
@@ -186,7 +201,7 @@ func (a *api) projectNamespaces(ctx context.Context) (map[string]bool, error) {
 		}
 	}
 	if !listed {
-		cs, err := a.cfg.Kube.Self()
+		cs, err := conn.kube.Self()
 		if err != nil {
 			return nil, err
 		}
@@ -225,8 +240,8 @@ func (a *api) scopedList(ctx context.Context, c client.Client, s *projectScope, 
 	if lo.Namespace != "" && !s.has(lo.Namespace) {
 		return meta.SetList(list, nil)
 	}
-	if a.cfg.KubeCache != nil {
-		err := a.cfg.KubeCache.List(ctx, list, opts...)
+	if kc := a.conn(ctx).cache; kc != nil {
+		err := kc.List(ctx, list, opts...)
 		var notStarted *cache.ErrCacheNotStarted
 		if err == nil {
 			return keepInScope(list, s)

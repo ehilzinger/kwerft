@@ -5,6 +5,14 @@ const e = (time: string, line: string, more: Partial<LogEntry> = {}): LogEntry =
   time, line, namespace: "shop", pod: "web-1", container: "app", ...more,
 });
 
+describe("logParams and clusters", () => {
+  it("names a cluster only without a project, and never the local one", () => {
+    expect(logParams({ cluster: "edge" })).toBe("cluster=edge");
+    expect(logParams({ cluster: "local" })).toBe("");
+    expect(logParams({ cluster: "edge", project: "shop" })).toBe("project=shop");
+  });
+});
+
 describe("logParams", () => {
   it("leaves out empty values", () => {
     expect(logParams({})).toBe("");

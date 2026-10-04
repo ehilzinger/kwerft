@@ -18,6 +18,8 @@ import (
 	"sync"
 	"time"
 	"unicode/utf8"
+
+	"github.com/ehilzinger/kwerft/internal/clusters"
 )
 
 // Shell recordings, in the asciinema v2 format
@@ -69,6 +71,9 @@ type recordingMeta struct {
 	ID      string `json:"id"`
 	User    string `json:"user"`
 	Project string `json:"project"`
+	// Cluster the pod ran in; empty (local) for recordings from before
+	// Phase 5.
+	Cluster string `json:"cluster,omitempty"`
 	// Kind says what the pod belonged to: "app" (a replica; App is set) or
 	// "task" (a run; Task is set). Sidecars from before Task shells have no
 	// kind and are App shells.
@@ -412,15 +417,29 @@ func (p *podsAPI) recordingList(w http.ResponseWriter, r *http.Request) {
 		p.internalError(w, r, err)
 		return
 	}
-	// Owners and admins (the route's roles) see every project's sessions.
-	// Should the route ever open to other roles, they get their projects'.
-	if pr := principalOf(r); !unconfined(pr) {
-		scope, err := p.projectScope(r.Context(), pr)
-		if err != nil {
-			p.internalError(w, r, err)
-			return
+	for i := range list {
+		if list[i].Cluster == "" {
+			list[i].Cluster = clusters.Local
 		}
-		list = slices.DeleteFunc(list, func(m recordingMeta) bool { return !scope.has(m.Project) })
+	}
+	if c := q.Get("cluster"); c != "" {
+		list = slices.DeleteFunc(list, func(m recordingMeta) bool { return m.Cluster != c })
+	}
+	// Owners and admins (the route's roles) see every project's sessions.
+	// Should the route ever open to other roles, they get their projects',
+	// in the cluster each session ran in.
+	if pr := principalOf(r); !unconfined(pr) {
+		scopes := map[string]*projectScope{}
+		list = slices.DeleteFunc(list, func(m recordingMeta) bool {
+			s, ok := scopes[m.Cluster]
+			if !ok {
+				if conn, err := p.clusters.byName(m.Cluster); err == nil {
+					s, _ = p.projectScope(withCluster(r.Context(), conn, true), pr)
+				}
+				scopes[m.Cluster] = s
+			}
+			return s == nil || !s.has(m.Project)
+		})
 	}
 	writeJSON(w, http.StatusOK, list)
 }

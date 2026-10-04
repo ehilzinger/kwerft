@@ -5,6 +5,8 @@ import { ApiError, api } from "../api";
 import { AppStatus } from "../components/AppStatus";
 import { AppsTabs } from "../components/AppsTabs";
 import { CreateProjectDialog } from "../components/CreateProjectDialog";
+import { ClusterBadge, ClusterFilter } from "../components/ClusterUI";
+import { inCluster, useClusterFilter } from "../clusters";
 import { ProjectAccessDialog } from "../components/ProjectAccessDialog";
 import { Dialog } from "../components/Dialog";
 import { Icon } from "../components/Icon";
@@ -26,8 +28,10 @@ export function Apps() {
   const [creating, setCreating] = useState(false);
   const [deleting, setDeleting] = useState<Project>();
   const [managing, setManaging] = useState<Project>();
+  const [cluster, setCluster] = useClusterFilter();
 
-  const all = apps.data ?? [];
+  const all = inCluster(apps.data ?? [], cluster);
+  const projectList = inCluster(projects.data ?? [], cluster);
   const query = q.trim().toLowerCase();
   const shown = all.filter(
     (a) =>
@@ -84,9 +88,10 @@ export function Apps() {
         <>
           <div className="toolbar">
             <input className="input" value={q} onChange={(e) => setQ(e.target.value)} placeholder="Filter by name or image" aria-label="Filter apps" style={{ width: 260 }} />
+            <ClusterFilter value={cluster} onChange={(c) => { setCluster(c); setProject(undefined); }} />
             <div className="seg" role="group" aria-label="Project">
               <button aria-pressed={!project} onClick={() => setProject(undefined)}>All projects</button>
-              {projects.data?.map((p) => (
+              {projectList.map((p) => (
                 <button key={p.name} aria-pressed={project === p.name} onClick={() => setProject(p.name)}
                   title={[p.displayName, p.access === "Members" ? "Members only" : ""].filter(Boolean).join(" · ") || undefined}>
                   {p.access === "Members" && <Icon name="shield" />}{p.access === "Members" && <span className="sr">Members only: </span>}
@@ -136,7 +141,7 @@ export function Apps() {
             <div className="empty">
               <h2>No apps match</h2>
               <p>Nothing matches these filters.</p>
-              <button className="btn" onClick={() => { setQ(""); setProblemsOnly(false); setProject(undefined); }}>Clear filters</button>
+              <button className="btn" onClick={() => { setQ(""); setProblemsOnly(false); setProject(undefined); setCluster(undefined); }}>Clear filters</button>
             </div>
           )}
         </>
@@ -163,7 +168,7 @@ function Row({ app: a, onOpen }: { app: AppSummary; onOpen: () => void }) {
         <span className="nm">
           <Link to="/apps/$project/$name" params={{ project: a.project, name: a.name }} onClick={(e) => e.stopPropagation()}>{a.name}</Link>
         </span>
-        <span className="sub">{a.project}{a.stateful ? " · stateful" : ""}</span>
+        <span className="sub">{a.project}{a.stateful ? " · stateful" : ""}<ClusterBadge cluster={a.cluster} /></span>
       </td>
       <td className="mono ell" title={source}>{source || "—"}</td>
       <td className="num">{a.readyReplicas}/{a.replicas}</td>

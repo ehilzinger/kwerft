@@ -21,6 +21,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	kwerftv1 "github.com/ehilzinger/kwerft/api/v1alpha1"
+	"github.com/ehilzinger/kwerft/internal/clusters"
 	"github.com/ehilzinger/kwerft/internal/controllers"
 )
 
@@ -45,11 +46,11 @@ func (a *api) registerWorkloads(mux *http.ServeMux) {
 	read := func(h http.HandlerFunc) http.HandlerFunc { return a.requireUser(a.requireKube(h)) }
 	write := func(h http.HandlerFunc) http.HandlerFunc { return a.sameOrigin(read(h)) }
 
-	mux.HandleFunc("GET /api/v1/projects", read(a.projectList))
+	mux.HandleFunc("GET /api/v1/projects", read(a.withClusterParam(a.projectList)))
 	mux.HandleFunc("POST /api/v1/projects", write(a.projectCreate))
 	mux.HandleFunc("DELETE /api/v1/projects/{project}", write(a.projectDelete))
 
-	mux.HandleFunc("GET /api/v1/apps", read(a.appList))
+	mux.HandleFunc("GET /api/v1/apps", read(a.withClusterParam(a.appList)))
 	mux.HandleFunc("POST /api/v1/projects/{project}/apps", write(a.appCreate))
 	mux.HandleFunc("GET /api/v1/projects/{project}/apps/{app}", read(a.appGet))
 	mux.HandleFunc("PUT /api/v1/projects/{project}/apps/{app}", write(a.appUpdate))
@@ -69,13 +70,21 @@ func (a *api) requireKube(next http.HandlerFunc) http.HandlerFunc {
 	}
 }
 
-// userClient returns a client that acts as the signed-in user, and a context
-// bounded by kubeTimeout.
+// userClient returns a client that acts as the signed-in user in the
+// request's cluster (the project's, see clusters.go), and a context bounded
+// by kubeTimeout.
 func (a *api) userClient(r *http.Request) (client.Client, *principal, context.Context, context.CancelFunc, error) {
 	p := r.Context().Value(ctxKey{}).(*principal)
-	c, err := a.cfg.Kube.For(p.user.Email, p.user.Role)
+	c, err := a.conn(r.Context()).kube.For(p.user.Email, p.user.Role)
 	ctx, cancel := context.WithTimeout(r.Context(), kubeTimeout)
 	return c, p, ctx, cancel, err
+}
+
+// managementClient acts as the user in the management cluster (local), for
+// the kinds that live only there (Git connections, notification channels;
+// docs/phase5.md) whatever cluster the request is about.
+func (a *api) managementClient(p *principal) (client.Client, error) {
+	return a.clusters.local.kube.For(p.user.Email, p.user.Role)
 }
 
 // list reads from the informer cache when there is one and falls back to the
@@ -83,8 +92,8 @@ func (a *api) userClient(r *http.Request) (client.Client, *principal, context.Co
 // kinds every role may list (Projects, alert rules); namespaced kinds go
 // through scopedList.
 func (a *api) list(ctx context.Context, c client.Client, list client.ObjectList, opts ...client.ListOption) error {
-	if a.cfg.KubeCache != nil {
-		err := a.cfg.KubeCache.List(ctx, list, opts...)
+	if kc := a.conn(ctx).cache; kc != nil {
+		err := kc.List(ctx, list, opts...)
 		var notStarted *cache.ErrCacheNotStarted
 		if !errors.As(err, &notStarted) {
 			return err
@@ -122,9 +131,18 @@ func (a *api) kubeError(w http.ResponseWriter, r *http.Request, p *principal, ac
 	case apierrors.IsTimeout(err), apierrors.IsServerTimeout(err), apierrors.IsServiceUnavailable(err),
 		apierrors.IsTooManyRequests(err), errors.Is(err, context.DeadlineExceeded):
 		writeError(w, http.StatusServiceUnavailable, "The Kubernetes API is not responding. Try again in a moment.")
+	case errors.Is(err, clusters.ErrUnavailable), !a.conn(r.Context()).isLocal() && !isAPIStatus(err):
+		// A remote cluster's tunnel went away during the request.
+		a.cfg.Logger.Warn("remote cluster request failed", "cluster", a.conn(r.Context()).name, "path", r.URL.Path, "err", err)
+		clusterError(w, &clusterUnreachableError{cluster: a.conn(r.Context()).name})
 	default:
 		a.internalError(w, r, err)
 	}
+}
+
+func isAPIStatus(err error) bool {
+	var status apierrors.APIStatus
+	return errors.As(err, &status)
 }
 
 // humanize turns an API server validation message such as "Invalid value: -1:
@@ -182,6 +200,8 @@ type projectJSON struct {
 	Role   string `json:"role,omitempty"`
 	// Members, for owners and admins (who manage them).
 	Members []projectMemberJSON `json:"members,omitempty"`
+	// Cluster the project lives in ("local" for the management cluster).
+	Cluster string `json:"cluster"`
 }
 
 type projectMemberJSON struct {
@@ -213,35 +233,14 @@ func projectSummary(p *kwerftv1.Project, apps int) projectJSON {
 	return out
 }
 
+// projectList lists the projects the user reaches in every connected
+// cluster (or the one ?cluster= names).
 func (a *api) projectList(w http.ResponseWriter, r *http.Request) {
-	c, p, ctx, cancel, err := a.userClient(r)
+	p := principalOf(r)
+	ctx, cancel := context.WithTimeout(r.Context(), kubeTimeout)
 	defer cancel()
-	if err != nil {
-		a.internalError(w, r, err)
-		return
-	}
-	var projects kwerftv1.ProjectList
-	if err := a.list(ctx, c, &projects); err != nil {
-		a.kubeError(w, r, p, "project.list", "", "No projects found.", err)
-		return
-	}
-	owned, err := a.projectNamespaces(ctx)
-	if err != nil {
-		a.kubeError(w, r, p, "project.list", "", "No projects found.", err)
-		return
-	}
-	scope := principalScope(p, projects.Items, owned)
-	var apps kwerftv1.AppList
-	if err := a.scopedList(ctx, c, scope, &apps); err != nil {
-		a.kubeError(w, r, p, "project.list", "", "No apps found.", err)
-		return
-	}
-	count := map[string]int{}
-	for _, app := range apps.Items {
-		count[app.Namespace]++
-	}
 	var names map[string]string // email → name, for owners and admins
-	if scope.platform {
+	if unconfined(p) && (p.token == nil || p.token.Projects == nil) {
 		names = map[string]string{}
 		users, err := a.store.Members(ctx)
 		if err != nil {
@@ -252,27 +251,48 @@ func (a *api) projectList(w http.ResponseWriter, r *http.Request) {
 			names[u.Email] = u.Name
 		}
 	}
-	out := make([]projectJSON, 0, len(projects.Items))
-	for i := range projects.Items {
-		pr := &projects.Items[i]
-		if !scope.reaches(pr.Name) {
-			continue
+	out := []projectJSON{}
+	if !a.visitClusters(w, r, ctx, p, "project.list", "No projects found.", func(v *clusterVisit) error {
+		var apps kwerftv1.AppList
+		if err := a.scopedList(v.ctx, v.c, v.scope, &apps); err != nil {
+			return err
 		}
-		j := projectSummary(pr, count[pr.Name])
-		j.Role = scope.role(pr.Name)
-		if names != nil {
-			j.Members = projectMembers(pr, names)
+		count := map[string]int{}
+		for _, app := range apps.Items {
+			count[app.Namespace]++
 		}
-		out = append(out, j)
+		for i := range v.projects {
+			pr := &v.projects[i]
+			if !v.scope.reaches(pr.Name) {
+				continue
+			}
+			j := projectSummary(pr, count[pr.Name])
+			j.Role, j.Cluster = v.scope.role(pr.Name), v.conn.name
+			if names != nil && v.scope.platform {
+				j.Members = projectMembers(pr, names)
+			}
+			out = append(out, j)
+		}
+		return nil
+	}) {
+		return
 	}
 	slices.SortFunc(out, func(x, y projectJSON) int { return strings.Compare(x.Name, y.Name) })
 	writeJSON(w, http.StatusOK, out)
 }
 
+// projectCreate makes a project in the cluster the request names (owners
+// and admins choose; the default is the local cluster). Project names are
+// unique across clusters: a name any known cluster has is refused. The
+// check and the create are serialized in this console, so two requests
+// here cannot both take a name; what remains is a Project created past the
+// console (kubectl) in another cluster at the same moment, which the
+// project index then reports as a conflict instead of guessing (clusters.go).
 func (a *api) projectCreate(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Name        string `json:"name"`
 		DisplayName string `json:"displayName"`
+		Cluster     string `json:"cluster"`
 	}
 	if !decode(w, r, &req) {
 		return
@@ -291,11 +311,38 @@ func (a *api) projectCreate(w http.ResponseWriter, r *http.Request) {
 		invalid(w, "displayName", "Keep the display name under 100 characters.")
 		return
 	}
-	c, p, ctx, cancel, err := a.userClient(r)
-	defer cancel()
+	p := principalOf(r)
+	req.Cluster = strings.TrimSpace(req.Cluster)
+	if req.Cluster != "" && req.Cluster != clusters.Local && !unconfined(p) {
+		writeJSON(w, http.StatusForbidden, map[string]string{"field": "cluster", "error": "Only owners and admins choose the cluster of a project."})
+		return
+	}
+	conn, err := a.clusters.byName(req.Cluster)
+	if err != nil {
+		clusterError(w, err)
+		return
+	}
+	c, err := conn.kube.For(p.user.Email, p.user.Role)
 	if err != nil {
 		a.internalError(w, r, err)
 		return
+	}
+	ctx, cancel := context.WithTimeout(withCluster(r.Context(), conn, true), kubeTimeout)
+	defer cancel()
+	multi := a.clusters.multi()
+	if multi {
+		a.clusters.createMu.Lock()
+		defer a.clusters.createMu.Unlock()
+		taken, err := a.clusters.nameTaken(ctx, req.Name)
+		if err != nil {
+			a.cfg.Logger.Warn("project name check failed", "project", req.Name, "err", err)
+			writeError(w, http.StatusServiceUnavailable, "Could not check that the name is free in every cluster. Try again in a moment.")
+			return
+		}
+		if taken != "" && taken != conn.name {
+			invalid(w, "name", fmt.Sprintf("There is a project %q in the cluster %q already. Project names are unique across clusters: pick another name.", req.Name, taken))
+			return
+		}
 	}
 	proj := &kwerftv1.Project{
 		ObjectMeta: metav1.ObjectMeta{Name: req.Name},
@@ -305,9 +352,16 @@ func (a *api) projectCreate(w http.ResponseWriter, r *http.Request) {
 		a.kubeError(w, r, p, "project.create", req.Name, fmt.Sprintf("Project %q not found.", req.Name), err)
 		return
 	}
-	a.audit(r, p.user.Email, "project.create", req.Name, "")
+	if multi {
+		a.clusters.remember(req.Name, conn.name)
+	}
+	detail := ""
+	if !conn.isLocal() {
+		detail = "cluster " + conn.name
+	}
+	a.audit(r, p.user.Email, "project.create", req.Name, detail)
 	out := projectSummary(proj, 0)
-	out.Role = p.user.Role
+	out.Role, out.Cluster = p.user.Role, conn.name
 	writeJSON(w, http.StatusCreated, out)
 }
 
@@ -360,6 +414,7 @@ func gitSourceSummary(g *kwerftv1.GitSource) appSourceJSON {
 type appSummaryJSON struct {
 	Name     string        `json:"name"`
 	Project  string        `json:"project"`
+	Cluster  string        `json:"cluster"`
 	Source   appSourceJSON `json:"source"`
 	Image    string        `json:"image"` // what runs (or will run)
 	Ready    int32         `json:"readyReplicas"`
@@ -441,24 +496,23 @@ func appNotFound(project, name string) string {
 func appTarget(project, name string) string { return project + "/" + name }
 
 func (a *api) appList(w http.ResponseWriter, r *http.Request) {
-	c, p, ctx, cancel, err := a.userClient(r)
+	p := principalOf(r)
+	ctx, cancel := context.WithTimeout(r.Context(), kubeTimeout)
 	defer cancel()
-	if err != nil {
-		a.internalError(w, r, err)
+	out := []appSummaryJSON{}
+	if !a.visitClusters(w, r, ctx, p, "app.list", "No apps found.", func(v *clusterVisit) error {
+		var apps kwerftv1.AppList
+		if err := a.scopedList(v.ctx, v.c, v.scope, &apps, inProject(r)...); err != nil {
+			return err
+		}
+		for i := range apps.Items {
+			s := appSummary(&apps.Items[i])
+			s.Cluster = v.conn.name
+			out = append(out, s)
+		}
+		return nil
+	}) {
 		return
-	}
-	scope, ok := a.requestScope(w, r, ctx, p, "app.list")
-	if !ok {
-		return
-	}
-	var apps kwerftv1.AppList
-	if err := a.scopedList(ctx, c, scope, &apps, inProject(r)...); err != nil {
-		a.kubeError(w, r, p, "app.list", "", "No apps found.", err)
-		return
-	}
-	out := make([]appSummaryJSON, 0, len(apps.Items))
-	for i := range apps.Items {
-		out = append(out, appSummary(&apps.Items[i]))
 	}
 	slices.SortFunc(out, func(x, y appSummaryJSON) int {
 		if n := strings.Compare(x.Project, y.Project); n != 0 {
@@ -520,7 +574,7 @@ func (a *api) appCreate(w http.ResponseWriter, r *http.Request) {
 		a.internalError(w, r, err)
 		return
 	}
-	if !checkGitConnection(ctx, w, c, project, req.Spec.Source.Git) {
+	if !a.checkGitConnection(ctx, w, p, project, req.Spec.Source.Git) {
 		return
 	}
 	app := &kwerftv1.App{ObjectMeta: metav1.ObjectMeta{Name: req.Name, Namespace: project}, Spec: req.Spec}
@@ -600,7 +654,7 @@ func (a *api) appUpdate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if g := req.Spec.Source.Git; g != nil && (app.Spec.Source.Git == nil || app.Spec.Source.Git.Connection != g.Connection) &&
-		!checkGitConnection(ctx, w, c, project, g) {
+		!a.checkGitConnection(ctx, w, p, project, g) {
 		return
 	}
 	if req.ResourceVersion != "" {

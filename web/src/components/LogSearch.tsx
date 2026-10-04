@@ -9,6 +9,8 @@ import { shortPod } from "../pods";
 import { workloads } from "../workloads";
 import { highlight, Toggle } from "./LogViewer";
 import { Icon } from "./Icon";
+import { ClusterPicker } from "./ClusterUI";
+import { LOCAL } from "../clusters";
 import "../styles/pods.css";
 import "../styles/logsearch.css";
 
@@ -16,9 +18,10 @@ import "../styles/logsearch.css";
 // lines, also of pods that are gone. Monitoring › Logs uses it with project
 // and app pickers; the App detail Logs tab with its app fixed.
 
-export type SearchState = { query: string; project: string; app: string; level: Level; range: RangeId; platform: boolean };
+/** cluster: whose logs "All projects" searches (each cluster has its own VictoriaLogs); a project names its own. */
+export type SearchState = { query: string; project: string; app: string; level: Level; range: RangeId; platform: boolean; cluster: string };
 
-export const defaultSearch: SearchState = { query: "", project: "", app: "", level: "", range: "1h", platform: false };
+export const defaultSearch: SearchState = { query: "", project: "", app: "", level: "", range: "1h", platform: false, cluster: "" };
 
 type Props = {
   /** Fixed project and app (App detail): no pickers. */
@@ -54,7 +57,8 @@ export function LogSearch({ fixed, initial, onChange, canPlatform = false, heigh
   const apps = useQuery({ queryKey: ["logsearch-apps", s.project], queryFn: () => workloads.apps(s.project), enabled: !fixed && s.project !== "" });
 
   const filter: LogFilter = useMemo(
-    () => ({ query: s.query, project: s.project || undefined, app: s.app || undefined, level: s.level, platform: s.platform && !s.project, since: s.range, limit: PAGE }),
+    () => ({ query: s.query, project: s.project || undefined, app: s.app || undefined, level: s.level, platform: s.platform && !s.project, since: s.range, limit: PAGE,
+      cluster: s.cluster || undefined }),
     [s],
   );
   const first = useQuery({
@@ -192,6 +196,7 @@ export function LogSearch({ fixed, initial, onChange, canPlatform = false, heigh
             </select>
           </>
         )}
+        {!fixed && !s.project && <ClusterPicker value={s.cluster || LOCAL} onChange={(c) => update({ cluster: c === LOCAL ? "" : c })} />}
         <button type="submit" className="btn">Search</button>
         <div className="seg" role="group" aria-label="Level">
           {LEVELS.map((l) => <button key={l.id} type="button" aria-pressed={s.level === l.id} onClick={() => update({ level: l.id })}>{l.label}</button>)}

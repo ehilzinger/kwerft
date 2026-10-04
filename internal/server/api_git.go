@@ -877,8 +877,14 @@ func (g *gitAPI) buildNow(w http.ResponseWriter, r *http.Request) {
 	}
 	conn := git.Public(repo)
 	if src.Connection != "" {
+		// Git connections live in the management cluster (docs/phase5.md).
+		mc, err := g.managementClient(p)
+		if err != nil {
+			g.internalError(w, r, err)
+			return
+		}
 		var gc kwerftv1.GitConnection
-		if err := c.Get(ctx, client.ObjectKey{Name: src.Connection}, &gc); err != nil {
+		if err := mc.Get(ctx, client.ObjectKey{Name: src.Connection}, &gc); err != nil {
 			g.kubeError(w, r, p, "build.create", project+"/"+name, connectionNotFound(src.Connection), err)
 			return
 		}

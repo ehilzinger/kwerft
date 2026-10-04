@@ -27,6 +27,7 @@ import (
 
 	kwerftv1 "github.com/ehilzinger/kwerft/api/v1alpha1"
 	"github.com/ehilzinger/kwerft/internal/auth"
+	"github.com/ehilzinger/kwerft/internal/clusters"
 	"github.com/ehilzinger/kwerft/internal/controllers"
 	"github.com/ehilzinger/kwerft/internal/git"
 	"github.com/ehilzinger/kwerft/internal/hubble"
@@ -178,7 +179,11 @@ func main() {
 	var metricsClient *metrics.Client
 	var trustedProxy func(netip.Addr) bool
 	var dataKeySecret types.NamespacedName
+	// The clusters the console manages (Phase 5): the local one only until
+	// the agent tunnel's Registry replaces this (docs/phase5.md, W3).
+	var registry clusters.Registry
 	if mgr != nil {
+		registry = &clusters.Static{Config: mgr.GetConfig()}
 		system, systemReader = mgr.GetClient(), mgr.GetAPIReader()
 		metricsClient = metrics.New(observability.MetricsURL) // in-cluster only
 		// X-Real-Ip only from Traefik, i.e. from a node's address
@@ -208,6 +213,8 @@ func main() {
 
 		Kube:          kubeImp,
 		KubeCache:     kubeCache,
+		Clusters:      registry,
+		BaseContext:   ctx,
 		RecordingsDir: filepath.Join(*dataDir, "recordings"),
 		DebugImage:    *debugImage,
 

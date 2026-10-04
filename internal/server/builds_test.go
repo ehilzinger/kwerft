@@ -293,7 +293,7 @@ func newBuildLogEnv(t *testing.T, fb *fakeBuilds, fake *fakePods) (*podEnv, *bui
 	e := newEnv(t, func(c *Config) {
 		c.buildsHook = func(b *buildsAPI) {
 			b.getBuild = fb.get
-			b.ownPods = func() (podBackend, error) { return fakeBackend{fake}, nil }
+			b.ownPods = func(context.Context) (podBackend, error) { return fakeBackend{fake}, nil }
 			b.logs = fastLogLimits()
 			api = b
 		}

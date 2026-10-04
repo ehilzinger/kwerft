@@ -223,7 +223,7 @@ func newPodEnv(t *testing.T, fake *fakePods, tune ...func(*podsAPI)) *podEnv {
 	pe.env = newEnv(t, func(c *Config) {
 		c.RecordingsDir = pe.dir
 		c.podsHook = func(p *podsAPI) {
-			p.backend = func(*principal) (podBackend, error) { return fakeBackend{fake}, nil }
+			p.backend = func(context.Context, *principal) (podBackend, error) { return fakeBackend{fake}, nil }
 			p.logs = fastLogLimits()
 			for _, f := range tune {
 				f(p)

@@ -11,6 +11,8 @@ export type VolumeClass = "local-nvme" | "hcloud-volume";
 export type Volume = {
   name: string;
   project: string;
+  /** The cluster of the project (lists carry it). */
+  cluster?: string;
   size: string;
   class: VolumeClass;
   capacity?: string;
@@ -52,6 +54,8 @@ export type TaskSpec = {
 export type TaskSummary = {
   name: string;
   project: string;
+  /** The cluster of the project (lists carry it). */
+  cluster?: string;
   phase: TaskPhase;
   reason?: string;
   message?: string;
@@ -130,6 +134,8 @@ export type Schedule = {
 export type ScheduleSummary = {
   name: string;
   project: string;
+  /** The cluster of the project (lists carry it). */
+  cluster?: string;
   schedule: string;
   timeZone?: string;
   suspend: boolean;
@@ -156,6 +162,8 @@ export type SchedulePreview = { next: string[]; timeZone: string };
 export type Domain = {
   name: string;
   project: string;
+  /** The cluster of the project (lists carry it). */
+  cluster?: string;
   hostname: string;
   app?: string;
   listener?: string;

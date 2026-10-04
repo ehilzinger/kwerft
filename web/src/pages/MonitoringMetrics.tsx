@@ -2,6 +2,8 @@ import { useState, type FormEvent } from "react";
 import { Link } from "@tanstack/react-router";
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import { ApiError, api } from "../api";
+import { LOCAL } from "../clusters";
+import { ClusterPicker } from "../components/ClusterUI";
 import { Chart, Legend, type ChartSeries } from "../components/Chart";
 import { Icon } from "../components/Icon";
 import {
@@ -20,10 +22,11 @@ import "../styles/metrics.css";
 
 export function MonitoringMetrics() {
   const [range, setRange] = useState<RangeId>("1h");
+  const [cluster, setCluster] = useState(LOCAL);
   const session = useQuery({ queryKey: ["session"], queryFn: api.session });
   const q = useQuery({
-    queryKey: ["metrics-overview", range],
-    queryFn: () => metricsApi.overview(range),
+    queryKey: ["metrics-overview", range, cluster],
+    queryFn: () => metricsApi.overview(range, cluster),
     refetchInterval: 30_000,
     placeholderData: keepPreviousData,
   });
@@ -33,6 +36,7 @@ export function MonitoringMetrics() {
   return (
     <MonitoringLayout current="metrics">
       <div className="mx-toolbar">
+        <ClusterPicker value={cluster} onChange={setCluster} />
         <RangePicker value={range} onChange={setRange} />
         <span className="dim">{q.isFetching ? "Updating…" : `Last ${RANGE_LABEL[range]}${q.data ? ` · every ${stepText(q.data.step)}` : ""}`}</span>
       </div>
@@ -44,7 +48,7 @@ export function MonitoringMetrics() {
         </div>
       )}
       {q.data && <Overview data={q.data} stale={q.isPlaceholderData} />}
-      {explore && <Explorer range={range} />}
+      {explore && <Explorer range={range} cluster={cluster} />}
     </MonitoringLayout>
   );
 }
@@ -174,12 +178,12 @@ function TopApps({ title, apps, by, platform }: { title: string; apps: AppUsage[
 
 const EXAMPLE = "sum by (namespace) (kwerft:container_memory_working_set_bytes)";
 
-function Explorer({ range }: { range: RangeId }) {
+function Explorer({ range, cluster }: { range: RangeId; cluster: string }) {
   const [draft, setDraft] = useState("");
   const [query, setQuery] = useState("");
   const q = useQuery({
-    queryKey: ["metrics-query", query, range],
-    queryFn: () => metricsApi.query(query, range),
+    queryKey: ["metrics-query", query, range, cluster],
+    queryFn: () => metricsApi.query(query, range, cluster),
     enabled: query !== "",
     retry: false,
   });

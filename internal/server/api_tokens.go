@@ -13,6 +13,7 @@ import (
 	"sigs.k8s.io/yaml"
 
 	"github.com/ehilzinger/kwerft/internal/auth"
+	"github.com/ehilzinger/kwerft/internal/clusters"
 	"github.com/ehilzinger/kwerft/internal/store"
 )
 
@@ -159,7 +160,7 @@ var tokenProjectless = []string{
 	"GET /api/v1/metrics/overview", "GET /api/v1/metrics/query",
 	"GET /api/v1/logs", "GET /api/v1/logs/tail",
 	"GET /api/v1/alerts", "GET /api/v1/alerts/silences", "GET /api/v1/alerts/rules",
-	"GET /api/v1/recordings", "GET /api/v1/traffic/drops",
+	"GET /api/v1/recordings", "GET /api/v1/traffic/drops", "GET /api/v1/cluster-status",
 }
 
 // tokenMayUse applies the token rules above to the matched route. It answers
@@ -385,14 +386,23 @@ func (a *api) kubeconfigCreate(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	cfg, name := kubeconfigYAML(a.publicBase(r), a.consoleDomain(), principalOf(r).user.Email, raw, t.Projects)
+	var others []string // the other clusters, each a context of its own
+	for _, st := range a.clusters.states() {
+		if st.name != clusters.Local {
+			others = append(others, st.name)
+		}
+	}
+	cfg, name := kubeconfigYAML(a.publicBase(r), a.consoleDomain(), principalOf(r).user.Email, raw, t.Projects, others...)
 	writeJSON(w, http.StatusCreated, map[string]any{"kubeconfig": cfg, "filename": name, "apiToken": tokenJSON(t, now)})
 }
 
 // kubeconfigYAML renders a kubeconfig for the proxy at base+"/k8s". The
 // cluster is named after the console's hostname, so several consoles merge
-// into one kubeconfig without clashing.
-func kubeconfigYAML(base, domain, email, token string, projects []string) (string, string) {
+// into one kubeconfig without clashing. Every other cluster the console
+// manages gets a cluster and context "kwerft-<domain>-<name>" at
+// base+"/k8s/clusters/<name>" with the same token; the management cluster's
+// stays the current context.
+func kubeconfigYAML(base, domain, email, token string, projects []string, others ...string) (string, string) {
 	if domain == "" {
 		domain = "kwerft"
 	}
@@ -402,13 +412,20 @@ func kubeconfigYAML(base, domain, email, token string, projects []string) (strin
 	if len(projects) > 0 {
 		ctx["namespace"] = projects[0] // a project's namespace has its name
 	}
+	clustersOut := []any{map[string]any{"name": cluster, "cluster": map[string]any{"server": base + "/k8s"}}}
+	contexts := []any{map[string]any{"name": cluster, "context": ctx}}
+	for _, o := range others {
+		name := cluster + "-" + o
+		clustersOut = append(clustersOut, map[string]any{"name": name, "cluster": map[string]any{"server": base + "/k8s/clusters/" + o}})
+		contexts = append(contexts, map[string]any{"name": name, "context": map[string]any{"cluster": name, "user": userName}})
+	}
 	cfg := map[string]any{
 		"apiVersion":      "v1",
 		"kind":            "Config",
 		"current-context": cluster,
-		"clusters":        []any{map[string]any{"name": cluster, "cluster": map[string]any{"server": base + "/k8s"}}},
+		"clusters":        clustersOut,
 		"users":           []any{map[string]any{"name": userName, "user": map[string]any{"token": token}}},
-		"contexts":        []any{map[string]any{"name": cluster, "context": ctx}},
+		"contexts":        contexts,
 	}
 	b, _ := yaml.Marshal(cfg)
 	return "# Kwerft console " + domain + ": kubectl through the console, as " + email + ".\n" +

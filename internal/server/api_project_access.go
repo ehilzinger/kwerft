@@ -345,7 +345,19 @@ func (a *api) dropFromProjects(r *http.Request, actor *principal, email string) 
 	if a.cfg.Kube == nil {
 		return
 	}
-	c, err := a.cfg.Kube.For(actor.user.Email, actor.user.Role)
+	// Every connected cluster; one that cannot be reached now keeps the
+	// address in its member lists (logged), harmless while no account has it.
+	for _, st := range a.clusters.states() {
+		if st.conn == nil {
+			a.cfg.Logger.Error("could not remove a member from the projects of an unreachable cluster", "cluster", st.name, "member", email)
+			continue
+		}
+		a.dropFromClusterProjects(r.WithContext(withCluster(r.Context(), st.conn, true)), actor, email)
+	}
+}
+
+func (a *api) dropFromClusterProjects(r *http.Request, actor *principal, email string) {
+	c, err := a.conn(r.Context()).kube.For(actor.user.Email, actor.user.Role)
 	if err != nil {
 		a.cfg.Logger.Error("could not remove a member from projects", "err", err)
 		return

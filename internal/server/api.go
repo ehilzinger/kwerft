@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/ehilzinger/kwerft/internal/auth"
+	"github.com/ehilzinger/kwerft/internal/clusters"
 	"github.com/ehilzinger/kwerft/internal/logs"
 	"github.com/ehilzinger/kwerft/internal/observability"
 	"github.com/ehilzinger/kwerft/internal/setup"
@@ -40,6 +41,10 @@ type api struct {
 	tok      *tokenAuth // API token rate limits, see api_tokens.go
 	// vlogs reads VictoriaLogs: log search and log history (api_logsearch.go).
 	vlogs *logs.Client
+	// clusters reaches every managed cluster (clusters.go); baseCtx bounds
+	// their background work.
+	clusters *clusterSet
+	baseCtx  context.Context
 
 	mu     sync.Mutex
 	grants map[string]time.Time // setup grant hash → expiry
@@ -67,6 +72,14 @@ func newAPI(cfg Config) *api {
 		tok:      newTokenAuth(now),
 		vlogs:    logs.New(cmp.Or(cfg.LogsURL, observability.LogsURL)),
 	}
+	a.baseCtx = cfg.BaseContext
+	if a.baseCtx == nil {
+		a.baseCtx = context.Background()
+	}
+	local := &clusterConn{name: clusters.Local, kube: cfg.Kube, cache: cfg.KubeCache, system: cfg.System,
+		systemReader: cfg.SystemReader, hubble: cfg.Hubble}
+	a.clusters = newClusterSet(cfg.Clusters, local, cfg.Logger, now)
+	a.clusters.connect = a.connectCluster
 	a.resealAtStart(context.Background())
 	return a
 }
@@ -99,6 +112,8 @@ func (a *api) register(mux *http.ServeMux) {
 	a.registerAlerts(mux)   // alerts, silences, alert rules, notification channels
 	a.registerTraffic(mux)  // traffic rules, dropped connections, isolation
 	a.registerFirewall(mux) // server firewall rules and their confirmation (api_firewall.go)
+
+	mux.HandleFunc("GET /api/v1/cluster-status", a.requireUser(a.clusterStatus)) // clusters.go
 }
 
 // ---- setup -----------------------------------------------------------------
@@ -352,7 +367,7 @@ func (a *api) requireUser(next http.HandlerFunc) http.HandlerFunc {
 			if !ok || !a.tokenMayUse(w, r, p) {
 				return
 			}
-			next(w, r.WithContext(context.WithValue(r.Context(), ctxKey{}, p)))
+			a.serveAs(w, r, p, next)
 			return
 		}
 		c, err := r.Cookie(a.cookies.session)
@@ -393,8 +408,19 @@ func (a *api) requireUser(next http.HandlerFunc) http.HandlerFunc {
 			})
 			return
 		}
-		next(w, r.WithContext(context.WithValue(r.Context(), ctxKey{}, pr)))
+		a.serveAs(w, r, pr, next)
 	}
+}
+
+// serveAs calls next as the principal, in the cluster of the route's
+// project (clusters.go).
+func (a *api) serveAs(w http.ResponseWriter, r *http.Request, p *principal, next http.HandlerFunc) {
+	r = r.WithContext(context.WithValue(r.Context(), ctxKey{}, p))
+	r, ok := a.inProjectCluster(w, r)
+	if !ok {
+		return
+	}
+	next(w, r)
 }
 
 func (a *api) requireRole(next http.HandlerFunc, roles ...string) http.HandlerFunc {

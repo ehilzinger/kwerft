@@ -4,6 +4,7 @@
 // authority on defaults and expressions; the defaults here only fill
 // placeholders and plain-language previews.
 import { ApiError, request } from "./api";
+import { clusterQuery } from "./clusters";
 import type { Build } from "./builds";
 import type { Domain, ScheduleSummary } from "./jobs";
 import { words, type AppSummary } from "./workloads";
@@ -30,10 +31,13 @@ export type Alert = {
   consoleURL?: string;
   /** IDs of the silences that mute it (Alertmanager's status.silencedBy); needed to unsilence. */
   silencedBy?: string[];
+  /** The cluster whose Alertmanager has it. */
+  cluster?: string;
 };
 
 export type Silence = { id: string; endsAt?: string; comment?: string; createdBy?: string };
-export type SilenceInput = { fingerprint: string; duration: string; comment: string };
+/** cluster: whose Alertmanager has the alert; the server finds it when left out. */
+export type SilenceInput = { fingerprint: string; duration: string; comment: string; cluster?: string };
 
 export type AlertCondition =
   | "CrashLooping" | "Restarts" | "MemoryHigh" | "CPUHigh" | "VolumeFillingUp" | "NodeMemoryPressure" | "NodeDiskPressure"
@@ -58,6 +62,8 @@ export type Rule = {
   ready: boolean;
   message?: string;
   effectiveExpr: string;
+  /** The cluster the rule lives in; it watches projects there. */
+  cluster?: string;
 };
 
 export type RuleInput = Omit<Rule, "default" | "firing" | "ready" | "message" | "effectiveExpr">;
@@ -95,12 +101,13 @@ const enc = encodeURIComponent;
 export const alertsApi = {
   alerts: (state: AlertState) => request<Alert[]>(`/alerts?state=${state}`),
   silence: (s: SilenceInput) => request<Silence>("/alerts/silences", { method: "POST", json: s }),
-  unsilence: (id: string) => request<void>(`/alerts/silences/${enc(id)}`, { method: "DELETE" }),
+  unsilence: (id: string, cluster?: string) => request<void>(`/alerts/silences/${enc(id)}${clusterQuery(cluster)}`, { method: "DELETE" }),
 
   rules: () => request<Rule[]>("/alerts/rules"),
   createRule: (r: RuleInput) => request<Rule>("/alerts/rules", { method: "POST", json: r }),
-  updateRule: (r: RuleInput) => request<Rule>(`/alerts/rules/${enc(r.name)}`, { method: "PUT", json: r }),
-  deleteRule: (name: string) => request<void>(`/alerts/rules/${enc(name)}`, { method: "DELETE" }),
+  // A rule is named within its cluster (Phase 5).
+  updateRule: (r: RuleInput) => request<Rule>(`/alerts/rules/${enc(r.name)}${clusterQuery(r.cluster)}`, { method: "PUT", json: r }),
+  deleteRule: (name: string, cluster?: string) => request<void>(`/alerts/rules/${enc(name)}${clusterQuery(cluster)}`, { method: "DELETE" }),
 
   channels: () => request<Channel[]>("/alerts/channels"),
   createChannel: (c: ChannelInput) => request<Channel>("/alerts/channels", { method: "POST", json: c }),

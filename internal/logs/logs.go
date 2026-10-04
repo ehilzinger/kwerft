@@ -130,6 +130,14 @@ func New(baseURL string) *Client {
 	return &Client{base: strings.TrimRight(baseURL, "/"), http: &http.Client{Transport: tr}, Limits: DefaultLimits}
 }
 
+// NewWithHTTP is New with the HTTP client given: VictoriaLogs of a remote
+// cluster, reached through its API server's service proxy with that
+// client's credentials (observability.ServiceProxyURL). The client must not
+// have an overall timeout, since tails last as long as their context.
+func NewWithHTTP(baseURL string, hc *http.Client) *Client {
+	return &Client{base: strings.TrimRight(baseURL, "/"), http: hc, Limits: DefaultLimits}
+}
+
 // levelFilters are fixed LogsQL filters per level: a structured level field
 // when the line was JSON, otherwise the usual words in the text.
 var levelFilters = map[string]string{

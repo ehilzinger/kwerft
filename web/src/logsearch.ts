@@ -36,6 +36,8 @@ export type LogFilter = {
   limit?: number;
   /** Owners and admins: every namespace, not just projects. */
   platform?: boolean;
+  /** Whose VictoriaLogs to search without a project (a project names its own); default the console's cluster. */
+  cluster?: string;
 };
 
 export const RANGES = [
@@ -71,6 +73,7 @@ export function logParams(f: LogFilter): string {
   set("until", f.until);
   set("limit", f.limit);
   set("platform", f.project ? undefined : f.platform);
+  set("cluster", f.project || f.cluster === "local" ? undefined : f.cluster);
   return q.toString();
 }
 

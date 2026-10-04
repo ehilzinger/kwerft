@@ -146,7 +146,7 @@ func (p *podsAPI) streamLogs(w http.ResponseWriter, r *http.Request, kind, proje
 		return
 	}
 	pr := r.Context().Value(ctxKey{}).(*principal)
-	b, err := p.backend(pr)
+	b, err := p.backend(r.Context(), pr)
 	if err != nil {
 		p.internalError(w, r, err)
 		return

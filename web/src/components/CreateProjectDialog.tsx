@@ -2,19 +2,24 @@ import { useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { ApiError } from "../api";
 import { PROJECT_RE, workloads, type Project } from "../workloads";
+import { LOCAL, useClusters } from "../clusters";
 import { Dialog } from "./Dialog";
 import { Field } from "./Field";
 
 // Creates a Project: a namespace with its own quota, Pod Security level and
 // default-deny network policy. Owners and admins only (Kubernetes RBAC).
+// With more than one cluster they pick where it lives; names are unique
+// across clusters.
 export function CreateProjectDialog({ onClose, onCreated }: { onClose: () => void; onCreated?: (p: Project) => void }) {
   const queryClient = useQueryClient();
   const [name, setName] = useState("");
   const [displayName, setDisplayName] = useState("");
+  const { clusters, multi } = useClusters();
+  const [cluster, setCluster] = useState(LOCAL);
   const [error, setError] = useState<{ field?: string; message: string }>();
 
   const create = useMutation({
-    mutationFn: () => workloads.createProject({ name: name.trim(), displayName: displayName.trim() || undefined }),
+    mutationFn: () => workloads.createProject({ name: name.trim(), displayName: displayName.trim() || undefined, cluster: multi && cluster !== LOCAL ? cluster : undefined }),
     onSuccess: async (p) => {
       await queryClient.invalidateQueries({ queryKey: ["projects"] });
       onCreated?.(p);
@@ -52,7 +57,21 @@ export function CreateProjectDialog({ onClose, onCreated }: { onClose: () => voi
         hint="Becomes the namespace. Lowercase letters, digits and dashes; cannot be changed later." />
       <Field id="proj-display" label="Display name (optional)" value={displayName} onChange={(e) => setDisplayName(e.target.value)} placeholder="Storefront"
         error={error?.field === "displayName" ? error.message : undefined} />
-      {error && error.field !== "name" && error.field !== "displayName" && <p className="form-error" role="alert">{error.message}</p>}
+      {multi && (
+        <div className="field">
+          <label htmlFor="proj-cluster">Cluster</label>
+          <select id="proj-cluster" className="input" value={cluster} onChange={(e) => setCluster(e.target.value)} aria-invalid={error?.field === "cluster"}>
+            {clusters.map((c) => (
+              <option key={c.name} value={c.name} disabled={!c.connected}>
+                {c.name === LOCAL ? `${LOCAL} (this console's cluster)` : c.name}{c.connected ? "" : " — unreachable"}
+              </option>
+            ))}
+          </select>
+          {error?.field === "cluster" ? <span className="field-error" role="alert">{error.message}</span>
+            : <span className="hint">Where its apps run. A project stays in its cluster; names are unique across all of them.</span>}
+        </div>
+      )}
+      {error && error.field !== "name" && error.field !== "displayName" && error.field !== "cluster" && <p className="form-error" role="alert">{error.message}</p>}
     </Dialog>
   );
 }
