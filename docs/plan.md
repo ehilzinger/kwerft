@@ -283,7 +283,7 @@ Work split and contracts: `docs/phase2.md`.
 Things found while building Phases 1–4 that are not done yet. Pick them up
 before the beta or move them into a phase.
 
-**To try on the test server (need the user's browser or accounts)**
+**To try on the test server (need the user's browser or accounts) — scheduled after Phase 6 (decided 2026-10-05)**
 - Server firewall: "Your address" shows the real public IP, then SSH narrowing to it (W3's step-by-step plan and recovery in `docs/phase4.md` › As built (W3)); also checks that `X-Real-Ip` is trusted from Traefik's actual peer address (cilium_host) — compare audit-log IPs with the real client.
 - Single sign-on with a real provider (redirect URI `https://<console>/api/v1/sso/callback`); an API token and a downloaded kubeconfig (`kubectl auth whoami`, exec/secrets/`--as` refused).
 - Slack as a notification channel (only ntfy was tried); the Phase 3 exit criterion literally names Slack.
