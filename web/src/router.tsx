@@ -89,7 +89,11 @@ const routeTree = root.addChildren([
       getParentRoute: () => authed, path: "/apps/new", component: Deploy,
       validateSearch: (s: Record<string, unknown>): { project?: string } => (typeof s.project === "string" ? { project: s.project } : {}),
     }),
-    createRoute({ getParentRoute: () => authed, path: "/apps/$project/$name", component: AppDetail }),
+    // ?build=<name> opens the Builds tab on that build (commit checks link there).
+    createRoute({
+      getParentRoute: () => authed, path: "/apps/$project/$name", component: AppDetail,
+      validateSearch: (s: Record<string, unknown>): { build?: string } => (typeof s.build === "string" && s.build ? { build: s.build } : {}),
+    }),
     createRoute({ getParentRoute: () => authed, path: "/apps/volumes", component: Volumes, validateSearch: projectSearch }),
     createRoute({ getParentRoute: () => authed, path: "/jobs", component: Jobs, validateSearch: projectSearch }),
     createRoute({

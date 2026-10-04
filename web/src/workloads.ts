@@ -1,6 +1,7 @@
 // Client for the workload API (projects and apps). The server acts as the
 // signed-in user against Kubernetes, so a 403 here is Kubernetes RBAC talking.
 import { request, type User } from "./api";
+import type { Build } from "./builds";
 
 export type Phase = "running" | "deploying" | "stopped" | "pending" | "failed";
 
@@ -17,7 +18,19 @@ export type Project = {
 export type AppSummary = {
   name: string;
   project: string;
-  source: { type: "image" | "git"; image?: string; repository?: string; branch?: string };
+  source: {
+    type: "image" | "git";
+    image?: string;
+    repository?: string;
+    branch?: string;
+    // Git apps, with defaults filled in.
+    path?: string;
+    builder?: "dockerfile" | "railpack";
+    dockerfile?: string;
+    connection?: string;
+    autoDeploy?: boolean;
+    pinnedImage?: string;
+  };
   image: string;
   readyReplicas: number;
   replicas: number;
@@ -46,7 +59,7 @@ export type Size = "small" | "medium" | "large" | "custom";
 export type AppSpec = {
   source: {
     image?: { ref: string; pullSecret?: string };
-    git?: { repository: string; branch?: string; path?: string; builder?: string; dockerfile?: string; connection?: string; autoDeploy?: boolean; pinnedImage?: string };
+    git?: GitSource;
   };
   replicas?: number;
   size?: Size;
@@ -61,7 +74,23 @@ export type AppSpec = {
   healthCheck?: HealthCheck;
 };
 
-export type Revision = { number: number; image: string; generation: number; build?: string; time: string };
+export type GitSource = {
+  repository: string;
+  branch?: string;
+  /** Build context inside the repository. */
+  path?: string;
+  builder?: "dockerfile" | "railpack";
+  /** Relative to path. */
+  dockerfile?: string;
+  /** GitConnection name; empty for public repositories. */
+  connection?: string;
+  autoDeploy?: boolean;
+  /** Set by a rollback: runs this image instead of the newest build. */
+  pinnedImage?: string;
+};
+
+/** build and commit: the Build that produced image, for Git apps. */
+export type Revision = { number: number; image: string; generation: number; build?: string; commit?: string; time: string };
 export type Condition = { type: string; status: "True" | "False" | "Unknown"; reason: string; message: string; observedGeneration?: number; lastTransitionTime: string };
 
 export type App = {
@@ -78,6 +107,8 @@ export type App = {
     urls?: string[];
     conditions?: Condition[];
   };
+  /** Git apps: the newest build. */
+  latestBuild?: Build;
 };
 
 const appPath = (project: string, name: string) => `/projects/${encodeURIComponent(project)}/apps/${encodeURIComponent(name)}`;

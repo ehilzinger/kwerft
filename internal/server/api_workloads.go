@@ -1,6 +1,7 @@
 package server
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -284,6 +285,27 @@ type appSourceJSON struct {
 	Image      string `json:"image,omitempty"`
 	Repository string `json:"repository,omitempty"`
 	Branch     string `json:"branch,omitempty"`
+	// Git apps only, with the CRD's defaults filled in.
+	Path        string `json:"path,omitempty"`
+	Builder     string `json:"builder,omitempty"`
+	Dockerfile  string `json:"dockerfile,omitempty"`
+	Connection  string `json:"connection,omitempty"`
+	AutoDeploy  *bool  `json:"autoDeploy,omitempty"`
+	PinnedImage string `json:"pinnedImage,omitempty"`
+}
+
+// gitSourceSummary is a Git source as the console shows it.
+func gitSourceSummary(g *kwerftv1.GitSource) appSourceJSON {
+	out := appSourceJSON{
+		Type: "git", Repository: g.Repository, Branch: cmp.Or(g.Branch, "main"), Path: cmp.Or(g.Path, "/"),
+		Builder: cmp.Or(g.Builder, "dockerfile"), Connection: g.Connection, PinnedImage: g.PinnedImage,
+	}
+	if out.Builder == "dockerfile" {
+		out.Dockerfile = cmp.Or(g.Dockerfile, "Dockerfile")
+	}
+	auto := g.AutoDeploy == nil || *g.AutoDeploy
+	out.AutoDeploy = &auto
+	return out
 }
 
 type appSummaryJSON struct {
@@ -343,7 +365,7 @@ func appSummary(app *kwerftv1.App) appSummaryJSON {
 			out.Image = src.Image.Ref
 		}
 	case src.Git != nil:
-		out.Source = appSourceJSON{Type: "git", Repository: src.Git.Repository, Branch: src.Git.Branch}
+		out.Source = gitSourceSummary(src.Git)
 	}
 	out.Phase, out.Reason, out.Message = appPhase(app)
 	if h := app.Status.History; len(h) > 0 && h[0].Time.After(out.Updated) {
@@ -403,6 +425,9 @@ var hostnameRE = regexp.MustCompile(`^([a-z0-9]([-a-z0-9]*[a-z0-9])?\.)+[a-z]([-
 // validateSpec catches mistakes the CRD schema lets through but the
 // reconciler would trip over later, so the user hears about them now.
 func validateSpec(w http.ResponseWriter, spec *kwerftv1.AppSpec) bool {
+	if g := spec.Source.Git; g != nil && !validateGitSource(w, g) {
+		return false
+	}
 	for i, e := range spec.Env {
 		if errs := validation.IsEnvVarName(e.Name); len(errs) > 0 {
 			invalid(w, fmt.Sprintf("spec.env[%d].name", i), fmt.Sprintf("%q is not a valid variable name. Use letters, digits, _, - and ., not starting with a digit.", e.Name))
@@ -446,6 +471,9 @@ func (a *api) appCreate(w http.ResponseWriter, r *http.Request) {
 		a.internalError(w, r, err)
 		return
 	}
+	if !checkGitConnection(ctx, w, c, project, req.Spec.Source.Git) {
+		return
+	}
 	app := &kwerftv1.App{ObjectMeta: metav1.ObjectMeta{Name: req.Name, Namespace: project}, Spec: req.Spec}
 	target := appTarget(project, req.Name)
 	if err := c.Create(ctx, app); err != nil {
@@ -479,7 +507,17 @@ func (a *api) appGet(w http.ResponseWriter, r *http.Request) {
 		a.kubeError(w, r, p, "app.get", appTarget(project, name), appNotFound(project, name), err)
 		return
 	}
-	writeJSON(w, http.StatusOK, appJSON(&app))
+	out := appDetailJSON{App: appJSON(&app)}
+	if app.Spec.Source.Git != nil {
+		out.LatestBuild = a.latestBuild(ctx, c, &app)
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+// appDetailJSON is the App with, for Git apps, its newest build.
+type appDetailJSON struct {
+	*kwerftv1.App
+	LatestBuild *buildJSON `json:"latestBuild,omitempty"`
 }
 
 // appUpdate replaces the spec. To not overwrite someone else's change, send
@@ -510,6 +548,10 @@ func (a *api) appUpdate(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.Generation != 0 && req.Generation != app.Generation {
 		writeError(w, http.StatusConflict, "Someone else changed this app's settings in the meantime. Reload and try again.")
+		return
+	}
+	if g := req.Spec.Source.Git; g != nil && (app.Spec.Source.Git == nil || app.Spec.Source.Git.Connection != g.Connection) &&
+		!checkGitConnection(ctx, w, c, project, g) {
 		return
 	}
 	if req.ResourceVersion != "" {

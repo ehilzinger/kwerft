@@ -1,4 +1,5 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { stripAnsi } from "../builds";
 import { shortPod, streamLogs, type LogLine, type LogQuery, type Replica } from "../pods";
 import "../styles/pods.css";
 
@@ -9,6 +10,8 @@ import "../styles/pods.css";
 //
 // Reuse for a Task:
 //   <LogViewer path={taskLogsPath(project, task)} replicas={pods} follow={running} downloadName={task} />
+// and for a build, which has one pod and is read from its start:
+//   <LogViewer path={buildLogsPath(project, build)} single follow={running} downloadName={...} />
 
 type Props = {
   /** Log endpoint below /api/v1, e.g. appLogsPath(project, app). */
@@ -23,6 +26,10 @@ type Props = {
   downloadName: string;
   /** Height of the log area (CSS). */
   height?: string;
+  /** One pod read from its start (a build): no replica picker, no time range. */
+  single?: boolean;
+  /** What an empty log says while following, e.g. "Waiting for the build to start…". */
+  waiting?: string;
 };
 
 const ROW = 20; // px; matches .logv .row
@@ -43,7 +50,7 @@ type Phase =
 
 type PodState = { state: "streaming" | "waiting" | "ended" | "error"; message?: string };
 
-export function LogViewer({ path, replicas, pod: initialPod, follow: initialFollow = true, downloadName, height = "min(62vh, 640px)" }: Props) {
+export function LogViewer({ path, replicas, pod: initialPod, follow: initialFollow = true, downloadName, height = "min(62vh, 640px)", single = false, waiting }: Props) {
   const [pod, setPod] = useState(initialPod ?? "");
   useEffect(() => setPod(initialPod ?? ""), [initialPod]);
   const [range, setRange] = useState<RangeId>("1h");
@@ -93,7 +100,7 @@ export function LogViewer({ path, replicas, pod: initialPod, follow: initialFoll
       setVersion((v) => v + 1);
     };
     const query: LogQuery = { pod: pod || undefined, follow: live, tail: TAIL, previous: usePrevious };
-    if (!usePrevious) query.since = RANGES.find((r) => r.id === range)!.since;
+    if (!usePrevious && !single) query.since = RANGES.find((r) => r.id === range)!.since;
     streamLogs(path, query, (e) => {
       switch (e.type) {
         case "start":
@@ -101,6 +108,7 @@ export function LogViewer({ path, replicas, pod: initialPod, follow: initialFoll
           if (e.follow) setPhase({ phase: "live" });
           break;
         case "line":
+          e.line.text = stripAnsi(e.line.text);
           pending.push(e.line);
           // Batch: at most ten renders a second, however fast lines come.
           if (!timer) timer = window.setTimeout(flush, 100);
@@ -130,7 +138,7 @@ export function LogViewer({ path, replicas, pod: initialPod, follow: initialFoll
       ctrl.abort();
       window.clearTimeout(timer);
     };
-  }, [path, pod, range, live, usePrevious, attempt]);
+  }, [path, pod, range, live, usePrevious, attempt, single]);
 
   // ---- scrolling: a fixed row height lets us render only what is visible.
   const box = useRef<HTMLDivElement>(null);
@@ -195,7 +203,7 @@ export function LogViewer({ path, replicas, pod: initialPod, follow: initialFoll
     [...known].sort().forEach((n, i) => m.set(n, (i % 4) + 1));
     return m;
   }, [known.join(" ")]); // by content, not identity
-  const tagged = pod === "";
+  const tagged = pod === "" && !single;
 
   const download = () => {
     const text = all.map((l) => [l.ts, tagged ? l.pod : undefined, l.text].filter((x) => x !== undefined && x !== "").join(" ")).join("\n");
@@ -212,22 +220,26 @@ export function LogViewer({ path, replicas, pod: initialPod, follow: initialFoll
   return (
     <div className="logviewer">
       <div className="toolbar">
-        <select className="input" aria-label="Replica" value={pod} onChange={(e) => { setPod(e.target.value); setPrevious(false); }}>
-          <option value="">All replicas ({known.length})</option>
-          {pod !== "" && !known.includes(pod) && <option value={pod}>{pod}</option>}
-          {known.map((n) => <option key={n} value={n}>{n}</option>)}
-        </select>
+        {!single && (
+          <select className="input" aria-label="Replica" value={pod} onChange={(e) => { setPod(e.target.value); setPrevious(false); }}>
+            <option value="">All replicas ({known.length})</option>
+            {pod !== "" && !known.includes(pod) && <option value={pod}>{pod}</option>}
+            {known.map((n) => <option key={n} value={n}>{n}</option>)}
+          </select>
+        )}
         <span className="logsearch">
           <input className="input mono" type="search" placeholder="Search" aria-label="Search logs" value={search}
             onChange={(e) => setSearch(e.target.value)}
             onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); jump(e.shiftKey ? -1 : 1); } }} />
           {needle && <span className="count" aria-live="polite">{matches.length === 0 ? "no match" : `${current >= 0 ? current + 1 + "/" : ""}${matches.length} line${matches.length === 1 ? "" : "s"}`}</span>}
         </span>
-        <div className="seg" role="group" aria-label="Time range">
-          {RANGES.map((r) => (
-            <button key={r.id} type="button" aria-pressed={range === r.id} disabled={usePrevious} onClick={() => setRange(r.id)}>{r.label}</button>
-          ))}
-        </div>
+        {!single && (
+          <div className="seg" role="group" aria-label="Time range">
+            {RANGES.map((r) => (
+              <button key={r.id} type="button" aria-pressed={range === r.id} disabled={usePrevious} onClick={() => setRange(r.id)}>{r.label}</button>
+            ))}
+          </div>
+        )}
         {canPrevious && <Toggle on={previous} onChange={setPrevious} title="Logs of the container instance before the last restart">Previous container</Toggle>}
         <Toggle on={live} onChange={setFollow} disabled={usePrevious} className="push">Follow</Toggle>
         <Toggle on={timestamps} onChange={setTimestamps}>Timestamps</Toggle>
@@ -237,7 +249,7 @@ export function LogViewer({ path, replicas, pod: initialPod, follow: initialFoll
       <div className="logpanel">
         <div className="logv" ref={box} onScroll={onScroll} style={{ height }} tabIndex={0} role="log" aria-label="Log lines">
           {all.length === 0 ? (
-            <div className="logempty">{emptyText(phase, usePrevious, RANGES.find((r) => r.id === range)!.label)}</div>
+            <div className="logempty">{emptyText(phase, usePrevious, single ? "" : RANGES.find((r) => r.id === range)!.label, waiting)}</div>
           ) : (
             <div className="logv-in" style={{ height: all.length * ROW }}>
               <div style={{ transform: `translateY(${first * ROW}px)` }}>
@@ -265,16 +277,17 @@ export function LogViewer({ path, replicas, pod: initialPod, follow: initialFoll
   );
 }
 
-function emptyText(p: Phase, previous: boolean, range: string) {
+function emptyText(p: Phase, previous: boolean, range: string, waiting?: string) {
   switch (p.phase) {
     case "connecting":
       return "Loading logs…";
     case "error":
       return "No logs.";
     case "live":
-      return `No lines in the last ${range} yet. New lines appear here.`;
+      return waiting ?? (range ? `No lines in the last ${range} yet. New lines appear here.` : "No lines yet. New lines appear here.");
     default:
-      return previous ? "The previous container left no logs." : `No log lines in the last ${range}.`;
+      if (p.reason === "gone") return p.message ?? "These logs are no longer available.";
+      return previous ? "The previous container left no logs." : range ? `No log lines in the last ${range}.` : "No log lines.";
   }
 }
 
@@ -291,7 +304,8 @@ function Footer({ phase, live, count, trimmed, dropped, pods, streaming, onResum
       {phase.phase === "connecting" && <span>— connecting… —</span>}
       {phase.phase === "live" && live && <span>— following · {streaming} {streaming === 1 ? "stream" : "streams"} · {lines} —</span>}
       {phase.phase === "ended" && phase.reason === "complete" && <span>— end of logs · {lines} —</span>}
-      {phase.phase === "ended" && phase.reason !== "complete" && (
+      {phase.phase === "ended" && phase.reason === "gone" && <span>{phase.message}</span>}
+      {phase.phase === "ended" && phase.reason !== "complete" && phase.reason !== "gone" && (
         <><span>{phase.message ?? "The stream stopped."}</span><button type="button" className="btn sm" onClick={onResume}>Resume</button></>
       )}
       {phase.phase === "error" && <><span className="err">{phase.message}</span><button type="button" className="btn sm" onClick={onResume}>Retry</button></>}

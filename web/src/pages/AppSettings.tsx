@@ -1,6 +1,8 @@
 import { useState, type FormEvent, type InputHTMLAttributes } from "react";
-import { useMutation } from "@tanstack/react-query";
+import { useMutation, useQuery } from "@tanstack/react-query";
 import { ApiError } from "../api";
+import { branchProblem, gitApi, normalizeRepository, repoPathProblem, repositoryProblem } from "../builds";
+import { GitFields, gitSourceOf } from "./Deploy";
 import { Icon } from "../components/Icon";
 import { VolumeMounts, checkMounts, mountsOf, volumesOf, type Mount } from "../components/VolumeMounts";
 import { HOST_RE, sizes, workloads, type App, type AppSpec, type EnvVar, type Size } from "../workloads";
@@ -10,6 +12,14 @@ type Form = {
   image: string;
   pullSecret: string;
   pinned: string;
+  // Git apps
+  repo: string;
+  branch: string;
+  connection: string;
+  builder: "dockerfile" | "railpack";
+  dockerfile: string;
+  path: string;
+  autoDeploy: boolean;
   replicas: string;
   size: Size;
   env: { name: string; value: string; from?: EnvVar["valueFrom"] }[];
@@ -27,6 +37,13 @@ function formOf(spec: AppSpec): Form {
     image: spec.source.image?.ref ?? "",
     pullSecret: spec.source.image?.pullSecret ?? "",
     pinned: spec.source.git?.pinnedImage ?? "",
+    repo: spec.source.git?.repository ?? "",
+    branch: spec.source.git?.branch ?? "main",
+    connection: spec.source.git?.connection ?? "",
+    builder: spec.source.git?.builder === "railpack" ? "railpack" : "dockerfile",
+    dockerfile: spec.source.git?.dockerfile ?? "Dockerfile",
+    path: spec.source.git?.path ?? "/",
+    autoDeploy: spec.source.git?.autoDeploy ?? true,
     replicas: String(spec.replicas ?? 1),
     size: spec.size ?? "small",
     env: (spec.env ?? []).map((e) => ({ name: e.name, value: e.value ?? "", from: e.valueFrom })),
@@ -45,9 +62,8 @@ function specOf(f: Form, base: AppSpec): AppSpec {
   const spec: AppSpec = structuredClone(base);
   if (spec.source.image) spec.source.image = { ref: f.image.trim(), ...(f.pullSecret.trim() ? { pullSecret: f.pullSecret.trim() } : {}) };
   if (spec.source.git) {
-    spec.source.git = { ...spec.source.git };
+    spec.source.git = gitSourceOf(f);
     if (f.pinned) spec.source.git.pinnedImage = f.pinned;
-    else delete spec.source.git.pinnedImage;
   }
   spec.replicas = Number(f.replicas);
   spec.size = f.size;
@@ -66,6 +82,16 @@ const ownDisks = (spec: AppSpec) => (spec.volumes ?? []).filter((v) => !v.volume
 /** Client-side checks, reported with the same field paths the server uses. */
 function check(f: Form, isImage: boolean): { field: string; message: string } | undefined {
   if (isImage && !f.image.trim()) return { field: "spec.source.image.ref", message: "Enter an image, like ghcr.io/acme/api:1.4.2." };
+  if (!isImage) {
+    const repo = repositoryProblem(normalizeRepository(f.repo));
+    if (repo) return { field: "spec.source.git.repository", message: repo };
+    const branch = branchProblem(f.branch.trim());
+    if (branch) return { field: "spec.source.git.branch", message: branch };
+    const df = f.builder === "dockerfile" ? repoPathProblem(f.dockerfile.trim()) : "";
+    if (df) return { field: "spec.source.git.dockerfile", message: df };
+    const path = repoPathProblem(f.path.trim());
+    if (path) return { field: "spec.source.git.path", message: path };
+  }
   const n = Number(f.replicas);
   if (f.replicas.trim() === "" || !Number.isInteger(n) || n < 0) return { field: "spec.replicas", message: "Enter a whole number, 0 or more." };
   for (const [i, e] of f.env.entries()) {
@@ -98,6 +124,9 @@ export function AppSettings({ app, canEdit, onSaved }: { app: App; canEdit: bool
   const git = base.spec.source.git;
   const dirty = JSON.stringify(f) !== JSON.stringify(initial);
   const stale = app.metadata.generation > base.metadata.generation;
+  const conns = useQuery({ queryKey: ["git-connections"], queryFn: gitApi.connections, enabled: !!git, retry: false, staleTime: 30_000 });
+  const project = base.metadata.namespace;
+  const usable = (conns.data ?? []).filter((c) => c.projects.length === 0 || c.projects.includes(project));
 
   const save = useMutation({
     mutationFn: () => workloads.updateApp(base.metadata.namespace, base.metadata.name, specOf(f, base.spec), base.metadata.generation),
@@ -163,14 +192,16 @@ export function AppSettings({ app, canEdit, onSaved }: { app: App; canEdit: bool
                 </>
               ) : (
                 <>
-                  <div className="field full"><label>Repository</label><code>{git?.repository}</code><span className="hint">Branch {git?.branch || "main"} · editing Git sources arrives with builds in Phase 2.</span></div>
+                  <GitFields f={f} set={(k, v) => set(k, v as never)} err={(k) => err(gitField(k))} conns={usable} connsError={conns.error} project={project}
+                    onConnection={(v) => set("connection", v)} idPrefix="s" />
                   {f.pinned && (
                     <div className="field full">
                       <label>Pinned image</label><code>{f.pinned}</code>
+                      <span className="hint">A rollback pinned this image: builds still run, but none is deployed.</span>
                       <span><button type="button" className="btn sm" onClick={() => set("pinned", "")}>Follow builds again</button></span>
                     </div>
                   )}
-                  {!f.pinned && initial.pinned && <div className="field full"><span className="hint">Saving unpins the app; the next successful build deploys.</span></div>}
+                  {!f.pinned && initial.pinned && <div className="field full"><span className="hint">Saving unpins the app; the newest successful build deploys.</span></div>}
                 </>
               )}
             </div>
@@ -320,8 +351,11 @@ export function AppSettings({ app, canEdit, onSaved }: { app: App; canEdit: bool
 }
 
 function knownField(field: string) {
-  return /^(spec\.(source\.image\.(ref|pullSecret)|replicas|env\[\d+\]|ports\[\d+\]|healthCheck\.(http|port))|mounts\[\d+\])/.test(field);
+  return /^(spec\.(source\.image\.(ref|pullSecret)|source\.git\.(repository|branch|connection|dockerfile|path)|replicas|env\[\d+\]|ports\[\d+\]|healthCheck\.(http|port))|mounts\[\d+\])/.test(field);
 }
+
+/** GitFields' field names → the server's field paths. */
+const gitField = (k: string) => `spec.source.git.${k === "repo" ? "repository" : k}`;
 
 type InputProps = { id: string; label: string; value: string; onChange: (v: string) => void; error?: string; hint?: string; className?: string } & Omit<InputHTMLAttributes<HTMLInputElement>, "onChange" | "value" | "className">;
 

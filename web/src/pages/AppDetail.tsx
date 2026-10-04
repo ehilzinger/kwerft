@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Link, getRouteApi, useNavigate } from "@tanstack/react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ApiError, api } from "../api";
@@ -8,6 +8,9 @@ import { Field } from "../components/Field";
 import { Icon } from "../components/Icon";
 import { Replicas } from "../components/Replicas";
 import { abilities, ago, sizes, workloads, type App, type Phase, type Revision } from "../workloads";
+import { repoLabel, shortSha } from "../builds";
+import { BuildStatus } from "../components/BuildStatus";
+import { AppBuilds, buildName, buildsKey, useBuilds } from "./AppBuilds";
 import { AppLogs } from "./AppLogs";
 import { AppSettings } from "./AppSettings";
 import { errorText } from "./Apps";
@@ -32,6 +35,7 @@ export function phaseOf(app: App): { phase: Phase; reason?: string; message?: st
 
 export function AppDetail() {
   const { project, name } = route.useParams();
+  const { build } = route.useSearch();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const session = useQuery({ queryKey: ["session"], queryFn: api.session });
@@ -39,7 +43,15 @@ export function AppDetail() {
   const key = ["app", project, name];
   const q = useQuery({ queryKey: key, queryFn: () => workloads.app(project, name), refetchInterval: 5000 });
 
-  const [tab, setTab] = useState<Tab>("overview");
+  const [tab, setTab] = useState<Tab>(build ? "builds" : "overview");
+  // A link to a build (a commit check, a revision) opens the Builds tab.
+  useEffect(() => {
+    if (build) setTab("builds");
+  }, [build]);
+  const showTab = (t: Tab) => {
+    setTab(t);
+    if (t !== "builds" && build) void navigate({ to: "/apps/$project/$name", params: { project, name }, search: {}, replace: true });
+  };
   const [logPod, setLogPod] = useState<string>(); // a replica's Logs button
   const [dialog, setDialog] = useState<"scale" | "delete" | "run" | { rollback: Revision }>();
   const [notice, setNotice] = useState<{ kind: "info" | "bad"; text: string }>();
@@ -54,6 +66,20 @@ export function AppDetail() {
     onSuccess: (app) => {
       refresh(app);
       setNotice({ kind: "info", text: "Restarting: replicas are replaced one at a time." });
+    },
+    onError: (e) => setNotice({ kind: "bad", text: errorText(e) }),
+  });
+  // Clears a rollback's pin: the newest successful build runs again.
+  const unpin = useMutation({
+    mutationFn: (a: App) => {
+      const spec = structuredClone(a.spec);
+      if (spec.source.git) delete spec.source.git.pinnedImage;
+      return workloads.updateApp(project, name, spec, a.metadata.generation);
+    },
+    onSuccess: (app) => {
+      refresh(app);
+      void queryClient.invalidateQueries({ queryKey: buildsKey(project, name) });
+      setNotice({ kind: "info", text: "Following builds again: the newest successful build rolls out." });
     },
     onError: (e) => setNotice({ kind: "bad", text: errorText(e) }),
   });
@@ -84,7 +110,7 @@ export function AppDetail() {
         <div>
           <h1>{app.metadata.name} <AppStatus {...st} /></h1>
           <p className="sub">
-            {git ? <>Built from <code>{git.repository}</code> @ {git.branch || "main"}</> : <>Image <code>{app.spec.source.image?.ref}</code></>}
+            {git ? <>Built from <code title={git.repository}>{repoLabel(git.repository)}</code> @ {git.branch || "main"}</> : <>Image <code>{app.spec.source.image?.ref}</code></>}
             {" · "}{workload} · project <Link to="/apps" className="dim">{project}</Link>
             {app.status?.revision ? ` · revision ${app.status.revision}` : ""}
           </p>
@@ -111,12 +137,15 @@ export function AppDetail() {
         <div className="banner bad" role="alert"><Icon name="alert" /><span><b>{st.reason}</b>: {st.message}</span></div>
       )}
       {git?.pinnedImage && (
-        <div className="banner warn"><Icon name="alert" /><span>Pinned to <code>{git.pinnedImage}</code> after a rollback. New builds are not deployed until the pin is cleared.</span></div>
+        <div className="banner warn" role="status">
+          <Icon name="alert" /><span>Pinned to <code>{git.pinnedImage}</code> after a rollback. New builds are not deployed until the pin is cleared.</span>
+          {can.deploy && <button className="btn sm" disabled={unpin.isPending} onClick={() => unpin.mutate(app)}>{unpin.isPending ? "Unpinning…" : "Follow builds again"}</button>}
+        </div>
       )}
 
       <div className="tabs" role="tablist" aria-label="App">
         {(["overview", "logs", "builds", "settings"] as const).map((t) => (
-          <button key={t} role="tab" id={`tab-${t}`} aria-selected={tab === t} aria-controls={`panel-${t}`} onClick={() => setTab(t)}>
+          <button key={t} role="tab" id={`tab-${t}`} aria-selected={tab === t} aria-controls={`panel-${t}`} onClick={() => showTab(t)}>
             {t[0]!.toUpperCase() + t.slice(1)}
           </button>
         ))}
@@ -124,18 +153,11 @@ export function AppDetail() {
 
       <div className="tabpanel" role="tabpanel" id={`panel-${tab}`} aria-labelledby={`tab-${tab}`}>
         {tab === "overview" && <Overview app={app} canDeploy={can.deploy} onRollback={(rev) => setDialog({ rollback: rev })} />}
-        {tab === "overview" && <Replicas app={app} onLogs={(pod) => { setLogPod(pod); setTab("logs"); }} />}
+        {tab === "overview" && <Replicas app={app} onLogs={(pod) => { setLogPod(pod); showTab("logs"); }} />}
         {tab === "logs" && <AppLogs app={app} pod={logPod} />}
-        {tab === "builds" && (
-          <div className="empty">
-            <h2>{git ? "Builds arrive in Phase 2" : "No builds for image apps"}</h2>
-            <p>{git
-              ? "Kwerft will build this repository in-cluster with rootless BuildKit and roll out every successful build as a new revision."
-              : "This app runs a ready-made image. Apps built from a Git repository list their builds here."}</p>
-          </div>
-        )}
+        {tab === "builds" && <AppBuilds app={app} canDeploy={can.deploy} selected={build} />}
         {tab === "settings" && (
-          <AppSettings app={app} canEdit={can.deploy} onSaved={(saved) => { refresh(saved); setNotice({ kind: "info", text: "Saved. Rolling out the new revision." }); setTab("overview"); }} />
+          <AppSettings app={app} canEdit={can.deploy} onSaved={(saved) => { refresh(saved); setNotice({ kind: "info", text: "Saved. Rolling out the new revision." }); showTab("overview"); }} />
         )}
       </div>
 
@@ -154,6 +176,13 @@ export function AppDetail() {
 }
 
 function Overview({ app, canDeploy, onRollback }: { app: App; canDeploy: boolean; onRollback: (r: Revision) => void }) {
+  const git = app.spec.source.git;
+  // Revisions name their build; the builds list has its number.
+  const builds = useBuilds(app);
+  const numbers = new Map((builds.data ?? []).map((b) => [b.name, b.number]));
+  const latest = app.latestBuild;
+  const project = app.metadata.namespace;
+  const name = app.metadata.name;
   const desired = app.spec.replicas ?? 1;
   const ready = app.status?.readyReplicas ?? 0;
   const size = sizes.find((s) => s.id === (app.spec.size ?? "small"));
@@ -175,6 +204,19 @@ function Overview({ app, canDeploy, onRollback }: { app: App; canDeploy: boolean
         <div className="bd sep">
           <dl className="kv">
             <dt>Running</dt><dd><code>{app.status?.image || "—"}</code></dd>
+            {git && (
+              <>
+                <dt>Latest build</dt>
+                <dd>
+                  {latest ? (
+                    <>
+                      <Link to="/apps/$project/$name" params={{ project, name }} search={{ build: latest.name }}>{buildName(latest)}</Link>{" "}
+                      <BuildStatus build={latest} /> <code>{shortSha(latest.commit)}</code> {latest.message && <span className="dim">{latest.message}</span>}
+                    </>
+                  ) : <span className="dim">None yet. Push to {git.branch || "main"} or press Build now on the Builds tab.</span>}
+                </dd>
+              </>
+            )}
             <dt>Health check</dt><dd>{hc ? (hc.http ? <code>HTTP GET {hc.http} :{hc.port}</code> : <code>TCP :{hc.port}</code>) : <span className="dim">None. A replica counts as ready once it starts.</span>}</dd>
             <dt>Environment</dt><dd>{app.spec.env?.length ? `${app.spec.env.length} variable${app.spec.env.length > 1 ? "s" : ""}` : <span className="dim">None</span>}</dd>
             <dt>Outbound</dt><dd>{{ none: "No internet access", https: "HTTPS to the internet", all: "Unrestricted" }[app.spec.egress ?? "https"]}</dd>
@@ -206,8 +248,11 @@ function Overview({ app, canDeploy, onRollback }: { app: App; canDeploy: boolean
           {history.map((r, i) => (
             <div className="li" key={r.number}>
               <div>
-                <b>{r.number}</b> · <code>{shortImage(r.image)}</code> {i === 0 && <span className="pill info nodot">current</span>}
-                <p>{r.build ? `build ${r.build} · ` : ""}{ago(r.time)}</p>
+                <b>{r.number}</b> · <code title={r.image}>{r.commit ? shortSha(r.commit) : shortImage(r.image)}</code> {i === 0 && <span className="pill info nodot">current</span>}
+                <p>
+                  {r.build && <><Link to="/apps/$project/$name" params={{ project, name }} search={{ build: r.build }}>build {numbers.get(r.build) ? `#${numbers.get(r.build)}` : r.build}</Link>{" · "}</>}
+                  {ago(r.time)}
+                </p>
               </div>
               {i > 0 && r.image !== running && (
                 <button className="btn sm end" disabled={!canDeploy} title={canDeploy ? `Run ${r.image} again` : "Your role cannot roll back."} onClick={() => onRollback(r)}>Roll back</button>
