@@ -116,7 +116,7 @@ Exit codes: 0 ok · 2 usage · 10 preflight · 20 network/DNS · 30 Kubernetes �
 | `Task` | Job (kwerft-batch priority, deny-ingress policy): a one-off run with App's shape, or `fromApp`; "run now" with `envOverrides` | reconciler ✔ |
 | `Schedule` | Tasks on a cron schedule, scheduled by the reconciler (a CronJob could not create Tasks without RBAC in pods) | reconciler ✔ |
 | `Build` | Job running rootless BuildKit; pushes to zot; success creates an App revision | types ✔ |
-| `GitConnection` | GitHub App / GitLab / Gitea / deploy key credentials and webhooks | Phase 2 |
+| `GitConnection` (cluster-scoped) | GitHub App / GitLab / Gitea / deploy key credentials and webhooks | types ✔, Phase 2 |
 | `Domain` | Gateway listener + certificate via cert-manager, or the shared apps wildcard listener for names one level below the apps domain; Apps create one per public port; the older claim wins; hostname fixed after creation; max 59 per-host listeners | reconciler ✔ (records: the apps wildcard record covers Domains under the apps domain; others stay manual) |
 | `ConsoleSettings` (singleton `kwerft`) | Console hostname (with a staged move), apps domain, certificate method (HTTP-01 per host or DNS-01 wildcard via Hetzner), managed DNS records (`spec.dns.manageRecords`, written by the DNS reconciler into `status.dns`); the DNS token lives in the write-only Secret `kwerft-dns-token` | reconciler, API, UI ✔ |
 | `TrafficRule` | CiliumNetworkPolicy, with Hubble hit/drop counts | Phase 4 |
@@ -216,6 +216,17 @@ Exit codes: 0 ok · 2 usage · 10 preflight · 20 network/DNS · 30 Kubernetes �
 - [x] Cut the first release and do the one-time GitHub setup (packages public, install repo, token): v0.1.0-rc.1/rc.2, then **v0.1.0** (2026-10-04, the first stable: top-level `install.sh` in kwerft-install, image `:latest`)
 - [x] Exit criterion on a fresh Cloud server from the published release (rc.2, 2026-10-04): app on HTTPS in 7:06; a schedule restarted an app on success
 - [ ] Not yet: admin reset of a member's second factors, data-key rotation, a per-org "require 2FA" setting (Phase 4); shared storage for pending logins before running more than one replica
+
+### Phase 2 checklist
+
+Work split and contracts: `docs/phase2.md`.
+
+- [x] Types: `GitConnection`, `Build` source snapshot and numbering, revisions record build and commit; `internal/builds`
+- [ ] W1 Registry & infrastructure: zot, k3s registry mirror, `kwerft-builds` namespace and policies, installer/join, pins
+- [ ] W2 Build engine: Build reconciler (BuildKit rootless, Dockerfile, Railpack, cache in zot, queue, cancel, timeout, retention); Git apps deploy their latest build
+- [ ] W3 Git connections (GitHub token/App, GitLab, Gitea, generic, deploy keys), webhooks, "Build now", commit checks
+- [ ] W4 Console: deploy wizard and settings for Git apps, Builds tab with live logs, Git connections page
+- [ ] Exit criterion on the test server with a real repository: push → live revision in < 3 min, log in the UI, check on the commit
 
 ### Phase 0 checklist
 

@@ -535,6 +535,10 @@ spec:
                   description: AppRevision records one rollout for history and rollback.
                   properties:
                     build:
+                      description: Build that produced Image, for Git apps.
+                      type: string
+                    commit:
+                      description: Commit Image was built from, for Git apps.
                       type: string
                     generation:
                       description: Generation is the App spec generation this revision

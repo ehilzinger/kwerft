@@ -40,6 +40,14 @@ func ForKind(kind schema.GroupVersionKind) interface{} {
 		return &apiv1alpha1.DomainSpecApplyConfiguration{}
 	case v1alpha1.SchemeGroupVersion.WithKind("DomainStatus"):
 		return &apiv1alpha1.DomainStatusApplyConfiguration{}
+	case v1alpha1.SchemeGroupVersion.WithKind("GitConnection"):
+		return &apiv1alpha1.GitConnectionApplyConfiguration{}
+	case v1alpha1.SchemeGroupVersion.WithKind("GitConnectionSpec"):
+		return &apiv1alpha1.GitConnectionSpecApplyConfiguration{}
+	case v1alpha1.SchemeGroupVersion.WithKind("GitConnectionStatus"):
+		return &apiv1alpha1.GitConnectionStatusApplyConfiguration{}
+	case v1alpha1.SchemeGroupVersion.WithKind("GitHubAppSettings"):
+		return &apiv1alpha1.GitHubAppSettingsApplyConfiguration{}
 	case v1alpha1.SchemeGroupVersion.WithKind("GitSource"):
 		return &apiv1alpha1.GitSourceApplyConfiguration{}
 	case v1alpha1.SchemeGroupVersion.WithKind("ImageSource"):

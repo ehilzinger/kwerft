@@ -185,9 +185,13 @@ type AppRevision struct {
 	Image  string `json:"image"`
 	// Generation is the App spec generation this revision rolled out.
 	Generation int64 `json:"generation"`
+	// Build that produced Image, for Git apps.
 	// +optional
-	Build string      `json:"build,omitempty"`
-	Time  metav1.Time `json:"time"`
+	Build string `json:"build,omitempty"`
+	// Commit Image was built from, for Git apps.
+	// +optional
+	Commit string      `json:"commit,omitempty"`
+	Time   metav1.Time `json:"time"`
 }
 
 // AppStatus is written by the App reconciler.

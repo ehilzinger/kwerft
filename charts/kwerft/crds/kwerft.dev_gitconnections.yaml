@@ -4,36 +4,38 @@ kind: CustomResourceDefinition
 metadata:
   annotations:
     controller-gen.kubebuilder.io/version: v0.20.1
-  name: builds.kwerft.dev
+  name: gitconnections.kwerft.dev
 spec:
   group: kwerft.dev
   names:
-    kind: Build
-    listKind: BuildList
-    plural: builds
-    singular: build
-  scope: Namespaced
+    kind: GitConnection
+    listKind: GitConnectionList
+    plural: gitconnections
+    shortNames:
+    - gitconn
+    singular: gitconnection
+  scope: Cluster
   versions:
   - additionalPrinterColumns:
-    - jsonPath: .spec.app
-      name: App
+    - jsonPath: .spec.provider
+      name: Provider
       type: string
-    - jsonPath: .status.number
-      name: Number
-      type: integer
-    - jsonPath: .spec.commit
-      name: Commit
+    - jsonPath: .spec.url
+      name: URL
       type: string
-    - jsonPath: .status.phase
-      name: Phase
+    - jsonPath: .spec.auth
+      name: Auth
       type: string
-    - jsonPath: .metadata.creationTimestamp
-      name: Age
-      type: date
+    - jsonPath: .status.conditions[?(@.type=="Ready")].status
+      name: Ready
+      type: string
     name: v1alpha1
     schema:
       openAPIV3Schema:
-        description: Build is one in-cluster image build of an App with a Git source.
+        description: |-
+          GitConnection grants access to repositories on a Git host. Apps with a
+          Git source name it in spec.source.git.connection. Cluster-scoped: owners
+          and admins manage connections for every project.
         properties:
           apiVersion:
             description: |-
@@ -54,80 +56,74 @@ spec:
             type: object
           spec:
             description: |-
-              BuildSpec pins one commit of an App's Git source. Builds are immutable:
-              rebuilding creates a new Build. Create them with internal/builds.New.
+              GitConnectionSpec is access to repositories on one Git host. Credentials
+              live in the Secret "git-<name>" in the kwerft-builds namespace (keys:
+              token, ssh-privatekey, known_hosts, github-app-private-key,
+              webhook-secret), which owners and admins may write through the console
+              but nobody reads back.
             properties:
-              app:
-                description: App is the name of the App in the same namespace.
-                minLength: 1
+              auth:
+                description: GitAuth is how Kwerft authenticates to the host.
+                enum:
+                - none
+                - token
+                - sshKey
+                - githubApp
                 type: string
-              author:
-                type: string
-              branch:
-                type: string
-              commit:
-                description: Commit is the full SHA to build.
-                pattern: ^[0-9a-f]{40}$
-                type: string
-              deploy:
+              githubApp:
                 description: |-
-                  Deploy rolls the App out to the built image on success. False for
-                  pull-request builds, which only report a check.
-                type: boolean
-              message:
-                type: string
-              pullRequest:
-                description: PullRequest number, for pull-request builds.
-                format: int64
-                type: integer
-              requestedBy:
-                description: |-
-                  RequestedBy is the console user ("manual") or the Git account that
-                  pushed ("push", "pull-request").
-                type: string
-              source:
-                description: Source is a snapshot of the App's Git source.
+                  GitHubAppSettings identifies a GitHub App installation. Its private key
+                  lives in the connection's credentials Secret.
                 properties:
-                  builder:
-                    enum:
-                    - dockerfile
-                    - railpack
-                    type: string
-                  connection:
-                    type: string
-                  dockerfile:
-                    type: string
-                  path:
-                    type: string
-                  repository:
-                    description: Repository URL, as in GitSource.
-                    minLength: 1
+                  appID:
+                    format: int64
+                    type: integer
+                  installationID:
+                    format: int64
+                    type: integer
+                  slug:
+                    description: Slug is the app's URL name, for links to its settings.
                     type: string
                 required:
-                - builder
-                - repository
+                - appID
+                - installationID
                 type: object
-              trigger:
-                description: Trigger records why the build started.
+              owner:
+                description: |-
+                  Owner limits the connection to one account, organisation or group,
+                  e.g. "acme". Empty: whatever the credentials reach.
+                type: string
+              projects:
+                description: Projects that may build with this connection; empty means
+                  all.
+                items:
+                  type: string
+                type: array
+              provider:
+                description: GitProvider is the kind of Git host.
                 enum:
-                - push
-                - manual
-                - pull-request
+                - github
+                - gitlab
+                - gitea
+                - generic
+                type: string
+              url:
+                description: URL of the host, e.g. https://github.com or https://gitlab.example.com.
+                pattern: ^https://[^/\s]+(/[^\s]*)?$
                 type: string
             required:
-            - app
-            - commit
-            - source
-            - trigger
+            - auth
+            - provider
+            - url
             type: object
             x-kubernetes-validations:
-            - message: builds are immutable
-              rule: self == oldSelf
+            - message: auth githubApp needs provider github and githubApp
+              rule: self.auth != 'githubApp' || (self.provider == 'github' && has(self.githubApp))
           status:
-            description: BuildStatus is written by the Build reconciler.
+            description: GitConnectionStatus is written by the GitConnection reconciler.
             properties:
-              completionTime:
-                format: date-time
+              account:
+                description: Account the credentials act as (user, bot or app installation).
                 type: string
               conditions:
                 items:
@@ -185,41 +181,16 @@ spec:
                   - type
                   type: object
                 type: array
-              digest:
-                description: Digest of the pushed image (sha256:...).
+              lastDelivery:
+                description: LastDelivery is when the last valid webhook arrived.
+                format: date-time
                 type: string
-              image:
-                description: Image is the pushed reference, e.g. registry.kwerft.internal/storefront/api:4f2c1ab.
-                type: string
-              job:
-                description: |-
-                  Job is the name of the Kubernetes Job running BuildKit, in the
-                  kwerft-builds namespace.
-                type: string
-              message:
-                description: Message says why a build failed or is waiting (queued
-                  behind others).
-                type: string
-              number:
-                description: |-
-                  Number counts the App's builds: #1, #2, ... Assigned by the reconciler
-                  when it first sees the build.
+              observedGeneration:
                 format: int64
                 type: integer
-              phase:
-                description: BuildPhase is the lifecycle of a Build.
-                enum:
-                - Pending
-                - Running
-                - Succeeded
-                - Failed
-                - Cancelled
-                type: string
-              pod:
-                description: Pod is the Job's pod, whose logs are the build log.
-                type: string
-              startTime:
-                format: date-time
+              webhookURL:
+                description: WebhookURL receives the host's push and pull-request
+                  events.
                 type: string
             type: object
         type: object
