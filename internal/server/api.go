@@ -114,6 +114,7 @@ func (a *api) register(mux *http.ServeMux) {
 	a.registerFirewall(mux) // server firewall rules and their confirmation (api_firewall.go)
 
 	mux.HandleFunc("GET /api/v1/cluster-status", a.requireUser(a.clusterStatus)) // clusters.go
+	a.registerClusters(mux)                                                      // clusters, and their agents' tunnel endpoint (api_clusters.go)
 }
 
 // ---- setup -----------------------------------------------------------------

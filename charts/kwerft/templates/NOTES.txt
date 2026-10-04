@@ -1,5 +1,12 @@
+{{- if eq .Values.mode "agent" -}}
+Kwerft {{ .Chart.AppVersion }} is installed in agent mode.
+
+This cluster connects to the console at {{ .Values.agent.consoleURL }} and
+appears under Clusters there within a minute.
+{{- else -}}
 Kwerft {{ .Chart.AppVersion }} is installed.
 
 Console: https://{{ .Values.console.domain }}
 If this is a new install, open https://{{ .Values.console.domain }}/setup and
 enter the setup token from /etc/kwerft/setup-token on the server.
+{{- end }}

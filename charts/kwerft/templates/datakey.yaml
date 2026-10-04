@@ -8,7 +8,10 @@ the database.
 Settings › Data key rotates it: the console writes a new "key" (keeping the
 old one as "previous" until every secret is re-sealed), so the lookup below
 keeps whatever the Secret holds now.
+
+Agents (mode agent) have no database, so no data key.
 */ -}}
+{{- if ne .Values.mode "agent" }}
 {{- $name := printf "%s-data-key" (include "kwerft.fullname" .) }}
 {{- $existing := lookup "v1" "Secret" .Release.Namespace $name }}
 apiVersion: v1
@@ -25,3 +28,4 @@ data:
   {{- with dig "data" "previous" "" $existing }}
   previous: {{ . }}
   {{- end }}
+{{- end }}

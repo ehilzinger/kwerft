@@ -828,3 +828,116 @@ JSON
   grep -qF 'PausedFile = "paused"' "$root/internal/firewall/agent.go"
   grep -qF "path: $FIREWALL_STATE_DIR," "$root/charts/kwerft/templates/node-agent.yaml"
 }
+
+# ---- agent mode (docs/phase5.md) ---------------------------------------------
+
+AGENT_TOKEN="kwag_edge-1_abcdefghijklmnopqrstuvwxyzABCDEFGHIJ-_0123"
+
+@test "--agent needs --console and --cluster-token" {
+  run "$SCRIPT" --agent --console https://ops.example.com
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"--agent needs --console and --cluster-token"* ]]
+  run "$SCRIPT" --agent --cluster-token "$AGENT_TOKEN"
+  [ "$status" -eq 2 ]
+}
+
+@test "--console and --cluster-token need --agent" {
+  run "$SCRIPT" --console https://ops.example.com --cluster-token "$AGENT_TOKEN"
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"need --agent"* ]]
+}
+
+@test "--agent refuses --domain, --config and --join" {
+  run "$SCRIPT" --agent --console https://ops.example.com --cluster-token "$AGENT_TOKEN" --domain ops2.example.com
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"--domain and --config do not apply"* ]]
+  run "$SCRIPT" --agent --console https://ops.example.com --cluster-token "$AGENT_TOKEN" --join https://ops.example.com --token t
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"exclude each other"* ]]
+}
+
+@test "--console must be an https URL of a hostname" {
+  for bad in http://ops.example.com ops.example.com https://ops.example.com/path "https://user@ops.example.com" https://ops; do
+    run "$SCRIPT" --dry-run --agent --console "$bad" --cluster-token "$AGENT_TOKEN"
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"--console must look like https://"* ]]
+  done
+  run "$SCRIPT" --dry-run --platform cloud --agent --console https://ops.example.com:8443/ --cluster-token "$AGENT_TOKEN"
+  [ "$status" -eq 0 ]
+}
+
+@test "--cluster-token must be an agent token" {
+  for bad in kwft_abc "kwag_edge_short" "kwag_Edge_abcdefghijklmnopqrstuvwxyzABCDEFGHIJ" "kwag__abcdefghijklmnopqrstuvwxyzABCDEFGHIJ"; do
+    run "$SCRIPT" --dry-run --agent --console https://ops.example.com --cluster-token "$bad"
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"--cluster-token is not an agent token"* ]]
+  done
+}
+
+@test "--dry-run in agent mode installs the cluster without the console's handoff" {
+  run "$SCRIPT" --dry-run --platform cloud --agent --console https://ops.example.com --cluster-token "$AGENT_TOKEN"
+  [ "$status" -eq 0 ]
+  expected="Preflight System Firewall Kubernetes Registry Helm Network Ingress Observability Kwerft"
+  actual=$(printf '%s\n' "$output" | sed -n 's/^→ \([A-Za-z]*\).*/\1/p' | tr '\n' ' ' | sed 's/ $//')
+  [ "$actual" = "$expected" ]
+  [[ "$output" == *"Kwerft agent"* ]]
+  [[ "$output" == *"mode=agent"* ]]
+  [[ "$output" != *"Handoff"* ]]
+  [[ "$output" != *"sslip.io"* ]]
+}
+
+@test "agent options come from the environment too" {
+  KWERFT_CONSOLE=https://ops.example.com KWERFT_CLUSTER_TOKEN="$AGENT_TOKEN" run "$SCRIPT" --dry-run --platform cloud --agent
+  [ "$status" -eq 0 ]
+}
+
+@test "cluster_of_token names the token's cluster" {
+  KWERFT_SOURCED=1 source "$SCRIPT"
+  [ "$(cluster_of_token "$AGENT_TOKEN")" = "edge-1" ]
+}
+
+# The token goes into the Secret the chart mounts, never into Helm values or
+# command-line arguments; the chart runs in agent mode against the console.
+@test "stage_kwerft_agent: chart in agent mode, token only in the Secret" {
+  KWERFT_SOURCED=1 source "$SCRIPT"
+  LOG_FILE="$BATS_TEST_TMPDIR/install.log"; : >"$LOG_FILE"
+  HELM_LOG="$BATS_TEST_TMPDIR/helm.log"; : >"$HELM_LOG"
+  KC_LOG="$BATS_TEST_TMPDIR/kc.log"; : >"$KC_LOG"
+  STDIN_LOG="$BATS_TEST_TMPDIR/stdin.log"; : >"$STDIN_LOG"
+  helmk() { printf 'helm %s\n' "$*" >>"$HELM_LOG"; }
+  kc() {
+    printf 'kc %s\n' "$*" >>"$KC_LOG"
+    if [[ "$*" == *"--from-file=token=/dev/stdin"* ]]; then cat >>"$STDIN_LOG"; fi
+    return 0
+  }
+  chart_ref() { echo "oci://ghcr.io/ehilzinger/charts/kwerft"; }
+  MODE=agent CONSOLE_URL=https://ops.example.com CLUSTER_TOKEN="$AGENT_TOKEN" PLATFORM=cloud
+  run stage_kwerft_agent
+  [ "$status" -eq 0 ]
+  grep -q "upgrade --install kwerft oci://ghcr.io/ehilzinger/charts/kwerft .*--set mode=agent --set agent.consoleURL=https://ops.example.com" "$HELM_LOG"
+  ! grep -q "console.domain" "$HELM_LOG"
+  ! grep -qF "$AGENT_TOKEN" "$HELM_LOG"
+  ! grep -qF "$AGENT_TOKEN" "$KC_LOG"
+  grep -q "create secret generic kwerft-agent --from-file=token=/dev/stdin" "$KC_LOG"
+  [ "$(cat "$STDIN_LOG")" = "$AGENT_TOKEN" ]
+  [[ "$output" == "agent 0.1.0-dev · cluster edge-1 → https://ops.example.com" ]]
+  # The Secret's name and key are the chart's.
+  grep -q '^  tokenSecret: kwerft-agent' "$BATS_TEST_DIRNAME/../../charts/kwerft/values.yaml"
+  grep -q 'items: \[{ key: token, path: token }\]' "$BATS_TEST_DIRNAME/../../charts/kwerft/templates/deployment.yaml"
+}
+
+@test "write_join_secret: the k3s server's join material, or nothing on an agent node" {
+  KWERFT_SOURCED=1 source "$SCRIPT"
+  LOG_FILE="$BATS_TEST_TMPDIR/install.log"; : >"$LOG_FILE"
+  KC_LOG="$BATS_TEST_TMPDIR/kc.log"; : >"$KC_LOG"
+  kc() { printf 'kc %s\n' "$*" >>"$KC_LOG"; }
+  PRIVATE_IP=10.0.0.2 PUBLIC_IP=203.0.113.10
+  run write_join_secret     # no /var/lib/rancher/k3s/server/token here
+  [ "$status" -eq 0 ]
+  [ ! -s "$KC_LOG" ]
+  # Both installs write it; the console's code reads the same name.
+  [ "$(sed -n '/^stage_kwerft() {/,/^}/p' "$SCRIPT" | grep -c '^  write_join_secret$')" -eq 1 ]
+  [ "$(sed -n '/^stage_kwerft_agent() {/,/^}/p' "$SCRIPT" | grep -c '^  write_join_secret$')" -eq 1 ]
+  grep -qF 'LocalJoinSecret = "cluster-local-join"' "$BATS_TEST_DIRNAME/../../internal/clusters/tunnel.go"
+  grep -qF 'kwerft-system create secret generic cluster-local-join' "$SCRIPT"
+}

@@ -109,6 +109,10 @@ type Config struct {
 	// names the client (see clientip.go); nil trusts loopback only.
 	TrustedProxy func(netip.Addr) bool
 
+	// Tunnel accepts remote clusters' agents at /api/v1/clusters/connect and
+	// reports on them; nil refuses agents.
+	Tunnel *clusters.Hub
+
 	// ActiveConsoleDomain returns the hostname the console is served on now
 	// (ConsoleSettings.status, which Settings can change); nil or "" means
 	// ConsoleDomain. Passkeys follow it.

@@ -3,6 +3,9 @@
 #  - impersonate: to forward user requests with the user's identity
 #  - full access to kwerft.dev resources: the reconcilers own them
 #  - the objects the reconcilers render (TODO(phase-1): narrow to exact verbs)
+# In agent mode (a remote cluster, docs/phase5.md) the same service account and
+# role serve the agent: the console's requests through its tunnel reach this
+# cluster with exactly these rights, user requests impersonated as locally.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
@@ -87,6 +90,36 @@ roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
   name: kwerft-controller
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "kwerft.fullname" . }}
+    namespace: {{ .Release.Namespace }}
+---
+# A remote cluster's metrics, logs and Alertmanager are reached through the
+# Kubernetes service proxy, as the agent's identity (this service account),
+# from the console (docs/phase5.md › As built (W4)). Only in the
+# observability namespace; locally the console uses in-cluster URLs.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: kwerft-observability-proxy
+  namespace: {{ .Values.observability.namespace }}
+  labels: {{- include "kwerft.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: [services/proxy]
+    verbs: [get, create]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: kwerft-observability-proxy
+  namespace: {{ .Values.observability.namespace }}
+  labels: {{- include "kwerft.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: kwerft-observability-proxy
 subjects:
   - kind: ServiceAccount
     name: {{ include "kwerft.fullname" . }}
