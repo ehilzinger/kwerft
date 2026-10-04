@@ -8,6 +8,12 @@ const paths = {
   net: <><circle cx="8" cy="3" r="1.6" /><circle cx="3" cy="13" r="1.6" /><circle cx="13" cy="13" r="1.6" /><path d="M7.2 4.4L3.8 11.6M8.8 4.4l3.4 7.2M4.6 13h6.8" /></>,
   users: <><circle cx="6" cy="5.5" r="2.5" /><path d="M1.5 13.5c.6-2.4 2.3-3.6 4.5-3.6s3.9 1.2 4.5 3.6" /><path d="M10.5 3.2a2.4 2.4 0 010 4.6M12 9.8c1.3.5 2.1 1.6 2.5 3.7" /></>,
   plus: <path d="M8 3v10M3 8h10" />,
+  rocket: <><path d="M9.5 2.5c2.5-.8 4-.3 4 0s.8 1.5 0 4l-4.5 4.5-4-4z" /><path d="M5 7L2.5 7.5 4 5.5h3M9 11l-.5 2.5 2-1.5V9" /></>,
+  shield: <path d="M8 1.5l5.5 2v4.2c0 3.3-2.3 5.6-5.5 6.8-3.2-1.2-5.5-3.5-5.5-6.8V3.5z" />,
+  alert: <><path d="M8 2l6.5 11.5h-13z" /><path d="M8 6.5v3.2M8 11.8h.01" /></>,
+  restart: <><path d="M13.5 8a5.5 5.5 0 11-1.6-3.9" /><path d="M13.5 2.5v3h-3" /></>,
+  scale: <><path d="M2.5 13.5h11" /><rect x="3.5" y="8" width="2.5" height="5.5" rx=".5" /><rect x="10" y="3.5" width="2.5" height="10" rx=".5" /></>,
+  trash: <><path d="M2.5 4.5h11M6 4.5V3h4v1.5M4 4.5l.7 9h6.6l.7-9" /></>,
 } as const;
 
 export type IconName = keyof typeof paths;
