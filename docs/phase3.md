@@ -109,9 +109,34 @@ GET /api/v1/metrics/query?query=…&range=…  (owners/admins: explore; others: 
 W2 (logs):
 
 ```
-GET /api/v1/logs?query=<LogsQL>&project=…&app=…&since=…&until=…&limit=…   → {entries: [{time, project?, app?, pod, container, line, stream}], truncated}
-GET /api/v1/logs/tail?…   SSE, like the existing pod log stream
+GET /api/v1/logs?query=<LogsQL>&project=…&app=…&since=…&until=…&limit=…&level=warn|error&platform=1
+    → {entries: [{time, namespace, project?, app?, build?, task?, pod, container, stream, level?, line, truncated?}],
+       truncated, from, to}
+GET /api/v1/logs/tail?query=…&project=…&app=…&level=…&platform=1
+    SSE: start, line (an entry), dropped, end {reason: idle|maxDuration|signedOut|error}, ": ping"
 ```
+
+As built (W2): `query` is LogsQL *filters* (no pipes; the console adds its
+own); `since`/`until` take seconds or a duration ago (`3600`, `15m`) or an
+RFC 3339 time (default: the last hour, at most 31 days; `until` is
+inclusive); `limit` 1–1000, default 200; entries oldest first, `truncated`
+means older lines exist (load more with `until=<oldest time>`). `level` and
+`platform` (owners and admins: every namespace) are additions. 422 for a bad
+query or parameter, 503 when VictoriaLogs does not answer.
+
+Log fields in VictoriaLogs (Vector, `vector_remap` in install.sh):
+`namespace pod container stream node project app build task schedule job
+level log.*` and `_msg` (the raw line); stream fields `namespace, pod,
+container, stream, project, app, build, task`. Confinement is always by
+`namespace` (build pods in kwerft-builds carry the *Build's* project label).
+
+Task and Build log streams whose pods are gone answer from VictoriaLogs:
+the `start` event carries `"source": "history"` and a `message`, then the
+lines, then `end` "complete"; without history the old answers stay (Build:
+end "gone"; Task with `?pod=`: 404).
+
+Deep link: `/apps/<project>/<app>?tab=logs` opens the App's Logs tab (any
+tab name works: `?tab=builds`, …).
 
 W3 (alerting):
 

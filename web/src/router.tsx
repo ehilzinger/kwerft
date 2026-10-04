@@ -9,7 +9,7 @@ import { Deploy } from "./pages/Deploy";
 import { Planned } from "./pages/Planned";
 import { MonitoringAlerts } from "./pages/MonitoringAlerts";
 import { MonitoringMetrics } from "./pages/MonitoringMetrics";
-import { MonitoringLogs } from "./pages/MonitoringLogs";
+import { MonitoringLogs, logsSearch } from "./pages/MonitoringLogs";
 import { MonitoringRules } from "./pages/MonitoringRules";
 import { MonitoringChannels } from "./pages/MonitoringChannels";
 import { Setup } from "./pages/Setup";
@@ -94,10 +94,15 @@ const routeTree = root.addChildren([
       getParentRoute: () => authed, path: "/apps/new", component: Deploy,
       validateSearch: (s: Record<string, unknown>): { project?: string } => (typeof s.project === "string" ? { project: s.project } : {}),
     }),
-    // ?build=<name> opens the Builds tab on that build (commit checks link there).
+    // ?build=<name> opens the Builds tab on that build (commit checks link
+    // there); ?tab=logs (or another tab) opens that tab — alert
+    // notifications link to /apps/<p>/<a>?tab=logs.
     createRoute({
       getParentRoute: () => authed, path: "/apps/$project/$name", component: AppDetail,
-      validateSearch: (s: Record<string, unknown>): { build?: string } => (typeof s.build === "string" && s.build ? { build: s.build } : {}),
+      validateSearch: (s: Record<string, unknown>): { build?: string; tab?: string } => ({
+        ...(typeof s.build === "string" && s.build ? { build: s.build } : {}),
+        ...(typeof s.tab === "string" && s.tab ? { tab: s.tab } : {}),
+      }),
     }),
     createRoute({ getParentRoute: () => authed, path: "/apps/volumes", component: Volumes, validateSearch: projectSearch }),
     createRoute({ getParentRoute: () => authed, path: "/jobs", component: Jobs, validateSearch: projectSearch }),
@@ -116,7 +121,7 @@ const routeTree = root.addChildren([
     // Monitoring tabs (Phase 3): Alerts, Metrics, Logs, Alert rules, Channels.
     createRoute({ getParentRoute: () => authed, path: "/monitoring", component: MonitoringAlerts }),
     createRoute({ getParentRoute: () => authed, path: "/monitoring/metrics", component: MonitoringMetrics }),
-    createRoute({ getParentRoute: () => authed, path: "/monitoring/logs", component: MonitoringLogs }),
+    createRoute({ getParentRoute: () => authed, path: "/monitoring/logs", component: MonitoringLogs, validateSearch: logsSearch }),
     createRoute({ getParentRoute: () => authed, path: "/monitoring/rules", component: MonitoringRules }),
     createRoute({ getParentRoute: () => authed, path: "/monitoring/channels", component: MonitoringChannels }),
     planned("/clusters", "Clusters & nodes", "Phase 5", "Add Hetzner Cloud servers through the API or join dedicated servers with one command; manage more clusters through an outbound agent."),

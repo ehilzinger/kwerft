@@ -72,6 +72,11 @@ type Config struct {
 	// Git talks to Git hosts; nil means a default git.Factory.
 	Git *git.Factory
 
+	// LogsURL is VictoriaLogs' HTTP API, for log search and the history of
+	// Task and Build logs whose pods are gone (api_logsearch.go); empty means
+	// observability.LogsURL.
+	LogsURL string
+
 	// ActiveConsoleDomain returns the hostname the console is served on now
 	// (ConsoleSettings.status, which Settings can change); nil or "" means
 	// ConsoleDomain. Passkeys follow it.
@@ -86,6 +91,9 @@ type Config struct {
 	// buildsHook lets tests replace the Build lookup and the build pods'
 	// Kubernetes for the build log stream; see api_builds.go.
 	buildsHook func(*buildsAPI)
+	// logsHook lets tests replace the namespace lookups and limits of log
+	// search; see api_logsearch.go.
+	logsHook func(*logSearchAPI)
 	// gitHook lets tests adjust the Git API (limits); see api_git.go.
 	gitHook func(*gitAPI)
 }

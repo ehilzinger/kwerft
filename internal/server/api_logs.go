@@ -19,6 +19,8 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
+
+	"github.com/ehilzinger/kwerft/internal/logs"
 )
 
 // Live logs.
@@ -39,6 +41,11 @@ import (
 //	event: dropped  {"lines":120}  lines skipped because the stream exceeded its rate
 //	event: end      {"reason":"complete|idle|maxDuration|signedOut","message":"..."}
 //	: ping          every heartbeat, to keep proxies from closing a quiet stream
+//
+// A finished Task (or Build) whose pods are gone is answered from log
+// history instead (logHistory in api_logsearch.go): the start event carries
+// "source":"history" and a "message" saying so, then the lines, then end
+// "complete".
 //
 // Kubernetes is always asked for timestamps: they order the lines of several
 // replicas and let a resumed stream continue without repeating itself. The
@@ -147,7 +154,8 @@ func (p *podsAPI) streamLogs(w http.ResponseWriter, r *http.Request, kind, proje
 	target := appTarget(project, name)
 	ctx, cancel := context.WithTimeout(r.Context(), kubeTimeout)
 	defer cancel()
-	if _, err := p.target(ctx, b, kind, project, name); err != nil {
+	task, err := p.target(ctx, b, kind, project, name)
+	if err != nil {
 		p.kubeError(w, r, pr, kind+".logs", target, targetNotFound(kind, project, name), err)
 		return
 	}
@@ -170,6 +178,20 @@ func (p *podsAPI) streamLogs(w http.ResponseWriter, r *http.Request, kind, proje
 	if err != nil {
 		p.kubeError(w, r, pr, kind+".logs", target, targetNotFound(kind, project, name), err)
 		return
+	}
+	if task != nil && task.Status.Phase.Finished() && len(pods) == 0 && !lq.previous {
+		// A finished Task whose pods are gone (the Job was cleaned up): its
+		// log may still be in VictoriaLogs (api_logsearch.go). The user's
+		// RBAC check above covers it: same namespace, same pods.
+		start, end := historyRange(task.CreationTimestamp, task.Status.CompletionTime, p.now())
+		scope := logs.Scope{Namespaces: []string{project}, Fields: map[string]string{logs.FieldTask: name}}
+		if lq.pod != "" {
+			scope.Fields[logs.FieldPod] = lq.pod
+		}
+		if res := p.historyLog(r.Context(), scope, start, end, lq.tail, lq.container); res != nil {
+			sendHistory(w, p.logs.writeTimeout, res, lq.container)
+			return
+		}
 	}
 	if lq.pod != "" && len(pods) == 0 {
 		writeError(w, http.StatusNotFound, fmt.Sprintf("Replica %q is not part of %s %q.", lq.pod, kind, name))

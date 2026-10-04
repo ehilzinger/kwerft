@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { stripAnsi } from "../builds";
 import { shortPod, streamLogs, type LogLine, type LogQuery, type Replica } from "../pods";
+import { Icon } from "./Icon";
 import "../styles/pods.css";
 
 // LogViewer streams the logs of an App or a Task from a log endpoint
@@ -65,6 +66,8 @@ export function LogViewer({ path, replicas, pod: initialPod, follow: initialFoll
   const [streamPods, setStreamPods] = useState<string[]>([]);
   const [pods, setPods] = useState<Record<string, PodState>>({});
   const [dropped, setDropped] = useState(0);
+  // Set when the server answered from log history (the pods are gone).
+  const [history, setHistory] = useState<string>();
   const lines = useRef<LogLine[]>([]);
   const trimmed = useRef(0);
   const [version, setVersion] = useState(0);
@@ -82,6 +85,7 @@ export function LogViewer({ path, replicas, pod: initialPod, follow: initialFoll
     setVersion((v) => v + 1);
     setPods({});
     setDropped(0);
+    setHistory(undefined);
     setPhase({ phase: "connecting" });
 
     let pending: LogLine[] = [];
@@ -105,6 +109,7 @@ export function LogViewer({ path, replicas, pod: initialPod, follow: initialFoll
       switch (e.type) {
         case "start":
           setStreamPods(e.pods);
+          setHistory(e.source === "history" ? e.message ?? "From log history: the pod has been removed." : undefined);
           if (e.follow) setPhase({ phase: "live" });
           break;
         case "line":
@@ -246,6 +251,7 @@ export function LogViewer({ path, replicas, pod: initialPod, follow: initialFoll
         <button type="button" className="btn sm" onClick={download} disabled={all.length === 0}>Download</button>
       </div>
 
+      {history && <div className="banner info" role="note"><Icon name="clock" /><span>{history}</span></div>}
       <div className="logpanel">
         <div className="logv" ref={box} onScroll={onScroll} style={{ height }} tabIndex={0} role="log" aria-label="Log lines">
           {all.length === 0 ? (
@@ -303,7 +309,7 @@ function Footer({ phase, live, count, trimmed, dropped, pods, streaming, onResum
     <>
       {phase.phase === "connecting" && <span>— connecting… —</span>}
       {phase.phase === "live" && live && <span>— following · {streaming} {streaming === 1 ? "stream" : "streams"} · {lines} —</span>}
-      {phase.phase === "ended" && phase.reason === "complete" && <span>— end of logs · {lines} —</span>}
+      {phase.phase === "ended" && phase.reason === "complete" && <span>— end of logs{history ? " (from log history)" : ""} · {lines} —</span>}
       {phase.phase === "ended" && phase.reason === "gone" && <span>{phase.message}</span>}
       {phase.phase === "ended" && phase.reason !== "complete" && phase.reason !== "gone" && (
         <><span>{phase.message ?? "The stream stopped."}</span><button type="button" className="btn sm" onClick={onResume}>Resume</button></>
@@ -336,7 +342,7 @@ function clock(ts: string) {
 const LEVEL = /\b(ERROR|ERR|FATAL|PANIC|CRITICAL|WARN|WARNING)\b/;
 
 /** Marks search matches and colours the first log level word. */
-function highlight(text: string, needle: string): ReactNode {
+export function highlight(text: string, needle: string): ReactNode {
   type Range = { from: number; to: number; cls: string };
   const ranges: Range[] = [];
   if (needle) {

@@ -101,7 +101,11 @@ export function shellURL(t: ShellOwner, o: { shell: ShellKind; container?: strin
 export type LogLine = { pod: string; container: string; ts?: string; text: string; truncated?: boolean };
 
 export type LogEvent =
-  | { type: "start"; pods: string[]; container: string; follow: boolean; limits: { tail: number; maxLine: number; linesPerSecond: number; maxPods: number } }
+  | {
+    type: "start"; pods: string[]; container: string; follow: boolean; limits?: { tail: number; maxLine: number; linesPerSecond: number; maxPods: number };
+    /** "history": the pods are gone and the lines come from VictoriaLogs; message says so. */
+    source?: "history"; message?: string;
+  }
   | { type: "line"; line: LogLine }
   | { type: "status"; pod: string; state: "streaming" | "waiting" | "ended" | "error"; message?: string }
   | { type: "dropped"; lines: number }
