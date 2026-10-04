@@ -45,7 +45,8 @@ export async function request<T>(path: string, init?: RequestInit & { json?: unk
 
 export type VersionInfo = { version: string; commit: string; platform: "cloud" | "dedicated" };
 export type User = { id: string; email: string; name: string; role: "owner" | "admin" | "developer" | "viewer" };
-export type SetupStatus = { complete: boolean };
+/** consoleDomain: where the console is served (Settings can move it). */
+export type SetupStatus = { complete: boolean; consoleDomain?: string };
 /** A right password for an account with a second factor: these methods can finish the sign-in. */
 export type SecondFactorNeeded = { secondFactor: SecondFactor[] };
 export type SecondFactor = "passkey" | "totp" | "recovery";

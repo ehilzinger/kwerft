@@ -3,7 +3,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../api";
 import { Icon, type IconName } from "./Icon";
 
-type NavItem = { to: string; label: string; icon: IconName };
+type NavItem = { to: string; label: string; icon: IconName; adminOnly?: boolean };
 
 const sections: { title?: string; items: NavItem[] }[] = [
   { items: [
@@ -18,6 +18,7 @@ const sections: { title?: string; items: NavItem[] }[] = [
   ] },
   { title: "Administration", items: [
     { to: "/access", label: "Access", icon: "users" },
+    { to: "/settings", label: "Settings", icon: "gear", adminOnly: true },
   ] },
 ];
 
@@ -51,7 +52,7 @@ export function Shell() {
           {sections.map((s, i) => (
             <div key={i} style={{ display: "contents" }}>
               {s.title && <span className="grp">{s.title}</span>}
-              {s.items.map((item) => (
+              {s.items.filter((item) => !item.adminOnly || user.data?.role === "owner" || user.data?.role === "admin").map((item) => (
                 <Link key={item.to} to={item.to} activeOptions={{ exact: item.to === "/" }}>
                   <Icon name={item.icon} />
                   {item.label}

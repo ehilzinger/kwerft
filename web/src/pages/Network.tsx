@@ -5,6 +5,7 @@ import { Icon } from "../components/Icon";
 import { jobs, shortDate, type Domain } from "../jobs";
 import { words } from "../workloads";
 import { errorText } from "./Apps";
+import { settingsApi, type CertificateState } from "../settings";
 import "../styles/workloads.css";
 import "../styles/jobs.css";
 
@@ -50,7 +51,10 @@ export function Network() {
 }
 
 function Domains({ q }: { q: { data?: Domain[]; isPending: boolean; isError: boolean; error: unknown } }) {
-  const console_ = window.location.hostname;
+  const settings = useQuery({ queryKey: ["settings"], queryFn: settingsApi.get, refetchInterval: 20000 });
+  const console_ = settings.data?.consoleDomain ?? window.location.hostname;
+  const consoleCert = settings.data?.certificates.find((c) => c.purpose === "console");
+  const wildcard = settings.data?.certificates.find((c) => c.purpose === "apps-wildcard");
   if (q.isPending) return <p className="loading">Loading domains…</p>;
   return (
     <>
@@ -61,11 +65,20 @@ function Domains({ q }: { q: { data?: Domain[]; isPending: boolean; isError: boo
           <tbody>
             <tr>
               <td className="nm">{console_}</td>
-              <td>Kwerft console</td>
-              <td><span className="pill mute nodot" title="Set up by the installer with the Gateway's own listener">Installer</span></td>
-              <td className="dim">—</td>
+              <td>Kwerft console <Link to="/settings" className="dim">· Settings</Link></td>
+              <td>{consoleCert ? <SettingsCert state={consoleCert.state} message={consoleCert.message} /> : <span className="pill mute nodot">Console</span>}</td>
+              <td className="dim">{consoleCert?.notAfter ? shortDate(consoleCert.notAfter) : "—"}</td>
               <td className="mono dim">console</td>
             </tr>
+            {wildcard && (
+              <tr>
+                <td className="nm">{wildcard.hostnames.join(", ")}</td>
+                <td className="dim">Apps directly under it <Link to="/settings">· Settings</Link></td>
+                <td><SettingsCert state={wildcard.state} message={wildcard.message} /> <span className="tag">DNS-01</span></td>
+                <td className="dim">{wildcard.notAfter ? shortDate(wildcard.notAfter) : "—"}</td>
+                <td className="mono dim">apps-wildcard</td>
+              </tr>
+            )}
             {(q.data ?? []).map((d) => (
               <tr key={`${d.project}/${d.name}`}>
                 <td className="nm"><a href={`https://${d.hostname}`} target="_blank" rel="noreferrer">{d.hostname}</a></td>
@@ -83,13 +96,19 @@ function Domains({ q }: { q: { data?: Domain[]; isPending: boolean; isError: boo
       {(q.data?.length ?? 0) === 0 && !q.isError && (
         <p className="dim note">No app has a public domain yet. Give an app's port a public hostname in its settings; Kwerft adds an HTTPS listener and gets a Let's Encrypt certificate.</p>
       )}
-      <p className="dim note">Certificates renew automatically about a month before they expire. Wildcard domains, redirects and per-domain options arrive with DNS-01 in a later phase.</p>
+      <p className="dim note">Certificates renew automatically about a month before they expire. An apps domain with a DNS-01 wildcard certificate (Settings) serves every app under it from one listener.</p>
     </>
   );
 }
 
 function expiresSoon(iso?: string) {
   return !!iso && new Date(iso).getTime() - Date.now() < 14 * 86400000;
+}
+
+function SettingsCert({ state, message }: { state: CertificateState["state"]; message?: string }) {
+  if (state === "valid") return <span className="pill ok" title={message}>Valid</span>;
+  if (state === "issuing") return <span className="pill info" title={message}>Issuing</span>;
+  return <span className="pill bad" title={message}>Failed</span>;
 }
 
 function CertStatus({ d }: { d: Domain }) {

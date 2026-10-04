@@ -7,6 +7,7 @@ import { Field } from "../components/Field";
 import { Icon } from "../components/Icon";
 import { VolumeMounts, checkMounts, volumesOf, type Mount } from "../components/VolumeMounts";
 import { HOST_RE, NAME_RE, abilities, sizes, toYAML, workloads, type AppSpec, type Size } from "../workloads";
+import { settingsApi, underWildcard } from "../settings";
 import "../styles/workloads.css";
 
 const route = getRouteApi("/authed/apps/new");
@@ -129,7 +130,17 @@ export function Deploy() {
     setProblem((p) => (p?.field === k ? undefined : p)); // the user is fixing it
   };
   const project = f.project || (projects.data?.length === 1 ? projects.data[0]!.name : "");
-  const form = { ...f, project };
+  // Until a hostname is typed, suggest <app>.<apps domain> (Settings).
+  const settings = useQuery({ queryKey: ["settings"], queryFn: settingsApi.get, staleTime: 60_000 });
+  const appsDomain = settings.data?.appsDomain;
+  const [domainTouched, setDomainTouched] = useState(false);
+  const domain = appsDomain && !domainTouched ? `${f.name || "app"}.${appsDomain}` : f.domain;
+  const domainHint = !appsDomain || !domain.endsWith("." + appsDomain)
+    ? "Point its DNS A record at this server. Kwerft gets a Let's Encrypt certificate automatically."
+    : settings.data?.wildcardDomain && underWildcard(domain, appsDomain)
+      ? `Covered by the ${settings.data.wildcardDomain} wildcard: no DNS record or certificate to wait for.`
+      : `The *.${appsDomain} DNS record covers it; Kwerft gets a Let's Encrypt certificate automatically.`;
+  const form = { ...f, project, domain };
 
   const deploy = useMutation({
     mutationFn: () => workloads.createApp(project, f.name, specOf(form)),
@@ -292,8 +303,8 @@ export function Deploy() {
             </div>
             {f.exposure === "public" && (
               <div className="full">
-                <Field id="d-dom" label="Domain" className="mono" value={f.domain} onChange={(e) => set("domain", e.target.value)} placeholder="invoices.example.com"
-                  error={err("domain")} hint="Point its DNS A record at this server. Kwerft gets a Let's Encrypt certificate automatically." />
+                <Field id="d-dom" label="Domain" className="mono" value={domain} onChange={(e) => { setDomainTouched(true); set("domain", e.target.value); }}
+                  placeholder={appsDomain ? `invoices.${appsDomain}` : "invoices.example.com"} error={err("domain")} hint={domainHint} />
               </div>
             )}
             <div className="full">
