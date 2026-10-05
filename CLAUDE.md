@@ -22,8 +22,10 @@ when the blueprint changes).
   blueprint. Fonts are self-hosted (CSP is `'self'` only).
 - Hosted under the personal GitHub account `ehilzinger`: module
   `github.com/ehilzinger/kwerft`, image `ghcr.io/ehilzinger/kwerft`. The
-  installer URL is GitHub raw until there is a domain (`get.kwerft.dev` in the
-  blueprint is the target, not live).
+  advertised installer URL is `https://kwerft.dev/install.sh` (pinned:
+  `https://kwerft.dev/v<version>/install.sh`), 302 redirects in the
+  `../kwerft-homepage` repo's `netlify.toml` to the raw files in the public
+  `ehilzinger/kwerft-install` repo.
 
 ## Commands
 

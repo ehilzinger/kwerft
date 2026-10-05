@@ -37,12 +37,14 @@ func Join(consoleURL, installerURL string) string {
 	return s
 }
 
-// ReleaseURL is where a release's installer lives in the public install
-// repository (hack/release.sh installer_url), or "" for development builds.
+// ReleaseURL is the advertised URL of a release's installer
+// (hack/release.sh installer_url), or "" for development builds. kwerft.dev
+// redirects it to the public install repository (kwerft-homepage's
+// netlify.toml).
 func ReleaseURL(version string) string {
 	v := strings.TrimPrefix(version, "v")
 	if !semver.MatchString(v) || strings.HasSuffix(v, "-dev") {
 		return ""
 	}
-	return "https://raw.githubusercontent.com/ehilzinger/kwerft-install/main/v" + v + "/install.sh"
+	return "https://kwerft.dev/v" + v + "/install.sh"
 }

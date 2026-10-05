@@ -15,21 +15,18 @@ clusters and access.
 ## Install
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/ehilzinger/kwerft-install/main/install.sh | sudo bash -s -- --domain ops.example.com --email ops@example.com --yes
+curl -fsSL https://kwerft.dev/install.sh | sudo bash -s -- --domain ops.example.com --email ops@example.com --yes
 ```
 
-> **Not live yet.** This URL works once the first release is published and the
-> public [`ehilzinger/kwerft-install`](https://github.com/ehilzinger/kwerft-install)
-> repository exists (one-time setup in [RELEASING.md](RELEASING.md)). This
-> repository is private, so its own raw URLs return 404. Until then, install
-> from a checkout: `make dev-server HOST=root@<ip>` (see Development).
-
 That URL always serves the latest stable release; pin one with
-`…/kwerft-install/main/v0.2.0/install.sh`. The image
-(`ghcr.io/ehilzinger/kwerft`, amd64 and arm64) and the Helm chart
-(`oci://ghcr.io/ehilzinger/charts/kwerft`) are public, so no registry login is
-needed. A shorter `get.kwerft.dev`-style URL comes once Kwerft has its own
-domain.
+`https://kwerft.dev/v0.4.0/install.sh`. Both redirect (302, set in the
+`kwerft-homepage` repo's `netlify.toml`) to the script the release pipeline
+publishes to the public
+[`ehilzinger/kwerft-install`](https://github.com/ehilzinger/kwerft-install)
+repository. The image (`ghcr.io/ehilzinger/kwerft`, amd64 and arm64) and the
+Helm chart (`oci://ghcr.io/ehilzinger/charts/kwerft`) are public, so no
+registry login is needed. To try unreleased changes, install from a checkout:
+`make dev-server HOST=root@<ip>` (see Development).
 
 No domain yet? Leave out `--domain` and the console gets a temporary
 `<public-ip>.sslip.io` hostname; once DNS points at the server, change it under

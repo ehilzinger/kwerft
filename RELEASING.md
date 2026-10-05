@@ -31,7 +31,7 @@ public, so `curl … | sudo bash` works on any server without credentials.
 4. Try it on a fresh server:
 
    ```bash
-   curl -fsSL https://raw.githubusercontent.com/ehilzinger/kwerft-install/main/v0.2.0/install.sh \
+   curl -fsSL https://kwerft.dev/v0.2.0/install.sh \
      | sudo bash -s -- --domain ops.example.com --yes
    ```
 
@@ -130,9 +130,15 @@ It must have a `main` branch (`--add-readme` creates it). The workflow writes
 releases, the same files plus `LATEST` at the top level. A README there could
 say:
 
-> `curl -fsSL https://raw.githubusercontent.com/ehilzinger/kwerft-install/main/install.sh | sudo bash -s -- --domain ops.example.com --yes`
+> `curl -fsSL https://kwerft.dev/install.sh | sudo bash -s -- --domain ops.example.com --yes`
 > installs the latest stable Kwerft; `v<version>/install.sh` installs a specific
 > one. Files here are written by the release pipeline; don't edit them by hand.
+
+Users and the console never see these raw URLs: `https://kwerft.dev/install.sh`
+and `https://kwerft.dev/v<version>/install.sh` redirect to them (302, in the
+`kwerft-homepage` repo's `netlify.toml`), and `hack/release.sh` stamps the
+kwerft.dev URL into `join.sh` and the release notes. A fork with its own
+`INSTALL_REPO` sets `INSTALLER_BASE` as well.
 
 To use another name, set the repository variable `INSTALL_REPO` (step 5).
 The stamped `join.sh` contains the install repository URL, so pick the name

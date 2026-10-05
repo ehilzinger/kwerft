@@ -240,10 +240,10 @@ var errNotYet error = notYet{}
 func TestAgentInstallCommand(t *testing.T) {
 	const tail = " | sudo bash -s -- --agent --console https://ops.example.com --cluster-token kwft_agent_x"
 	for _, tc := range []struct{ version, want string }{
-		{"0.4.0", "curl -fsSL https://raw.githubusercontent.com/ehilzinger/kwerft-install/main/v0.4.0/install.sh" + tail + " --version 0.4.0"},
-		{"v0.5.0-rc.2", "curl -fsSL https://raw.githubusercontent.com/ehilzinger/kwerft-install/main/v0.5.0-rc.2/install.sh" + tail + " --version 0.5.0-rc.2"},
-		{"0.1.0-dev", "curl -fsSL https://raw.githubusercontent.com/ehilzinger/kwerft-install/main/install.sh" + tail},
-		{"dev-abc123", "curl -fsSL https://raw.githubusercontent.com/ehilzinger/kwerft-install/main/install.sh" + tail},
+		{"0.4.0", "curl -fsSL https://kwerft.dev/v0.4.0/install.sh" + tail + " --version 0.4.0"},
+		{"v0.5.0-rc.2", "curl -fsSL https://kwerft.dev/v0.5.0-rc.2/install.sh" + tail + " --version 0.5.0-rc.2"},
+		{"0.1.0-dev", "curl -fsSL https://kwerft.dev/install.sh" + tail},
+		{"dev-abc123", "curl -fsSL https://kwerft.dev/install.sh" + tail},
 	} {
 		if got := agentInstallCommand("ops.example.com", "kwft_agent_x", tc.version); got != tc.want {
 			t.Errorf("%s:\n got %s\nwant %s", tc.version, got, tc.want)

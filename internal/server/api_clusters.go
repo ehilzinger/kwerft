@@ -38,7 +38,7 @@ import (
 
 // latestInstallerURL is the latest stable installer: the install command of
 // development builds, which have no published copy of their own.
-const latestInstallerURL = "https://raw.githubusercontent.com/ehilzinger/kwerft-install/main/install.sh"
+const latestInstallerURL = "https://kwerft.dev/install.sh"
 
 type clustersAPI struct {
 	*api

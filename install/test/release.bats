@@ -30,7 +30,7 @@ setup() {
   run "$RELEASE" scripts 0.2.0 "$out"
   [ "$status" -eq 0 ]
   grep -qx 'KWERFT_VERSION_DEFAULT="0.2.0"' "$out/install.sh"
-  grep -qx 'INSTALLER_URL="https://raw.githubusercontent.com/ehilzinger/kwerft-install/main/v0.2.0/install.sh"' "$out/join.sh"
+  grep -qx 'INSTALLER_URL="https://kwerft.dev/v0.2.0/install.sh"' "$out/join.sh"
   run "$out/install.sh" --help
   [[ "$output" == *"Kwerft installer 0.2.0"* ]]
   if command -v sha256sum >/dev/null; then

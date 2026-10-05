@@ -2,7 +2,7 @@
 # Kwerft installer — turns a fresh Ubuntu server on Hetzner (Cloud or dedicated)
 # into a single-node Kubernetes cluster with the Kwerft console on top.
 #
-#   curl -fsSL https://raw.githubusercontent.com/ehilzinger/kwerft-install/main/install.sh | sudo bash -s -- --domain ops.example.com --email ops@example.com --yes
+#   curl -fsSL https://kwerft.dev/install.sh | sudo bash -s -- --domain ops.example.com --email ops@example.com --yes
 #
 # Released copies come from the public ehilzinger/kwerft-install repository:
 # main holds the latest stable release, v<version>/install.sh every release.

@@ -14,7 +14,7 @@ func TestInstallerStamping(t *testing.T) {
 	}
 	j := Join("https://ops.example.com", ReleaseURL("0.4.2"))
 	if strings.Contains(j, "__CONSOLE_URL__") || !strings.Contains(j, `"${KWERFT_CONSOLE_URL:-https://ops.example.com}"`) ||
-		!strings.Contains(j, `INSTALLER_URL="https://raw.githubusercontent.com/ehilzinger/kwerft-install/main/v0.4.2/install.sh"`) {
+		!strings.Contains(j, `INSTALLER_URL="https://kwerft.dev/v0.4.2/install.sh"`) {
 		t.Fatalf("join.sh:\n%s", j)
 	}
 	if ReleaseURL("0.1.0-dev") != "" || ReleaseURL("abc") != "" {

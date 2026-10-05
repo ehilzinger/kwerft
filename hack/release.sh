@@ -24,6 +24,10 @@ readonly KO_VERSION="v0.19.1"             # keep in step with hack/dev-server.sh
 readonly PLATFORMS=(linux/amd64 linux/arm64)
 readonly SOURCE_URL="https://github.com/ehilzinger/kwerft"
 INSTALL_REPO="${INSTALL_REPO:-ehilzinger/kwerft-install}"
+# Where users fetch a release's installer: kwerft.dev/v<version>/install.sh
+# redirects to $INSTALL_REPO (kwerft-homepage's netlify.toml). Forks with
+# their own INSTALL_REPO set this too.
+INSTALLER_BASE="${INSTALLER_BASE:-https://kwerft.dev}"
 
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 cd "$ROOT"
@@ -51,7 +55,7 @@ check_version() {
 }
 is_prerelease() { [[ "$1" == *-* ]]; }
 
-installer_url() { echo "https://raw.githubusercontent.com/$INSTALL_REPO/main/v$1/install.sh"; }
+installer_url() { echo "$INSTALLER_BASE/v$1/install.sh"; }
 
 sha256() {
   if command -v sha256sum >/dev/null; then sha256sum "$@"; else shasum -a 256 "$@"; fi
