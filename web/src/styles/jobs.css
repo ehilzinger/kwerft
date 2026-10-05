@@ -28,10 +28,6 @@ fieldset.plain { border: 0; padding: 0; margin: 0; display: grid; gap: 16px; min
 .tabs a.on { color: var(--ink); border-bottom-color: var(--accent); }
 .tabs .n { font-family: var(--mono); font-size: 11px; color: var(--faint); margin-left: 6px; }
 
-.check { display: inline-flex; align-items: center; gap: 7px; font-size: 13px; cursor: pointer; }
-.check input { margin: 0; accent-color: var(--accent); }
-.checks { display: grid; gap: 6px; }
-
 .env-rows, .mounts { display: grid; gap: 6px; justify-items: start; }
 .env-row { display: grid; grid-template-columns: minmax(0, 2fr) auto minmax(0, 3fr) auto; gap: 6px; align-items: center; width: 100%; }
 .env-row .eq { color: var(--faint); font-family: var(--mono); }
