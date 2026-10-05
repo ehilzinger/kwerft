@@ -383,6 +383,11 @@ Work split and contracts: `docs/phase2.md`.
 Things found while building Phases 1–4 that are not done yet. Pick them up
 before the beta or move them into a phase.
 
+**Node pools (found on `kwerft-dev-test`, 2026-10-05)**
+- A pool that replaces or deletes a server leaves that server's Node behind (NotReady, its server gone): two workers were replaced at 12:38 UTC without an obvious cause (both stopped reporting within a minute; the new servers took over their IPs) and their Nodes stayed until deleted by hand. Find why they were replaced, and make the pool delete the Node of every server it deletes.
+- Servers of a pool created in the UI are named `<cluster>-<cluster>-<pool>-…` (`local-local-workers-…`): the pool object is already named `<cluster>-<pool>`.
+- `install.sh --domain <ip>.sslip.io` still prints "No --domain given".
+
 **To try on the test server (need the user's browser or accounts) — scheduled after Phase 6 (decided 2026-10-05)**
 - Server firewall: "Your address" shows the real public IP, then SSH narrowing to it (W3's step-by-step plan and recovery in `docs/phase4.md` › As built (W3)); also checks that `X-Real-Ip` is trusted from Traefik's actual peer address (cilium_host) — compare audit-log IPs with the real client.
 - Single sign-on with a real provider (redirect URI `https://<console>/api/v1/sso/callback`); an API token and a downloaded kubeconfig (`kubectl auth whoami`, exec/secrets/`--as` refused).
