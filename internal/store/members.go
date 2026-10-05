@@ -354,6 +354,17 @@ func (s *Store) AcceptInvite(ctx context.Context, tokenHash string, u *User, now
 	}
 	u.Email, u.Role, u.OrgID, u.CreatedAt = inv.Email, inv.Role, inv.OrgID, now
 	if err := insertUser(ctx, tx, u); err != nil {
+		if errors.Is(err, ErrEmailTaken) {
+			// Of two racing accepts of this invite, the other one created
+			// the account (SQLite serialises the writes): say the invite
+			// is used, not that the address has an account.
+			_ = tx.Rollback()
+			if again, err2 := scanInvite(s.db.QueryRowContext(ctx, `SELECT `+inviteColumns+` FROM invites WHERE token_hash = ?`, tokenHash)); err2 == nil {
+				if used := again.Err(now); used != nil {
+					return again, used
+				}
+			}
+		}
 		return inv, err
 	}
 	if _, err := tx.ExecContext(ctx, `UPDATE invites SET accepted_at = ?, accepted_user_id = ? WHERE id = ?`, now.Unix(), u.ID, inv.ID); err != nil {
