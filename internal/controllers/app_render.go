@@ -66,6 +66,21 @@ func (a *appRender) replicas() int32 {
 	return 1
 }
 
+// defaultDrainSeconds matches the CRD default, for Apps read without it.
+const defaultDrainSeconds = 5
+
+// drainSeconds is AppSpec.DrainSeconds; 0 for Apps without ports, which no
+// Service routes to.
+func (a *appRender) drainSeconds() int32 {
+	switch {
+	case len(a.app.Spec.Ports) == 0:
+		return 0
+	case a.app.Spec.DrainSeconds != nil:
+		return *a.app.Spec.DrainSeconds
+	}
+	return defaultDrainSeconds
+}
+
 // stateful apps (any disk of their own) run as a StatefulSet so each replica
 // keeps its disk. Apps that only mount shared Volumes run as a Deployment.
 func (a *appRender) stateful() bool {
@@ -91,6 +106,8 @@ func (a *appRender) pod() *podShape {
 		healthCheck: s.HealthCheck,
 		volumes:     s.Volumes,
 		labels:      a.labels,
+		// Draining needs a Service, and only Apps with ports have one.
+		drainSeconds: a.drainSeconds(),
 	}
 	if src := s.Source.Image; src != nil {
 		p.pullSecret = src.PullSecret
@@ -113,8 +130,9 @@ func (a *appRender) deployment() *appsv1ac.DeploymentApplyConfiguration {
 		WithSpec(appsv1ac.DeploymentSpec().
 			WithReplicas(a.replicas()).
 			WithSelector(metav1ac.LabelSelector().WithMatchLabels(a.selector)).
-			// Start the new replica before stopping an old one: no downtime
-			// as long as the health check is honest.
+			// Start the new replica before stopping an old one, which drains
+			// first (drainSeconds): no downtime as long as the health check
+			// is honest.
 			WithStrategy(appsv1ac.DeploymentStrategy().
 				WithType(appsv1.RollingUpdateDeploymentStrategyType).
 				WithRollingUpdate(appsv1ac.RollingUpdateDeployment().

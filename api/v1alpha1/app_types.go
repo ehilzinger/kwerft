@@ -177,6 +177,17 @@ type AppSpec struct {
 
 	// +optional
 	HealthCheck *HealthCheck `json:"healthCheck,omitempty"`
+
+	// DrainSeconds is how long a replica that is being stopped (rollout,
+	// restart, scale-down) keeps running before it gets SIGTERM, so Services
+	// and callers stop sending it new requests while it still answers. The
+	// app then has 30 seconds to exit. 0 stops it at once. Only Apps with
+	// ports drain; nothing routes to the others.
+	// +kubebuilder:validation:Minimum=0
+	// +kubebuilder:validation:Maximum=300
+	// +kubebuilder:default=5
+	// +optional
+	DrainSeconds *int32 `json:"drainSeconds,omitempty"`
 }
 
 // AppRevision records one rollout for history and rollback.

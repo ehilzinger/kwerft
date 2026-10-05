@@ -153,6 +153,98 @@ func TestAppRendersDeploymentServiceRouteAndPolicy(t *testing.T) {
 	}
 }
 
+// Apps with ports keep serving for drainSeconds after they are told to stop,
+// by the kubelet's own sleep (distroless images have none), and get the usual
+// 30 seconds to exit after that. Apps without ports stop at once.
+func TestAppDrainsBeforeStopping(t *testing.T) {
+	requireEnvtest(t)
+	ctx := context.Background()
+	projectNamespace(t, "drain")
+	podSpec := func(name string) corev1.PodSpec {
+		t.Helper()
+		var d appsv1.Deployment
+		eventually(t, func() error { return k8s.Get(ctx, client.ObjectKey{Namespace: "drain", Name: name}, &d) })
+		return d.Spec.Template.Spec
+	}
+	preStopSleep := func(ps corev1.PodSpec) int64 {
+		l := ps.Containers[0].Lifecycle
+		if l == nil || l.PreStop == nil || l.PreStop.Sleep == nil {
+			return 0
+		}
+		if l.PreStop.Exec != nil || l.PreStop.HTTPGet != nil {
+			t.Errorf("preStop = %+v, want only the kubelet's sleep", l.PreStop)
+		}
+		return l.PreStop.Sleep.Seconds
+	}
+	grace := func(ps corev1.PodSpec) int64 {
+		if ps.TerminationGracePeriodSeconds == nil {
+			return 30 // Kubernetes' default
+		}
+		return *ps.TerminationGracePeriodSeconds
+	}
+
+	// The CRD defaults drainSeconds to 5.
+	app := createApp(t, "drain", "web", imageApp("nginx:1.29"))
+	app = waitForApp(t, app, "Progressing")
+	if app.Spec.DrainSeconds == nil || *app.Spec.DrainSeconds != 5 {
+		t.Errorf("drainSeconds = %v, want the default 5", app.Spec.DrainSeconds)
+	}
+	ps := podSpec("web")
+	if got := preStopSleep(ps); got != 5 {
+		t.Errorf("preStop sleep = %d, want 5", got)
+	}
+	if got := grace(ps); got != 35 {
+		t.Errorf("terminationGracePeriodSeconds = %d, want 35 (drain + 30)", got)
+	}
+
+	// Tuned, and switched off.
+	app.Spec.DrainSeconds = ptr.To[int32](20)
+	if err := k8s.Update(ctx, app); err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, func() error {
+		if ps := podSpec("web"); preStopSleep(ps) != 20 || grace(ps) != 50 {
+			return fmt.Errorf("preStop sleep %d, grace %d; want 20, 50", preStopSleep(ps), grace(ps))
+		}
+		return nil
+	})
+	if err := k8s.Get(ctx, client.ObjectKeyFromObject(app), app); err != nil {
+		t.Fatal(err)
+	}
+	app.Spec.DrainSeconds = ptr.To[int32](0)
+	if err := k8s.Update(ctx, app); err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, func() error {
+		if ps := podSpec("web"); ps.Containers[0].Lifecycle != nil || grace(ps) != 30 {
+			return fmt.Errorf("lifecycle %+v, grace %d; want none, 30", ps.Containers[0].Lifecycle, grace(ps))
+		}
+		return nil
+	})
+
+	// No ports, no Service: nothing to drain from.
+	worker := createApp(t, "drain", "worker", kwerftv1.AppSpec{Source: kwerftv1.AppSource{Image: &kwerftv1.ImageSource{Ref: "busybox:1.37"}}})
+	waitForApp(t, worker, "Progressing")
+	if ps := podSpec("worker"); ps.Containers[0].Lifecycle != nil || grace(ps) != 30 {
+		t.Errorf("worker: lifecycle %+v, grace %d; want none, 30", ps.Containers[0].Lifecycle, grace(ps))
+	}
+
+	// Disks of its own: the StatefulSet drains too.
+	db := createApp(t, "drain", "db", kwerftv1.AppSpec{
+		Source:  kwerftv1.AppSource{Image: &kwerftv1.ImageSource{Ref: "postgres:17.6"}},
+		Ports:   []kwerftv1.AppPort{{Container: 5432}},
+		Volumes: []kwerftv1.AppVolume{{Path: "/data", Size: resource.MustParse("1Gi")}},
+	})
+	waitForApp(t, db, "Progressing")
+	var sts appsv1.StatefulSet
+	if err := k8s.Get(ctx, client.ObjectKey{Namespace: "drain", Name: "db"}, &sts); err != nil {
+		t.Fatal(err)
+	}
+	if got := preStopSleep(sts.Spec.Template.Spec); got != 5 {
+		t.Errorf("statefulset preStop sleep = %d, want 5", got)
+	}
+}
+
 func TestAppBecomesAvailableWhenReplicasAreReady(t *testing.T) {
 	requireEnvtest(t)
 	ctx := context.Background()

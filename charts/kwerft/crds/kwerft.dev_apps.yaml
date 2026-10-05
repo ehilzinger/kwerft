@@ -74,6 +74,18 @@ spec:
                     argument its own item, e.g. ["echo", "hi"], or use ["sh", "-c",
                     "..."]
                   rule: size(self) == 0 || !self[0].matches('[[:space:]]')
+              drainSeconds:
+                default: 5
+                description: |-
+                  DrainSeconds is how long a replica that is being stopped (rollout,
+                  restart, scale-down) keeps running before it gets SIGTERM, so Services
+                  and callers stop sending it new requests while it still answers. The
+                  app then has 30 seconds to exit. 0 stops it at once. Only Apps with
+                  ports drain; nothing routes to the others.
+                format: int32
+                maximum: 300
+                minimum: 0
+                type: integer
               egress:
                 default: https
                 description: Egress controls outbound traffic to the internet.

@@ -37,7 +37,13 @@ type podShape struct {
 	volumes     []kwerftv1.AppVolume
 	labels      map[string]string
 	annotations map[string]string
+	// drainSeconds delays SIGTERM by a preStop sleep; 0 for Tasks.
+	drainSeconds int32
 }
+
+// stopSeconds is what a container gets between SIGTERM and SIGKILL after it
+// has drained: Kubernetes' default grace period.
+const stopSeconds = 30
 
 func (p *podShape) resourceRequirements() *corev1ac.ResourceRequirementsApplyConfiguration {
 	if p.size == "custom" && p.resources != nil {
@@ -75,6 +81,14 @@ func (p *podShape) containerConfig() *corev1ac.ContainerApplyConfiguration {
 		c.WithReadinessProbe(probe(hc).WithPeriodSeconds(5).WithFailureThreshold(3))
 		c.WithLivenessProbe(probe(hc).WithPeriodSeconds(10).WithFailureThreshold(6))
 	}
+	// A stopping pod leaves the Service's endpoints at once, but Cilium and
+	// callers holding keep-alive connections learn it a moment later; it
+	// keeps serving until then. The kubelet's own sleep, since distroless
+	// images have no sleep binary.
+	if p.drainSeconds > 0 {
+		c.WithLifecycle(corev1ac.Lifecycle().WithPreStop(corev1ac.LifecycleHandler().
+			WithSleep(corev1ac.SleepAction().WithSeconds(int64(p.drainSeconds)))))
+	}
 	for i, v := range p.volumes {
 		m := corev1ac.VolumeMount().WithName(volumeName(i)).WithMountPath(v.Path)
 		if v.ReadOnly {
@@ -95,6 +109,10 @@ func (p *podShape) template() *corev1ac.PodTemplateSpecApplyConfiguration {
 		WithEnableServiceLinks(false).
 		WithSecurityContext(corev1ac.PodSecurityContext().
 			WithSeccompProfile(corev1ac.SeccompProfile().WithType(corev1.SeccompProfileTypeRuntimeDefault)))
+	if p.drainSeconds > 0 {
+		// The grace period counts from the start of preStop.
+		spec.WithTerminationGracePeriodSeconds(int64(p.drainSeconds) + stopSeconds)
+	}
 	if p.pullSecret != "" {
 		spec.WithImagePullSecrets(corev1ac.LocalObjectReference().WithName(p.pullSecret))
 	}

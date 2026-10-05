@@ -116,7 +116,7 @@ Exit codes: 0 ok · 2 usage · 10 preflight · 20 network/DNS · 30 Kubernetes �
 | Resource | Becomes | Status |
 |---|---|---|
 | `Project` (cluster-scoped) | Namespace, quota, Pod Security level, default-deny CiliumNetworkPolicy when isolated (`spec.isolated`, default; off: every project's pods reach its apps), RoleBindings for its access (Team or Members) | reconciler ✔ |
-| `App` | Deployment, or StatefulSet when it has disks of its own (shared Volumes keep it a Deployment); Service, HTTPRoute per public port, CiliumNetworkPolicy (the ingress via host/remote-node, platform namespaces, `allowFrom`; egress none, https or all); source = image **or** Git. Rollback runs an earlier revision's image again as a new revision (`GitSource.pinnedImage` for Git apps); restart via the `kwerft.dev/restarted-at` annotation, no new revision | reconciler ✔, API ✔ (HPA later) |
+| `App` | Deployment, or StatefulSet when it has disks of its own (shared Volumes keep it a Deployment); Service, HTTPRoute per public port, CiliumNetworkPolicy (the ingress via host/remote-node, platform namespaces, `allowFrom`; egress none, https or all); source = image **or** Git. Rollback runs an earlier revision's image again as a new revision (`GitSource.pinnedImage` for Git apps); restart via the `kwerft.dev/restarted-at` annotation, no new revision. Rollouts start the new replica first (maxSurge 1, maxUnavailable 0); a replica being stopped drains first: `drainSeconds` (default 5, 0–300, Apps with ports only, never Tasks) becomes the kubelet's `preStop: sleep` — distroless images have no `sleep` — and a grace period of drain + 30 s | reconciler ✔, API ✔ (HPA later) |
 | `Volume` | PVC (local-path / hcloud-volumes) that Apps and Tasks of a project mount by name; deletion waits while mounted | reconciler ✔ |
 | `Task` | Job (kwerft-batch priority, deny-ingress policy): a one-off run with App's shape, or `fromApp`; "run now" with `envOverrides` | reconciler ✔ |
 | `Schedule` | Tasks on a cron schedule, scheduled by the reconciler (a CronJob could not create Tasks without RBAC in pods) | reconciler ✔ |
@@ -280,6 +280,7 @@ Exit codes: 0 ok · 2 usage · 10 preflight · 20 network/DNS · 30 Kubernetes �
 - [x] Release pipeline: tag `v*` → multi-arch image (ko) and chart on GHCR, stamped install/join scripts to the public `kwerft-install` repo, GitHub Release; signing opt-in (`SIGN_RELEASES`); see RELEASING.md
 - [x] Cut the first release and do the one-time GitHub setup (packages public, install repo, token): v0.1.0-rc.1/rc.2, then **v0.1.0** (2026-10-04, the first stable: top-level `install.sh` in kwerft-install, image `:latest`)
 - [x] Exit criterion on a fresh Cloud server from the published release (rc.2, 2026-10-04): app on HTTPS in 7:06; a schedule restarted an app on success
+- [x] Rollouts and restarts drain (2026-10-05): a restart of `brouter` on kwerft-dedi-1 had dropped 1 of 671 requests through `edge` (Caddy) — the old pod got SIGTERM as soon as the new one was Ready, while Cilium and Caddy's keep-alive connections still sent to it. Apps with ports now get a `preStop` sleep of `drainSeconds` (App settings › Health & draining). A terminating pod is `ready: false` in its EndpointSlice at once, whatever its probe says, so readiness needs no change; the sleep covers the time until Cilium and callers have caught up. It does not cover a request still running when SIGTERM arrives: an app that exits at once instead of finishing it loses that request (Go clients, Caddy among them, retry idempotent requests on a reused connection that closed before answering). Upgrading the controller rolls every App with ports once, and that rollout runs without the drain
 - [ ] Not yet: shared storage for pending logins before running more than one replica (admin reset of second factors, "require 2FA" and data-key rotation: done in Phase 4)
 
 ### Phase 5 checklist
@@ -376,6 +377,7 @@ before the beta or move them into a phase.
 - `TrafficRuleSpec`'s doc comment says Apps open their ports to their project; they do not (only to `allowFrom` and, when not isolated, every project).
 
 **Design gaps to decide**
+- Apps without a health check are Ready as soon as their container starts, before they listen, so a rollout can stop the old replica while the new one cannot answer yet (no drain helps there). A default TCP check on the first port would fix it but would break Apps that listen elsewhere; maybe default it in the deploy wizard instead.
 - The in-cluster registry has no authentication: a build in project A could push tags into project B's repository (running Apps are protected by digest pinning). Per-project registry credentials.
 - Project names stay listable through Kubernetes for every role (cluster-scoped read); alert-rule and channel names are visible to all.
 - Builds cannot reach private Git hosts on private networks (by design of the builds egress policy); an opt-in per connection.

@@ -386,6 +386,9 @@ func TestTaskFromAppInheritsAndOverrides(t *testing.T) {
 	if len(c.Ports) != 0 || c.ReadinessProbe != nil {
 		t.Error("a Task has no ports or probes")
 	}
+	if g := pod.Spec.TerminationGracePeriodSeconds; c.Lifecycle != nil || (g != nil && *g != 30) {
+		t.Errorf("lifecycle %+v, grace %v: a Task does not drain like its App", c.Lifecycle, g)
+	}
 	if len(c.VolumeMounts) != 1 || c.VolumeMounts[0].MountPath != "/media" {
 		t.Errorf("mounts = %+v, want only the shared Volume", c.VolumeMounts)
 	}

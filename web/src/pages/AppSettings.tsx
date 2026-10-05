@@ -27,6 +27,7 @@ type Form = {
   hc: HC;
   hcPath: string;
   hcPort: string;
+  drain: string;
   egress: "none" | "https" | "all";
   mounts: Mount[]; // shared Volumes; disks per replica are kept as they are
 };
@@ -51,6 +52,7 @@ function formOf(spec: AppSpec): Form {
     hc: hc ? (hc.http ? "http" : "tcp") : "none",
     hcPath: hc?.http ?? "/healthz",
     hcPort: hc ? String(hc.port) : String(spec.ports?.[0]?.container ?? ""),
+    drain: String(spec.drainSeconds ?? 5),
     egress: spec.egress ?? "https",
     mounts: mountsOf(spec.volumes),
   };
@@ -72,6 +74,7 @@ function specOf(f: Form, base: AppSpec): AppSpec {
   if (f.hc === "none") delete spec.healthCheck;
   else spec.healthCheck = { port: Number(f.hcPort), ...(f.hc === "http" ? { http: f.hcPath.trim() || "/" } : {}) };
   spec.egress = f.egress;
+  spec.drainSeconds = Number(f.drain);
   spec.volumes = [...ownDisks(base), ...volumesOf(f.mounts)];
   if (spec.volumes.length === 0) delete spec.volumes;
   return spec;
@@ -106,6 +109,8 @@ function check(f: Form, isImage: boolean): { field: string; message: string } | 
     const c = Number(f.hcPort);
     if (!Number.isInteger(c) || c < 1 || c > 65535) return { field: "spec.healthCheck.port", message: "A port is a number from 1 to 65535." };
   }
+  const d = Number(f.drain);
+  if (f.drain.trim() === "" || !Number.isInteger(d) || d < 0 || d > 300) return { field: "spec.drainSeconds", message: "Enter whole seconds, from 0 to 300." };
   const m = checkMounts(f.mounts);
   if (m) return { field: `mounts[${m[0]}]`, message: m[1] };
   return undefined;
@@ -294,7 +299,7 @@ export function AppSettings({ app, canEdit, onSaved }: { app: App; canEdit: bool
             </div>
           </div>
           <div className="card">
-            <h3>Health check</h3>
+            <h3>Health &amp; draining</h3>
             <div className="bd fields">
               <div className="field full">
                 <label>Check</label>
@@ -307,6 +312,8 @@ export function AppSettings({ app, canEdit, onSaved }: { app: App; canEdit: bool
               {f.hc === "http" && <Input id="s-hc-path" label="Path" className="mono" value={f.hcPath} onChange={(v) => set("hcPath", v)} error={err("spec.healthCheck.http")} />}
               {f.hc !== "none" && <Input id="s-hc-port" label="Port" className="mono" value={f.hcPort} onChange={(v) => set("hcPort", v)} error={err("spec.healthCheck.port")} />}
               {f.hc === "none" && <span className="hint full">Without a check, a replica gets traffic as soon as it starts, and a hung one is never replaced.</span>}
+              {f.ports.length > 0 && <Input id="s-drain" label="Drain (seconds)" className="mono" inputMode="numeric" value={f.drain} onChange={(v) => set("drain", v)} error={err("spec.drainSeconds")}
+                hint="A replica being replaced keeps answering this long before it is told to stop, while traffic moves away. 0 stops it at once." />}
             </div>
           </div>
         </div>
@@ -351,7 +358,7 @@ export function AppSettings({ app, canEdit, onSaved }: { app: App; canEdit: bool
 }
 
 function knownField(field: string) {
-  return /^(spec\.(source\.image\.(ref|pullSecret)|source\.git\.(repository|branch|connection|dockerfile|path)|replicas|env\[\d+\]|ports\[\d+\]|healthCheck\.(http|port))|mounts\[\d+\])/.test(field);
+  return /^(spec\.(source\.image\.(ref|pullSecret)|source\.git\.(repository|branch|connection|dockerfile|path)|replicas|env\[\d+\]|ports\[\d+\]|healthCheck\.(http|port)|drainSeconds)|mounts\[\d+\])/.test(field);
 }
 
 /** GitFields' field names → the server's field paths. */

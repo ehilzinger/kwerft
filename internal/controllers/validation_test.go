@@ -8,6 +8,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	kwerftv1 "github.com/ehilzinger/kwerft/api/v1alpha1"
@@ -48,6 +49,11 @@ func TestCELRejectsInvalidSpecs(t *testing.T) {
 	t.Run("class on a shared volume", func(t *testing.T) {
 		err := k8s.Create(ctx, app("class-shared", kwerftv1.AppVolume{Path: "/d", Volume: "data", Class: "hcloud-volume"}))
 		expectInvalid(t, err, "class applies to size")
+	})
+	t.Run("drain longer than five minutes", func(t *testing.T) {
+		a := app("long-drain")
+		a.Spec.DrainSeconds = ptr.To[int32](301)
+		expectInvalid(t, k8s.Create(ctx, a), "drainSeconds")
 	})
 	t.Run("both app volume forms are accepted", func(t *testing.T) {
 		a := app("mixed", kwerftv1.AppVolume{Path: "/own", Size: resource.MustParse("1Gi")}, kwerftv1.AppVolume{Path: "/shared", Volume: "data"})

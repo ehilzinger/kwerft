@@ -85,6 +85,8 @@ export type AppSpec = {
   // A disk per replica (size), or a shared Volume of the project (volume, see jobs.ts).
   volumes?: { path: string; size?: string; class?: string; volume?: string; readOnly?: boolean }[];
   healthCheck?: HealthCheck;
+  /** Seconds a stopping replica keeps serving before SIGTERM (default 5; only Apps with ports). */
+  drainSeconds?: number;
 };
 
 export type GitSource = {
