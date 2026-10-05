@@ -351,6 +351,164 @@ pre.mermaid{background:var(--surface);border:1px solid var(--line);border-radius
 
 @media (max-width:860px){.doc{grid-template-columns:1fr}.toc{display:none}}
 @media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
+/* ---------- overview: infrastructure map (web/src/components/InfraMap.tsx) ---------- */
+.bm-card .ch-h{flex-wrap:wrap}
+.bm-card .ch-h .t{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap}
+.bm-card .ch-h .cnt{font-weight:400;color:var(--muted);font-size:12.5px}
+.bm-card .ch-h .r{display:flex;gap:8px;align-items:center}
+.bm-select{border:1px solid var(--line);border-radius:7px;padding:4px 8px;background:var(--surface);font-size:12.5px}
+.bm-mtool{display:flex;flex-wrap:wrap;gap:8px 14px;align-items:center;padding:9px 16px;border-bottom:1px solid var(--line-2);background:var(--surface)}
+.seg button svg{width:14px;height:14px}
+.bm-layers{display:flex;gap:6px;flex-wrap:wrap;align-items:center}
+.bm-layers .lbl{font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:var(--faint);margin-right:2px}
+.bm-chipt{border:1px solid var(--line);background:var(--surface);border-radius:999px;padding:2px 10px 2px 8px;font-size:12px;display:inline-flex;gap:6px;align-items:center;color:var(--faint)}
+.bm-chipt i{width:14px;height:3px;border-radius:2px;background:var(--line)}
+.bm-chipt[aria-pressed="true"]{color:var(--ink-2);border-color:color-mix(in srgb,var(--accent) 35%,var(--line))}
+.bm-chipt[aria-pressed="true"] i{background:var(--sw)}
+.bm-chipt.prob[aria-pressed="true"]{background:var(--bad-bg);border-color:color-mix(in srgb,var(--bad) 45%,transparent);color:var(--bad)}
+.bm-chipt.prob i{width:7px;height:7px;border-radius:50%}
+.bm-find{display:flex;align-items:center;gap:6px;border:1px solid var(--line);border-radius:7px;padding:3px 8px;background:var(--surface-2);margin-left:auto}
+.bm-find svg{width:13px;height:13px;color:var(--faint)}
+.bm-find input{border:0;background:transparent;outline:0;font-size:12.5px;width:150px}
+.bm-find:focus-within{border-color:var(--accent)}
+
+.bm-canvas{position:relative;height:620px;overflow:hidden;border-radius:0 0 10px 10px;
+  background:radial-gradient(circle,color-mix(in srgb,var(--line) 80%,transparent) 1px,transparent 1.3px) 0 0/20px 20px,var(--surface-2)}
+#bpmap{width:100%;height:100%;display:block;touch-action:none;cursor:grab;user-select:none;-webkit-user-select:none}
+#bpmap.panning{cursor:grabbing}
+.bm-zoom{position:absolute;right:12px;bottom:12px;display:flex;flex-direction:column;border:1px solid var(--line);border-radius:8px;background:var(--surface);box-shadow:var(--shadow);overflow:hidden}
+.bm-zoom button{border:0;background:transparent;width:30px;height:28px;display:grid;place-items:center;color:var(--ink-2);border-bottom:1px solid var(--line-2)}
+.bm-zoom button:last-child{border-bottom:0}
+.bm-zoom button:hover{background:var(--sunk)}
+.bm-zoom svg{width:14px;height:14px}
+.bm-legend{position:absolute;left:12px;bottom:12px;display:flex;flex-wrap:wrap;gap:4px 14px;align-items:center;max-width:calc(100% - 80px);padding:6px 10px;border:1px solid var(--line);border-radius:8px;background:color-mix(in srgb,var(--surface) 92%,transparent);font-size:11.5px;color:var(--muted)}
+.bm-legend span{display:inline-flex;align-items:center;gap:6px;white-space:nowrap}
+.bm-legend svg{width:26px;height:8px;overflow:visible}
+.bm-hint{position:absolute;left:50%;top:12px;transform:translateX(-50%);background:var(--ink);color:var(--surface);font-size:12px;padding:4px 10px;border-radius:6px;opacity:0;transition:opacity .2s;pointer-events:none}
+.bm-hint.on{opacity:.92}
+.bm-tip{position:absolute;pointer-events:none;background:var(--ink);color:var(--surface);font-size:12px;line-height:1.4;padding:6px 9px;border-radius:7px;max-width:260px;box-shadow:var(--shadow);z-index:3}
+.bm-tip b{font-family:var(--mono);font-weight:500}
+.bm-tip small{display:block;opacity:.75}
+.bm-toast{position:absolute;left:50%;bottom:16px;transform:translateX(-50%);background:var(--ink);color:var(--surface);font-size:12.5px;padding:7px 12px;border-radius:7px;box-shadow:var(--shadow);z-index:4;max-width:80%}
+
+/* inspector drawer */
+.bm-insp{position:absolute;top:12px;right:12px;bottom:12px;width:310px;background:var(--surface);border:1px solid var(--line);border-radius:10px;box-shadow:var(--shadow);display:flex;flex-direction:column;overflow:hidden;z-index:2}
+.bm-insp .ihd{padding:12px 14px 10px;border-bottom:1px solid var(--line-2);display:grid;gap:3px;position:relative}
+.bm-insp .eb{font-size:10.5px;text-transform:uppercase;letter-spacing:.09em;color:var(--faint)}
+.bm-insp h4{margin:0;font-family:var(--mono);font-size:15px;font-weight:600;letter-spacing:-.01em;padding-right:28px;word-break:break-all}
+.bm-insp .ihd .pills{display:flex;gap:6px;flex-wrap:wrap;margin-top:2px}
+.bm-insp .x{position:absolute;right:8px;top:8px;border:0;background:transparent;width:26px;height:26px;border-radius:6px;color:var(--muted);display:grid;place-items:center}
+.bm-insp .x:hover{background:var(--sunk)}
+.bm-insp .x svg{width:14px;height:14px}
+.bm-insp .ibd{padding:12px 14px 14px;overflow:auto;display:grid;gap:14px;align-content:start;flex:1}
+.bm-insp h5{margin:0 0 5px;font-size:10.5px;text-transform:uppercase;letter-spacing:.09em;color:var(--muted);font-weight:500}
+.bm-insp p{margin:0;font-size:12.5px;color:var(--ink-2)}
+.bm-insp .kvs{display:grid;gap:5px}
+.bm-insp .kv{display:grid;grid-template-columns:86px 1fr;gap:8px;font-size:12.5px}
+.bm-insp .kv>span{color:var(--muted)}
+.bm-insp .kv>div{min-width:0;overflow-wrap:anywhere;color:var(--ink-2)}
+.bm-insp .lk{border:0;background:transparent;padding:0;color:var(--accent);font-family:var(--mono);font-size:12px;text-align:left}
+.bm-insp .lk:hover{text-decoration:underline}
+.bm-insp .flows{display:grid;border:1px solid var(--line-2);border-radius:8px;overflow:hidden}
+.bm-insp .fl{display:grid;grid-template-columns:14px minmax(0,1fr) auto;gap:2px 8px;align-items:center;border:0;border-bottom:1px solid var(--line-2);background:var(--surface);padding:6px 9px;text-align:left;font-size:12px}
+.bm-insp .fl:last-child{border-bottom:0}
+.bm-insp .fl:hover{background:var(--surface-2)}
+.bm-insp .fl .sw{width:12px;height:2px;border-radius:1px;background:color-mix(in srgb,var(--accent) 65%,var(--line))}
+.bm-insp .fl .sw.drop{background:repeating-linear-gradient(90deg,var(--bad) 0 4px,transparent 4px 6px);height:2px}
+.bm-insp .fl .sw.mount{background:repeating-linear-gradient(90deg,var(--c2) 0 2px,transparent 2px 4px)}
+.bm-insp .fl .fn{font-family:var(--mono);font-size:12px;color:var(--ink);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.bm-insp .fl .fs{grid-column:2/4;color:var(--muted);font-size:11.5px;margin-top:-2px}
+.bm-insp .fl .fc{font-family:var(--mono);font-size:11.5px;color:var(--ink-2);font-variant-numeric:tabular-nums}
+.bm-insp .fl .fc.bad{color:var(--bad)} .fl .fc.warn{color:var(--warn)}
+.bm-insp .empty{font-size:12px;color:var(--faint)}
+.bm-insp .mtr{height:6px;border-radius:3px;background:var(--sunk);overflow:hidden;margin-top:4px}
+.bm-insp .mtr i{display:block;height:100%;border-radius:3px;background:var(--c2)}
+.bm-insp .mtr i.warn{background:var(--warn)} .mtr i.acc{background:var(--accent)}
+.bm-insp .runs{display:flex;gap:3px;margin-top:2px}
+.bm-insp .runs i{width:10px;height:14px;border-radius:2px;background:var(--ok)}
+.bm-insp .runs i.b{background:var(--bad)}
+.bm-insp .iacts{display:flex;gap:6px;flex-wrap:wrap;padding:10px 14px;border-top:1px solid var(--line-2);background:var(--surface-2)}
+.bm-insp .note-bad{background:var(--bad-bg);color:var(--ink);border-radius:8px;padding:8px 10px;font-size:12.5px}
+.bm-insp .note-bad b{color:var(--bad)}
+.bm-insp .note-warn{background:var(--warn-bg);border-radius:8px;padding:8px 10px;font-size:12.5px}
+.bm-insp .nodes{display:flex;flex-wrap:wrap;gap:4px}
+.bm-insp .nodes .lk{background:var(--sunk);border-radius:4px;padding:0 6px;font-size:11.5px;color:var(--ink-2)}
+.bm-insp .nodes .lk:hover{color:var(--accent);text-decoration:none}
+
+.bm-card.full{position:fixed;inset:12px;z-index:50;display:flex;flex-direction:column;box-shadow:var(--shadow)}
+.bm-card.full .bm-canvas{flex:1;height:auto}
+
+/* ---------- svg ---------- */
+#bpmap text{font-family:var(--sans)}
+#bpmap .it{cursor:pointer;transition:opacity .15s}
+#bpmap .it .bg{fill:var(--surface);stroke:var(--line);stroke-width:1}
+#bpmap .it:hover .bg{stroke:var(--faint)}
+#bpmap .it:focus{outline:none}
+#bpmap .it:focus-visible .bg{stroke:var(--accent);stroke-width:2}
+#bpmap .it .ic{fill:var(--sunk)}
+#bpmap .it .icg{color:var(--muted)}
+#bpmap .k-app .ic{fill:var(--accent-2)} #bpmap .k-app .icg{color:var(--accent)}
+#bpmap .k-volume .ic{fill:color-mix(in srgb,var(--c2) 14%,var(--surface))} #bpmap .k-volume .icg{color:var(--c2)}
+#bpmap .k-domain .icg{color:var(--muted)}
+#bpmap .nm{font-family:var(--mono);font-size:11px;font-weight:500;fill:var(--ink)}
+#bpmap .sb{font-size:10.5px;fill:var(--muted)}
+#bpmap .dot{fill:var(--ok)}
+#bpmap .s-warn .dot{fill:var(--warn)} #bpmap .s-bad .dot{fill:var(--bad)} #bpmap .s-info .dot{fill:var(--accent)} #bpmap .s-mute .dot{fill:var(--faint)}
+#bpmap .s-bad .bg{fill:var(--bad-bg);stroke:color-mix(in srgb,var(--bad) 50%,transparent)}
+#bpmap .s-bad .sb{fill:var(--bad)}
+#bpmap .s-warn .bg{stroke:color-mix(in srgb,var(--warn) 60%,transparent)}
+#bpmap .it.dashed .bg{stroke-dasharray:4 3}
+#bpmap .it.sel .bg{stroke:var(--accent);stroke-width:2}
+#bpmap .mb{fill:var(--sunk)} #bpmap .mf{fill:var(--c2)} #bpmap .s-warn .mf{fill:var(--warn)}
+#bpmap .k-net .bg{fill:var(--surface)}
+#bpmap .k-net .icg{color:var(--accent)}
+#bpmap .k-fw .nm{font-size:10.5px}
+#bpmap .k-fw.closed .bg{stroke-dasharray:3 3;fill:var(--surface-2)}
+#bpmap .k-fw.closed .nm{fill:var(--faint)}
+#bpmap .k-fw .sh{fill:var(--faint);font-size:9px;font-family:var(--mono)}
+#bpmap .box .bx{fill:color-mix(in srgb,var(--surface) 70%,transparent);stroke:var(--line)}
+#bpmap .box .bl{font-size:12px;font-weight:600;fill:var(--ink-2)}
+#bpmap .box .bc{font-size:11px;fill:var(--faint)}
+#bpmap .tg{cursor:pointer}
+#bpmap .tg text{font-size:11px;fill:var(--accent);font-weight:500}
+#bpmap .tg:hover text{text-decoration:underline}
+#bpmap .tg:focus{outline:none} #bpmap .tg:focus-visible rect{stroke:var(--accent)}
+#bpmap .k-server{cursor:pointer}
+#bpmap .k-server .sx{fill:var(--surface);stroke:var(--line)}
+#bpmap .k-server:hover .sx{stroke:var(--faint)}
+#bpmap .k-server.sel .sx{stroke:var(--accent);stroke-width:2}
+#bpmap .k-server .sh{fill:var(--sunk)}
+#bpmap .k-server .snm{font-family:var(--mono);font-size:12px;font-weight:600;fill:var(--ink)}
+#bpmap .k-server .sty{font-size:10.5px;fill:var(--muted)}
+#bpmap .k-server .icg{color:var(--muted)}
+#bpmap .k-server .mk{font-size:9.5px;fill:var(--faint);letter-spacing:.06em}
+#bpmap .k-server .mv{font-family:var(--mono);font-size:10px;fill:var(--ink-2)}
+#bpmap .k-server .mf2{fill:var(--accent)}
+#bpmap .k-fwband{cursor:pointer}
+#bpmap .k-fwband .fb{fill:color-mix(in srgb,var(--surface) 50%,transparent);stroke:var(--faint);stroke-dasharray:4 4}
+#bpmap .k-fwband.sel .fb{stroke:var(--accent);stroke-dasharray:none}
+#bpmap .k-fwband text{font-size:10px;letter-spacing:.1em;fill:var(--muted);font-weight:600}
+#bpmap .k-fwband .icg{color:var(--muted)}
+
+#bpmap .e{transition:opacity .15s}
+#bpmap .e .v{fill:none;stroke-width:1.5;stroke-linecap:round;stroke:color-mix(in srgb,var(--accent) 55%,var(--line))}
+#bpmap .e.k-mount .v{stroke:var(--c2);stroke-dasharray:2 4;stroke-width:1.5}
+#bpmap .e.k-drop .v{stroke:var(--bad);stroke-dasharray:6 5;stroke-width:1.7}
+#bpmap .e.k-ssh .v{stroke:var(--faint);stroke-dasharray:3 4}
+#bpmap .e.hl .v,#bpmap .e.sel .v{stroke-width:2.2}
+#bpmap .e .hit{fill:none;stroke:transparent;stroke-width:12;cursor:pointer}
+#bpmap .e .flow{fill:none;stroke:var(--accent);stroke-width:2.8;stroke-linecap:round;stroke-dasharray:.1 16;animation:flow var(--d,2s) linear infinite;pointer-events:none}
+#bpmap .e.k-drop .flow{stroke:var(--bad);stroke-dasharray:.1 11;animation-duration:1.1s}
+@keyframes flow{to{stroke-dashoffset:-16.1}}
+#bpmap .lbl{opacity:0;transition:opacity .15s;pointer-events:none}
+#bpmap .lbl rect{fill:var(--surface);stroke:var(--line)}
+#bpmap .lbl text{font-family:var(--mono);font-size:10px;fill:var(--ink-2)}
+#bpmap .lbl.hl,#bpmap .lbl.k-drop{opacity:1}
+#bpmap .lbl.k-drop rect{fill:var(--bad-bg);stroke:color-mix(in srgb,var(--bad) 45%,transparent)}
+#bpmap .lbl.k-drop text{fill:var(--bad);font-weight:600}
+#bpmap.focus .it:not(.hl){opacity:.22}
+#bpmap.focus .e:not(.hl){opacity:.08}
+#bpmap.focus .lbl.k-drop:not(.hl){opacity:.12}
 </style>
 
 <svg width="0" height="0" style="position:absolute" aria-hidden="true">
@@ -372,6 +530,21 @@ pre.mermaid{background:var(--surface);border:1px solid var(--line);border-radius
     <symbol id="i-rocket" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M9.5 2.5c2.5-.8 4-.3 4 0s.8 1.5 0 4l-4.5 4.5-4-4z"/><path d="M5 7L2.5 7.5 4 5.5h3M9 11l-.5 2.5 2-1.5V9"/></symbol>
     <symbol id="i-clock" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="8" r="6"/><path d="M8 4.5V8l2.5 1.5"/></symbol>
     <symbol id="i-key" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><circle cx="5" cy="10.5" r="3"/><path d="M7.2 8.3L13.5 2M11 4.5l1.8 1.8"/></symbol>
+    <symbol id="i-minus" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M3 8h10"/></symbol>
+    <symbol id="i-fit" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M2 6V2h4M10 2h4v4M14 10v4h-4M6 14H2v-4"/></symbol>
+    <symbol id="i-expand" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M9.5 2H14v4.5M14 2L9 7M6.5 14H2V9.5M2 14l5-5"/></symbol>
+    <symbol id="i-x" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><path d="M4 4l8 8M12 4l-8 8"/></symbol>
+    <symbol id="i-play" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"><path d="M5 3l8 5-8 5z"/></symbol>
+    <symbol id="i-globe" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><circle cx="8" cy="8" r="6.2"/><path d="M1.8 8h12.4M8 1.8c1.8 1.8 2.6 3.9 2.6 6.2S9.8 12.4 8 14.2C6.2 12.4 5.4 10.3 5.4 8S6.2 3.6 8 1.8z"/></symbol>
+    <symbol id="i-lock" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"><rect x="3" y="7" width="10" height="7" rx="1.5"/><path d="M5.5 7V5a2.5 2.5 0 015 0v2"/></symbol>
+    <symbol id="i-gate" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M2 3v10M2 8h11M9.5 4.5L13 8l-3.5 3.5"/></symbol>
+    <symbol id="i-layers" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"><path d="M8 2l6 3.2-6 3.2-6-3.2z"/><path d="M2 8.6l6 3.2 6-3.2"/></symbol>
+    <symbol id="i-flow" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="3" cy="8" r="1.8"/><circle cx="13" cy="4" r="1.8"/><circle cx="13" cy="12" r="1.8"/><path d="M4.8 7.4L11.2 4.6M4.8 8.6l6.4 2.8"/></symbol>
+    <symbol id="i-gear" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="8" cy="8" r="2.2"/><path d="M8 1.5v2M8 12.5v2M1.5 8h2M12.5 8h2M3.4 3.4l1.4 1.4M11.2 11.2l1.4 1.4M3.4 12.6l1.4-1.4M11.2 4.8l1.4-1.4" stroke-linecap="round"/></symbol>
+    <marker id="ar-acc" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse" markerUnits="userSpaceOnUse"><path d="M1.5 1.5L8.5 5L1.5 8.5" fill="none" style="stroke:color-mix(in srgb,var(--accent) 70%,var(--line))" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></marker>
+    <marker id="ar-c2" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse" markerUnits="userSpaceOnUse"><path d="M1.5 1.5L8.5 5L1.5 8.5" fill="none" style="stroke:var(--c2)" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></marker>
+    <marker id="ar-faint" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse" markerUnits="userSpaceOnUse"><path d="M1.5 1.5L8.5 5L1.5 8.5" fill="none" style="stroke:var(--faint)" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></marker>
+    <marker id="x-bad" viewBox="0 0 12 12" refX="10" refY="6" markerWidth="11" markerHeight="11" orient="auto" markerUnits="userSpaceOnUse"><path d="M6 2l6 8M12 2L6 10" fill="none" style="stroke:var(--bad)" stroke-width="2" stroke-linecap="round"/></marker>
   </defs>
 </svg>
 
@@ -518,12 +691,60 @@ pre.mermaid{background:var(--surface);border:1px solid var(--line);border-radius
               <div class="card"><div class="ch-h"><h3>Cluster usage</h3><span class="legend"><span><i style="background:var(--accent)"></i>CPU</span><span><i style="background:var(--c2)"></i>Memory</span></span></div><div class="bd"><svg class="ch" data-chart="cluster"></svg></div></div>
               <div class="card"><h3>Needs attention</h3>
                 <div class="list">
-                  <div class="li"><span class="ico bad"><svg><use href="#i-alert"/></svg></span><div><b>billing-worker</b> · CrashLoopBackOff<p>7 restarts in 30 min. 312 connections to <code>api:8080</code> were dropped by a network rule.</p><button class="btn ghost sm" data-go="network" style="padding-left:0">Inspect dropped traffic →</button></div><span class="when">4m</span></div>
-                  <div class="li"><span class="ico warn"><svg><use href="#i-disk"/></svg></span><div><b>postgres-main-data</b> · 87% full<p>43.5 of 50 GiB. At the current rate, full in ~6 days.</p><button class="btn ghost sm" style="padding-left:0">Expand volume →</button></div><span class="when">2h</span></div>
+                  <div class="li"><span class="ico bad"><svg><use href="#i-alert"/></svg></span><div><b>billing-worker</b> · CrashLoopBackOff<p>7 restarts in 30 min. 312 connections to <code>api:8080</code> were dropped by a network rule.</p><button class="btn ghost sm" data-go="network" style="padding-left:0">Inspect dropped traffic →</button><button class="btn ghost sm" data-show="billing">Show on map →</button></div><span class="when">4m</span></div>
+                  <div class="li"><span class="ico warn"><svg><use href="#i-disk"/></svg></span><div><b>postgres-main-data</b> · 87% full<p>43.5 of 50 GiB. At the current rate, full in ~6 days.</p><button class="btn ghost sm" style="padding-left:0">Expand volume →</button><button class="btn ghost sm" data-show="v-pg">Show on map →</button></div><span class="when">2h</span></div>
                   <div class="li"><span class="ico info"><svg><use href="#i-rocket"/></svg></span><div><b>Kwerft 0.9.1</b> available<p>Patch release · k3s v1.37.2 included</p></div><span class="when">1d</span></div>
                 </div>
               </div>
             </div>
+            <!-- INFRASTRUCTURE MAP (below Needs attention) -->
+            <div class="card bm-card" id="bpmapcard">
+              <div class="ch-h">
+                <div class="t"><h3>Infrastructure map</h3><span class="cnt" id="m-count"></span></div>
+                <div class="r">
+                  <label for="m-cluster" class="cnt" style="font-weight:400;font-size:12.5px;color:var(--muted)">Cluster</label>
+                  <select id="m-cluster" class="bm-select"><option value="fsn1">fsn1-prod · management</option><option value="hel1">hel1-edge · agent</option></select>
+                  <button class="btn sm" id="m-full" aria-pressed="false"><svg><use href="#i-expand"/></svg><span>Full screen</span></button>
+                </div>
+              </div>
+              <div class="bm-mtool">
+                <div class="seg" role="group" aria-label="Lens">
+                  <button id="lens-traffic" aria-pressed="true"><svg><use href="#i-flow"/></svg>Traffic</button>
+                  <button id="lens-placement" aria-pressed="false"><svg><use href="#i-server"/></svg>Placement</button>
+                </div>
+                <div class="bm-layers" role="group" aria-label="Layers">
+                  <span class="lbl">Show</span>
+                  <button class="bm-chipt" data-layer="jobs" aria-pressed="true" style="--sw:var(--ink-2)"><i></i>Jobs</button>
+                  <button class="bm-chipt" data-layer="volumes" aria-pressed="true" style="--sw:var(--c2)"><i></i>Volumes</button>
+                  <button class="bm-chipt" data-layer="domains" aria-pressed="true" style="--sw:var(--accent)"><i></i>Domains</button>
+                  <button class="bm-chipt" data-layer="rules" aria-pressed="true" style="--sw:var(--accent)"><i></i>Traffic rules</button>
+                  <button class="bm-chipt" data-layer="firewall" aria-pressed="true" style="--sw:var(--faint)"><i></i>Firewall</button>
+                </div>
+                <select id="m-proj" class="bm-select" aria-label="Project"></select>
+                <button class="bm-chipt prob" id="m-prob" aria-pressed="false" style="--sw:var(--bad)"><i></i>Only problems</button>
+                <label class="bm-find" for="m-q"><svg><use href="#i-search"/></svg><input id="m-q" placeholder="Find on map" autocomplete="off"></label>
+              </div>
+              <div class="bm-canvas" id="bm-canvas">
+                <svg id="bpmap" role="img" aria-label="Infrastructure map" preserveAspectRatio="xMidYMid meet"></svg>
+                <div class="bm-legend" id="bm-legend">
+                  <span><svg viewBox="0 0 26 8"><path d="M1 4h24" stroke="color-mix(in srgb,var(--accent) 55%,var(--line))" stroke-width="1.6"/><circle cx="13" cy="4" r="1.6" fill="var(--accent)"/></svg>Allowed traffic</span>
+                  <span><svg viewBox="0 0 26 8"><path d="M1 4h24" stroke="var(--bad)" stroke-width="1.7" stroke-dasharray="6 5"/></svg>Dropped, no rule</span>
+                  <span><svg viewBox="0 0 26 8"><path d="M1 4h24" stroke="var(--c2)" stroke-width="1.5" stroke-dasharray="2 4" stroke-linecap="round"/></svg>Volume mount</span>
+                  <span><svg viewBox="0 0 26 8"><path d="M1 4h24" stroke="var(--faint)" stroke-width="1.5" stroke-dasharray="3 4"/></svg>SSH / admin</span>
+                  <span id="leg-counts">Counts: last hour</span>
+                </div>
+                <div class="bm-zoom">
+                  <button id="z-in" aria-label="Zoom in"><svg><use href="#i-plus"/></svg></button>
+                  <button id="z-out" aria-label="Zoom out"><svg><use href="#i-minus"/></svg></button>
+                  <button id="z-fit" aria-label="Fit to view"><svg><use href="#i-fit"/></svg></button>
+                </div>
+                <div class="bm-hint" id="bm-hint">Hold ⌘ or Ctrl and scroll to zoom</div>
+                <div class="bm-tip" id="bm-tip" hidden></div>
+                <aside class="bm-insp" id="bm-insp" hidden aria-live="polite"></aside>
+                <div class="bm-toast" id="bm-toast" hidden></div>
+              </div>
+            </div>
+
             <div class="g2e">
               <div class="card"><div class="ch-h"><h3>Nodes</h3><button class="btn ghost sm" data-go="clusters">Manage</button></div>
                 <table class="t"><thead><tr><th>Node</th><th>Type</th><th class="num">CPU</th><th class="num">Mem</th><th>Status</th></tr></thead><tbody>
@@ -1486,5 +1707,807 @@ curl -fsSL https://get.kwerft.dev | sudo bash -s -- --config /root/kwerft.yaml -
   spark($('[data-spark="mem"]'), mem.slice(-24), 100);
 
   showScreen('overview');
+})();
+</script>
+<script>
+// Overview: the infrastructure map mockup (built: web/src/components/InfraMap.tsx).
+(() => {
+"use strict";
+const $ = (s, r = document) => r.querySelector(s);
+const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+const fmt = (n) => n >= 1000 ? String(Math.round(n / 100) / 10).replace(/\.0$/, "") + "k" : String(n);
+const plural = (n, w) => `${n} ${w}${n === 1 ? "" : "s"}`;
+const r1 = (n) => Math.round(n * 10) / 10;
+const reduced = matchMedia("(prefers-reduced-motion: reduce)").matches;
+const RANK = { ok: 0, info: 1, mute: 0, warn: 2, bad: 3 };
+const worst = (list) => list.reduce((w, s) => (RANK[s] > RANK[w] ? s : w), "ok");
+
+/* ---------------- sample data ---------------- */
+const DATA = {
+  fsn1: {
+    name: "fsn1-prod", about: "Management cluster · Falkenstein · k3s v1.37.1",
+    servers: [
+      { id: "n1", name: "fsn1-node-1", type: "Dedicated AX42", role: "Control plane, worker", cpu: 41, mem: 38, ip: "65.21.140.17", priv: "10.0.0.2" },
+      { id: "n2", name: "fsn1-node-2", type: "Cloud CPX31", role: "Worker", cpu: 29, mem: 61, ip: "49.12.88.204", priv: "10.0.0.3" },
+      { id: "n3", name: "fsn1-node-3", type: "Cloud CPX31", role: "Worker", cpu: 33, mem: 47, ip: "49.12.91.33", priv: "10.0.0.4" },
+    ],
+    projects: [{ id: "storefront" }, { id: "internal" }],
+    ents: [
+      { id: "web", kind: "app", name: "web-frontend", project: "storefront", col: 0, row: 0, status: "ok", ready: "3/3", replicas: ["n1", "n2", "n3"], sub: "3/3 ready · rev 42", source: "Git · acme/web · main", rev: "rev 42 · 2 h ago", ports: "3000", size: "Small" },
+      { id: "api", kind: "app", name: "api", project: "storefront", col: 1, row: 0, status: "ok", ready: "4/4", replicas: ["n1", "n1", "n2", "n3"], sub: "4/4 ready · rev 42", source: "Git · acme/api · main", rev: "rev 42 · 2 h ago", ports: "8080", size: "Medium" },
+      { id: "pg", kind: "app", name: "postgres-main", project: "storefront", col: 2, row: 0, status: "ok", ready: "1/1", replicas: ["n1"], sub: "1/1 ready · rev 9", source: "Image · postgres:17.6", rev: "rev 9 · 18 d ago", ports: "5432", size: "Large" },
+      { id: "redis", kind: "app", name: "redis", project: "storefront", col: 2, row: 1, status: "ok", ready: "1/1", replicas: ["n1"], sub: "1/1 ready · rev 4", source: "Image · redis:8.2-alpine", rev: "rev 4 · 31 d ago", ports: "6379", size: "Small" },
+      { id: "nightly", kind: "job", name: "nightly-report", project: "storefront", col: 0, row: 1, status: "ok", sub: "daily 02:00 · ok 6 h", schedule: "Daily at 02:00 (Europe/Berlin)", fromApp: "api", runs: "ssssssssss", last: "6 h ago · took 2m 14s", next: "in 18 h", node: "n2" },
+      { id: "billing", kind: "app", name: "billing-worker", project: "storefront", col: 0, row: 2, status: "bad", ready: "0/2", replicas: ["n2", "n3"], sub: "CrashLoop · 0/2", state: "CrashLoopBackOff", restarts: 7, source: "Git · acme/billing · main", rev: "rev 17 · 34 min ago", ports: "—", size: "Small" },
+      { id: "migrate", kind: "task", name: "db-migrate-42", project: "storefront", col: 0, row: 3, status: "ok", sub: "succeeded · 41 s", fromApp: "api", last: "Succeeded 2 h ago · took 41 s", node: "n3" },
+      { id: "plaus", kind: "app", name: "plausible", project: "internal", col: 0, row: 0, status: "ok", ready: "1/1", replicas: ["n2"], sub: "1/1 ready · rev 6", source: "Image · plausible/community-edition:v3.1", rev: "rev 6 · 12 d ago", ports: "8000", size: "Small" },
+      { id: "kuma", kind: "app", name: "uptime-kuma", project: "internal", col: 0, row: 1, status: "ok", ready: "1/1", replicas: ["n3"], sub: "1/1 ready · rev 3", source: "Image · louislam/uptime-kuma:2.0", rev: "rev 3 · 40 d ago", ports: "3001", size: "Small" },
+      { id: "n8n", kind: "app", name: "n8n", project: "internal", col: 2, row: 0, status: "ok", ready: "1/1", replicas: ["n3"], sub: "1/1 ready · rev 11", source: "Image · n8nio/n8n:1.112", rev: "rev 11 · 3 d ago", ports: "5678", size: "Small" },
+      { id: "backup", kind: "job", name: "s3-backup-sync", project: "internal", col: 1, row: 1, status: "ok", sub: "every 30 min · ok 12 m", schedule: "Every 30 minutes", fromApp: null, image: "rclone/rclone:1.71", runs: "sssssssbss", last: "12 min ago · took 48 s", next: "in 18 min", node: "n2" },
+      { id: "v-pg", kind: "volume", name: "postgres-main-data", project: "storefront", status: "warn", size: 50, used: 43.5, node: "n1", cls: "Local NVMe", mountedBy: ["pg"], path: "/var/lib/postgresql/data", forecast: "Full in about 6 days at the current rate." },
+      { id: "v-redis", kind: "volume", name: "redis-data", project: "storefront", status: "ok", size: 5, used: 1.1, node: "n1", cls: "Local NVMe", mountedBy: ["redis"], path: "/data" },
+      { id: "v-plaus", kind: "volume", name: "plausible-db", project: "internal", status: "ok", size: 20, used: 8.2, node: "n2", cls: "Hetzner Volume", mountedBy: ["plaus"], path: "/var/lib/plausible" },
+      { id: "v-kuma", kind: "volume", name: "kuma-data", project: "internal", status: "ok", size: 1, used: 0.12, node: "n3", cls: "Hetzner Volume", mountedBy: ["kuma"], path: "/app/data" },
+      { id: "v-n8n", kind: "volume", name: "n8n-data", project: "internal", status: "ok", size: 10, used: 3.4, node: "n3", cls: "Hetzner Volume", mountedBy: ["n8n"], path: "/home/node/.n8n" },
+    ],
+    domains: [
+      { id: "d-web", name: "web.acme.dev", to: "web", cert: "ok", expires: "2 Jan 2027", port: "443 → 3000", allowed: 96400, opts: "www → apex redirect" },
+      { id: "d-api", name: "api.acme.dev", to: "api", cert: "ok", expires: "2 Jan 2027", port: "443 → 8080", allowed: 54000, opts: "Rate limit 50 r/s" },
+      { id: "d-stats", name: "stats.acme.dev", to: "plaus", cert: "ok", expires: "14 Dec 2026", port: "443 → 8000", allowed: 6100 },
+      { id: "d-status", name: "status.acme.dev", to: "kuma", cert: "ok", expires: "20 Dec 2026", port: "443 → 3001", allowed: 3900 },
+      { id: "d-flows", name: "flows.acme.dev", to: "n8n", cert: "issuing", expires: "—", port: "443 → 5678", allowed: 0, opts: "SSO gate" },
+    ],
+    rules: [
+      { id: "web-to-api", from: ["web"], to: ["api"], ports: "TCP 8080", allowed: 41200, dropped: 0, desc: "Server-side calls from the frontend" },
+      { id: "api-to-db", from: ["api", "nightly", "migrate"], to: ["pg", "redis"], ports: "TCP 5432, 6379", allowed: 18900, dropped: 0, desc: "The API, its jobs and migrations reach the databases" },
+      { id: "flows-to-api", from: ["n8n"], to: ["api"], ports: "TCP 8080", allowed: 1100, dropped: 0, desc: "Automations call the storefront API" },
+      { id: "internal-egress", from: ["plaus", "kuma", "n8n", "backup"], to: ["@out"], ports: "TCP 443", allowed: 2300, dropped: 14, desc: "Internal tools may call HTTPS services outside" },
+      { id: "billing-egress", from: ["billing"], to: ["@out"], ports: "TCP 443", allowed: 0, dropped: 0, desc: "Payment provider API" },
+    ],
+    drops: [{ id: "drop-billing", from: "billing", to: "api", ports: "TCP 8080", dropped: 312, since: "first seen 34 min ago" }],
+    firewall: [
+      { id: "web", ports: "80·443", proto: "TCP", src: "any", purpose: "Web traffic to the gateway", applies: "All nodes", open: true },
+      { id: "ssh", ports: "22", proto: "TCP", src: "198.51.100.0/24", purpose: "SSH from the office VPN", applies: "All nodes", open: true },
+      { id: "kapi", ports: "6443", proto: "TCP", src: "10.0.0.0/16", purpose: "Kubernetes API, private network only", applies: "Control plane", open: false },
+      { id: "wg", ports: "51871", proto: "UDP", src: "node IPs", purpose: "WireGuard between nodes", applies: "All nodes", open: false },
+    ],
+  },
+  hel1: {
+    name: "hel1-edge", about: "Agent cluster · Helsinki · k3s v1.37.1",
+    servers: [
+      { id: "e1", name: "hel1-edge-1", type: "Dedicated EX44", role: "Control plane, worker", cpu: 22, mem: 35, ip: "95.216.30.12", priv: "10.1.0.2" },
+      { id: "e2", name: "hel1-edge-2", type: "Cloud CX32", role: "Worker", cpu: 57, mem: 44, ip: "65.108.71.9", priv: "10.1.0.3" },
+    ],
+    projects: [{ id: "edge" }],
+    ents: [
+      { id: "geo", kind: "app", name: "geo-router", project: "edge", col: 0, row: 0, status: "ok", ready: "2/2", replicas: ["e1", "e2"], sub: "2/2 ready · rev 28", source: "Git · acme/geo-router · main", rev: "rev 28 · 1 d ago", ports: "8443", size: "Medium" },
+      { id: "cache", kind: "app", name: "cdn-cache", project: "edge", col: 2, row: 0, status: "ok", ready: "1/1", replicas: ["e1"], sub: "1/1 ready · rev 5", source: "Image · varnish:7.7", rev: "rev 5 · 9 d ago", ports: "8080", size: "Large" },
+      { id: "ship", kind: "app", name: "log-shipper", project: "edge", col: 0, row: 1, status: "ok", ready: "2/2", replicas: ["e1", "e2"], sub: "2/2 ready · rev 2", source: "Image · grafana/alloy:1.11", rev: "rev 2 · 22 d ago", ports: "—", size: "Small" },
+      { id: "purge", kind: "job", name: "cache-purge", project: "edge", col: 1, row: 1, status: "warn", sub: "hourly · failed 8 m", schedule: "Hourly at :00", fromApp: "cache", runs: "sssssssssb", last: "8 min ago · exit code 1", next: "in 52 min", node: "e2" },
+      { id: "v-cache", kind: "volume", name: "cache-ssd", project: "edge", status: "ok", size: 200, used: 128, node: "e1", cls: "Local NVMe", mountedBy: ["cache"], path: "/var/lib/varnish" },
+    ],
+    domains: [
+      { id: "d-edge", name: "edge.acme.dev", to: "geo", cert: "ok", expires: "11 Dec 2026", port: "443 → 8443", allowed: 182000 },
+      { id: "d-cdn", name: "cdn.acme.dev", to: "geo", cert: "ok", expires: "11 Dec 2026", port: "443 → 8443", allowed: 61000 },
+    ],
+    rules: [
+      { id: "router-to-cache", from: ["geo"], to: ["cache"], ports: "TCP 8080", allowed: 220000, dropped: 0, desc: "Cache misses and hits" },
+      { id: "purge-to-cache", from: ["purge"], to: ["cache"], ports: "TCP 8080", allowed: 12, dropped: 0, desc: "Purge requests" },
+      { id: "logs-out", from: ["ship"], to: ["@out"], ports: "TCP 443", allowed: 8400, dropped: 0, desc: "Ships logs to fsn1-prod" },
+    ],
+    drops: [],
+    firewall: [
+      { id: "web", ports: "80·443", proto: "TCP", src: "any", purpose: "Web traffic to the gateway", applies: "All nodes", open: true },
+      { id: "ssh", ports: "22", proto: "TCP", src: "198.51.100.0/24", purpose: "SSH from the office VPN", applies: "All nodes", open: true },
+      { id: "wg", ports: "51871", proto: "UDP", src: "node IPs", purpose: "WireGuard between nodes", applies: "All nodes", open: false },
+    ],
+  },
+};
+
+/* ---------------- state ---------------- */
+const state = {
+  cluster: "fsn1", lens: "traffic", project: "all", problems: false, q: "",
+  layers: { jobs: true, volumes: true, domains: true, rules: true, firewall: true },
+  collapsed: new Set(), selected: null, hover: null, vb: null, userZoom: false,
+};
+const DS = () => DATA[state.cluster];
+const ent = (id) => DS().ents.find((e) => e.id === id);
+const dom = (id) => DS().domains.find((d) => d.id === id);
+const srv = (id) => DS().servers.find((s) => s.id === id);
+const nameOf = (id) => (id === "@out" ? "Internet (outbound)" : ent(id)?.name ?? id);
+const isWork = (e) => e.kind === "app" || e.kind === "job" || e.kind === "task";
+
+function vis(e) {
+  if (!e) return false;
+  if (state.project !== "all" && e.project !== state.project) return false;
+  if ((e.kind === "job" || e.kind === "task") && !state.layers.jobs) return false;
+  if (e.kind === "volume" && !state.layers.volumes) return false;
+  return true;
+}
+
+/* ---------------- layout ---------------- */
+const W = 164, H = 40;
+const X = { net: 64, fw: 172, gw: 282, dom: 412, cols: [600, 770, 940], box: [505, 1035], vol: 1135, out: 1270 };
+
+function resolve(list, gap) {
+  list.sort((a, b) => a.y - b.y);
+  for (let i = 1; i < list.length; i++) if (list[i].y < list[i - 1].y + gap) list[i].y = list[i - 1].y + gap;
+  return list;
+}
+const avg = (a) => a.reduce((s, x) => s + x, 0) / a.length;
+
+function layout(lens) {
+  const ds = DS(), I = {}, E = [];
+  const add = (o) => (I[o.key] = Object.assign({ op: 1, sel: o.key, label: "" }, o));
+  const edge = (o) => {
+    if (!I[o.a] || !I[o.b] || o.a === o.b) return;
+    if (E.some((x) => x.a === o.a && x.b === o.b && x.kind === o.kind)) return;
+    E.push(o);
+  };
+  const traffic = lens === "traffic";
+  const vkey = (id) => {
+    if (id === "@out") return "out";
+    const e = ent(id);
+    if (!vis(e)) return null;
+    return traffic && state.collapsed.has(e.project) ? "prj:" + e.project : id;
+  };
+  let bottom = 0, midY;
+
+  if (traffic) {
+    let top = 24;
+    for (const p of ds.projects) {
+      if (state.project !== "all" && p.id !== state.project) continue;
+      const mem = ds.ents.filter((e) => e.project === p.id && isWork(e) && vis(e));
+      const all = ds.ents.filter((e) => e.project === p.id);
+      if (!mem.length) continue;
+      const counts = [plural(all.filter((e) => e.kind === "app").length, "app"), plural(all.filter((e) => e.kind === "job" || e.kind === "task").length, "job"), plural(all.filter((e) => e.kind === "volume").length, "volume")].join(" · ");
+      const [x0, x1] = X.box;
+      if (state.collapsed.has(p.id)) {
+        add({ key: "box:" + p.id, kind: "pbox", x: (x0 + x1) / 2, y: top + 46, w: x1 - x0, h: 92, p, counts, collapsed: true, sel: null });
+        add({ key: "prj:" + p.id, kind: "pchip", x: X.cols[1], y: top + 58, w: 210, h: H, p, counts, label: p.id, status: worst(all.map((e) => e.status)) });
+        top += 92 + 22;
+        continue;
+      }
+      const rows = [...new Set(mem.map((e) => e.row))].sort((a, b) => a - b);
+      for (const e of mem) add({ key: e.id, kind: e.kind, x: X.cols[e.col], y: top + 64 + rows.indexOf(e.row) * 60, w: W, h: H, e, sel: e.id, label: e.name, status: e.status });
+      const h = 64 + (rows.length - 1) * 60 + 40;
+      add({ key: "box:" + p.id, kind: "pbox", x: (x0 + x1) / 2, y: top + h / 2, w: x1 - x0, h, p, counts, sel: null });
+      top += h + 22;
+    }
+    bottom = top - 22;
+
+    const vols = ds.ents.filter((e) => e.kind === "volume" && vis(e) && !state.collapsed.has(e.project))
+      .map((v) => { const ys = v.mountedBy.map((m) => I[m]?.y).filter((y) => y != null); return { v, y: ys.length ? avg(ys) : bottom }; });
+    for (const o of resolve(vols, 56)) add({ key: o.v.id, kind: "volume", x: X.vol, y: o.y, w: 180, h: 46, e: o.v, sel: o.v.id, label: o.v.name, status: o.v.status });
+
+    if (state.layers.domains) {
+      const ds2 = ds.domains.map((d) => ({ d, t: vkey(d.to) })).filter((o) => o.t && I[o.t]).map((o) => ({ ...o, y: I[o.t].y }));
+      for (const o of resolve(ds2, 38)) add({ key: o.d.id, kind: "domain", x: X.dom, y: o.y, w: 150, h: 30, d: o.d, sel: o.d.id, label: o.d.name, status: o.d.cert === "ok" ? "ok" : "info" });
+    }
+    const doms = Object.values(I).filter((i) => i.kind === "domain");
+    const targets = ds.domains.map((d) => I[vkey(d.to)]).filter(Boolean);
+    midY = doms.length ? avg(doms.map((i) => i.y)) : targets.length ? avg(targets.map((i) => i.y)) : (24 + bottom) / 2;
+    bottom = Math.max(bottom, ...Object.values(I).map((i) => i.y + i.h / 2));
+  } else {
+    const bw = 230, gap = 16, x0 = X.box[0], top = 24;
+    const per = {};
+    ds.servers.forEach((s) => (per[s.id] = []));
+    const apps = ds.ents.filter((e) => e.kind === "app" && vis(e));
+    for (const e of apps) e.replicas.forEach((n, i) => per[n].push({ key: i ? `${e.id}~${i}` : e.id, e, rep: { i, n: e.replicas.length } }));
+    for (const e of ds.ents.filter((e) => (e.kind === "job" || e.kind === "task") && vis(e))) per[e.node].push({ key: e.id, e, dashed: true });
+    let maxN = 0;
+    ds.servers.forEach((s) => {
+      const vs = ds.ents.filter((e) => e.kind === "volume" && e.node === s.id && vis(e)).map((v) => ({ key: v.id, e: v, vol: true }));
+      per[s.id].push(...vs);
+      maxN = Math.max(maxN, per[s.id].length + (vs.length ? 0.3 : 0));
+    });
+    const bh = 92 + maxN * 52 + 8;
+    ds.servers.forEach((s, si) => {
+      const cx = x0 + si * (bw + gap) + bw / 2;
+      add({ key: "srv:" + s.id, kind: "server", x: cx, y: top + bh / 2, w: bw, h: bh, s, sel: "srv:" + s.id, label: s.name });
+      let y = top + 100;
+      per[s.id].forEach((o, k) => {
+        if (o.vol && k > 0 && !per[s.id][k - 1].vol) y += 14;
+        const e = o.e;
+        add({ key: o.key, kind: e.kind, x: cx, y: y + (o.vol ? 3 : 0), w: o.vol ? 180 : W, h: o.vol ? 46 : H, e, rep: o.rep, dashed: o.dashed, node: s.id, sel: e.id, label: e.name, status: e.status });
+        y += 52;
+      });
+    });
+    bottom = top + bh;
+    midY = top + 46;
+  }
+
+  // gateway, internet, firewall
+  add({ key: "gateway", kind: "gateway", x: X.gw, y: midY, w: 104, h: H, label: "gateway" });
+  add({ key: "internet", kind: "net", x: X.net, y: midY, w: 52, h: 52, label: "internet" });
+  if (state.layers.firewall) {
+    const fws = ds.firewall;
+    const top = 16, h = Math.max(bottom - 8, midY + 46 * fws.length + 40) - top;
+    add({ key: "fwband", kind: "fwband", x: X.fw, y: top + h / 2, w: 84, h, sel: "fwband", label: "firewall" });
+    let y0 = midY;
+    if (y0 + 44 * (fws.length - 1) > top + h - 24) y0 = top + h - 24 - 44 * (fws.length - 1);
+    fws.forEach((f, k) => add({ key: "fw:" + f.id, kind: "fw", x: X.fw, y: y0 + 44 * k, w: 70, h: 30, f, sel: "fw:" + f.id, label: f.ports, status: f.open ? "ok" : "mute" }));
+    edge({ id: "pub:in", a: "internet", b: "fw:web", kind: "pub", sel: "fw:web", traffic: 1, tip: tipFw(ds.firewall[0]) });
+    edge({ id: "pub:gw", a: "fw:web", b: "gateway", kind: "pub", sel: "fw:web", traffic: 1, tip: tipFw(ds.firewall[0]) });
+  } else {
+    edge({ id: "pub:direct", a: "internet", b: "gateway", kind: "pub", sel: "gateway", traffic: 1, tip: "<b>80·443</b> from anywhere to the gateway" });
+  }
+
+  if (traffic) {
+    // egress target
+    const outSrc = ds.rules.filter((r) => r.to.includes("@out")).flatMap((r) => r.from).map(vkey).filter((k) => k && I[k]);
+    if (state.layers.rules && outSrc.length) add({ key: "out", kind: "net", x: X.out, y: avg(outSrc.map((k) => I[k].y)), w: 46, h: 46, out: true, sel: "out", label: "internet outbound" });
+
+    for (const d of ds.domains) {
+      const t = vkey(d.to);
+      const tip = `<b>${esc(d.name)}</b> → ${esc(nameOf(d.to))}<small>${d.port} · ${d.allowed ? fmt(d.allowed) + " requests in the last hour" : "no traffic yet"}</small>`;
+      if (state.layers.domains) {
+        edge({ id: "g:" + d.id, a: "gateway", b: d.id, kind: "route", sel: d.id, traffic: d.allowed, tip });
+        edge({ id: "r:" + d.id, a: d.id, b: t, kind: "route", sel: d.id, traffic: d.allowed, label: d.port, tip });
+      } else edge({ id: "r:" + d.id, a: "gateway", b: t, kind: "route", sel: d.id, traffic: d.allowed, label: d.name, tip });
+    }
+    if (state.layers.rules) {
+      for (const r of ds.rules) for (const f of r.from) for (const t of r.to) {
+        edge({ id: `${r.id}:${f}>${t}`, a: vkey(f), b: vkey(t), kind: "rule", sel: "edge:" + r.id, traffic: r.allowed, label: r.ports,
+          tip: `<b>${esc(r.id)}</b> · ${r.ports}<small>${fmt(r.allowed)} allowed${r.dropped ? ` · ${r.dropped} dropped` : ""} in the last hour</small>`, tone: r.dropped ? "warn" : null });
+      }
+      for (const d of ds.drops) edge({ id: d.id, a: vkey(d.from), b: vkey(d.to), kind: "drop", sel: "edge:" + d.id, traffic: d.dropped, label: `${d.dropped} dropped`,
+        tip: `<b>${esc(nameOf(d.from))} → ${esc(nameOf(d.to))}</b> · ${d.ports}<small>${d.dropped} connections dropped: no rule allows this</small>`, tone: "bad" });
+    }
+    for (const v of ds.ents.filter((e) => e.kind === "volume")) for (const m of v.mountedBy)
+      edge({ id: `m:${v.id}:${m}`, a: vkey(m), b: v.id, kind: "mount", sel: v.id, label: v.path, tip: `<b>${esc(v.name)}</b> mounted at ${esc(v.path)}<small>${v.used} of ${v.size} GiB used</small>` });
+  } else {
+    for (const s of ds.servers) {
+      edge({ id: "gs:" + s.id, a: "gateway", b: "srv:" + s.id, kind: "route", sel: "gateway", traffic: 1, label: "80·443", tip: `Gateway runs on <b>${s.name}</b><small>Terminates TLS and routes to app replicas</small>` });
+      if (state.layers.firewall) edge({ id: "ss:" + s.id, a: "fw:ssh", b: "srv:" + s.id, kind: "ssh", sel: "fw:ssh", tip: tipFw(ds.firewall[1]) });
+    }
+    if (state.layers.firewall) edge({ id: "pub:ssh", a: "internet", b: "fw:ssh", kind: "ssh", sel: "fw:ssh", tip: tipFw(ds.firewall[1]) });
+    for (const v of ds.ents.filter((e) => e.kind === "volume" && vis(e))) for (const m of v.mountedBy) {
+      const a = ent(m);
+      if (!vis(a)) continue;
+      const i = a.replicas.indexOf(v.node);
+      if (i < 0) continue;
+      edge({ id: `m:${v.id}:${m}`, a: i ? `${m}~${i}` : m, b: v.id, kind: "mount", sel: v.id, label: v.path, tip: `<b>${esc(v.name)}</b> mounted at ${esc(v.path)}<small>${v.used} of ${v.size} GiB used</small>` });
+    }
+  }
+  return { I, E };
+}
+function tipFw(f) { return `<b>${f.ports}/${f.proto.toLowerCase()}</b> from ${esc(f.src)}<small>${esc(f.purpose)} · ${esc(f.applies)}</small>`; }
+
+/* ---------------- drawing ---------------- */
+const svg = $("#bpmap");
+let L = null;
+
+function anchorY(i) { return i.kind === "server" ? i.y - i.h / 2 + 30 : i.y; }
+function geom(A, B) {
+  const dx = B.x - A.x;
+  if (Math.abs(dx) < 30) {
+    const p1 = [A.x + A.w / 2, A.y], p2 = [B.x + B.w / 2, B.y], k = 30 + Math.min(30, Math.abs(B.y - A.y) / 8);
+    const c1 = [p1[0] + k, p1[1]], c2 = [p2[0] + k, p2[1]];
+    return bez(p1, c1, c2, p2);
+  }
+  const dir = dx > 0 ? 1 : -1;
+  const p1 = [r1(A.x + dir * A.w / 2), r1(anchorY(A))], p2 = [r1(B.x - dir * B.w / 2), r1(anchorY(B))];
+  const k = Math.max(28, Math.abs(p2[0] - p1[0]) * 0.45);
+  const c1 = [r1(p1[0] + dir * k), p1[1]], c2 = [r1(p2[0] - dir * k), p2[1]];
+  return bez(p1, c1, c2, p2);
+}
+function bez(p1, c1, c2, p2) {
+  const at = (t) => { const u = 1 - t; return [0, 1].map((k) => u * u * u * p1[k] + 3 * u * u * t * c1[k] + 3 * u * t * t * c2[k] + t * t * t * p2[k]); };
+  return { d: `M${p1}C${c1} ${c2} ${p2}`, at };
+}
+const MARK = { rule: "ar-acc", route: "ar-acc", pub: "ar-acc", mount: "ar-c2", ssh: "ar-faint", drop: "x-bad" };
+function flowDur(n) { return n > 50000 ? 0.9 : n > 10000 ? 1.4 : n > 1000 ? 2.2 : 3.4; }
+
+function drawEdge(o) {
+  const { e, g } = o;
+  const op = Math.min(o.A.op, o.B.op, e.op ?? 1);
+  const flow = !reduced && e.traffic > 0 && ["rule", "route", "pub", "drop"].includes(e.kind) && op > 0.99;
+  return `<g class="e k-${e.kind}" data-eid="${e.id}" data-sel="${e.sel}"${op < 1 ? ` opacity="${op.toFixed(2)}"` : ""}>` +
+    `<path class="v" d="${g.d}" marker-end="url(#${MARK[e.kind]})"/>` +
+    (flow ? `<path class="flow" d="${g.d}" style="--d:${flowDur(e.traffic)}s"/>` : "") +
+    `<path class="hit" d="${g.d}"/></g>`;
+}
+function drawLabel(o) {
+  const { e, g } = o;
+  if (!e.label) return "";
+  const op = Math.min(o.A.op, o.B.op, e.op ?? 1);
+  const w = e.label.length * 6.1 + 12;
+  // Dropped counts sit near the source so they don't land on the chips the edge passes.
+  const [mx, my] = g.at(e.kind === "drop" ? 0.28 : 0.5);
+  return `<g class="lbl k-${e.kind}" data-eid="${e.id}" transform="translate(${r1(mx)},${r1(my)})"${op < 1 ? ` opacity="${op.toFixed(2)}"` : ""}>` +
+    `<rect x="${-w / 2}" y="-9" width="${w}" height="18" rx="4"/><text text-anchor="middle" y="3.5">${esc(e.label)}</text></g>`;
+}
+const trunc = (s, n) => (s.length > n ? s.slice(0, n - 1) + "…" : s);
+const ICON = { app: "i-box", job: "i-clock", task: "i-play", volume: "i-disk", domain: "i-lock", gateway: "i-gate", pchip: "i-layers" };
+const KIND = { app: "App", job: "Scheduled job", task: "Task", volume: "Volume", domain: "Domain", gateway: "Gateway", pchip: "Project" };
+
+function drawItem(i) {
+  const op = i.op < 1 ? ` opacity="${i.op.toFixed(2)}"` : "";
+  const t = `transform="translate(${r1(i.x)},${r1(i.y)})"`;
+  const x = -i.w / 2, y = -i.h / 2;
+  const a11y = (label) => `tabindex="0" role="button" aria-label="${esc(label)}"`;
+  if (i.kind === "pbox") {
+    return `<g class="box pbox" data-key="${i.key}" ${t}${op}><rect class="bx" x="${x}" y="${y}" width="${i.w}" height="${i.h}" rx="12"/>` +
+      `<g transform="translate(${x + 14},${y + 22})"><use href="#i-layers" x="0" y="-11" width="14" height="14" style="color:var(--faint)"/><text x="20"><tspan class="bl">${esc(i.p.id)}</tspan><tspan class="bc" dx="8">${i.counts}</tspan></text></g>` +
+      `<g class="tg" data-act="collapse" data-p="${i.p.id}" ${a11y((i.collapsed ? "Expand " : "Collapse ") + i.p.id)} transform="translate(${-x - 14},${y + 22})"><rect x="-62" y="-13" width="66" height="19" rx="4" fill="transparent"/><text text-anchor="end">${i.collapsed ? "Expand ▸" : "Collapse ▾"}</text></g></g>`;
+  }
+  if (i.kind === "server") {
+    const s = i.s, mw = 44;
+    const meter = (k, v, mx) => `<text class="mk" x="${mx}" y="${y + 58}">${k}</text><rect class="mb" x="${mx + 26}" y="${y + 52}" width="${mw}" height="5" rx="2.5" style="fill:var(--sunk)"/><rect class="mf2" x="${mx + 26}" y="${y + 52}" width="${(mw * v) / 100}" height="5" rx="2.5"/><text class="mv" x="${mx + 26 + mw + 6}" y="${y + 58}">${v}%</text>`;
+    return `<g class="box k-server" data-key="${i.key}" data-sel="${i.sel}" ${a11y("Server " + s.name)} ${t}${op}>` +
+      `<rect class="sx" x="${x}" y="${y}" width="${i.w}" height="${i.h}" rx="12"/>` +
+      `<path class="sh" d="M${x + 1} ${y + 72}H${-x - 1}" stroke="var(--line-2)"/>` +
+      `<use href="#i-server" class="icg" x="${x + 14}" y="${y + 14}" width="16" height="16"/>` +
+      `<text class="snm" x="${x + 38}" y="${y + 26}">${esc(s.name)}</text><text class="sty" x="${x + 38}" y="${y + 41}">${esc(s.type)} · ${esc(s.role)}</text>` +
+      meter("CPU", s.cpu, x + 14) + meter("MEM", s.mem, x + 120) + `</g>`;
+  }
+  if (i.kind === "fwband") {
+    return `<g class="box k-fwband${state.selected === "fwband" ? " sel" : ""}" data-key="${i.key}" data-sel="fwband" ${a11y("Server firewall")} ${t}${op}>` +
+      `<rect class="fb" x="${x}" y="${y}" width="${i.w}" height="${i.h}" rx="10"/>` +
+      `<use href="#i-shield" class="icg" x="-6" y="${y + 10}" width="12" height="12"/><text text-anchor="middle" y="${y + 36}">FIREWALL</text></g>`;
+  }
+  const st = i.status ? ` s-${i.status}` : "";
+  const cls = `it k-${i.kind}${st}${i.dashed ? " dashed" : ""}${i.kind === "fw" && !i.f.open ? " closed" : ""}`;
+  const head = (label) => `<g class="${cls}" data-key="${i.key}" data-sel="${i.sel}" ${a11y(label)} ${t}${op}>`;
+  if (i.kind === "net") {
+    const rr = i.w / 2;
+    return head(i.out ? "Internet, outbound" : "Internet") + `<circle class="bg" r="${rr}"/><use href="#i-globe" class="icg" x="-10" y="-10" width="20" height="20"/>` +
+      `<text class="nm" text-anchor="middle" y="${rr + 15}">Internet</text>${i.out ? `<text class="sb" text-anchor="middle" y="${rr + 28}">outbound</text>` : ""}</g>`;
+  }
+  if (i.kind === "fw") {
+    return head(`Firewall port ${i.f.ports} ${i.f.proto}`) + `<rect class="bg" x="${x}" y="${y}" width="${i.w}" height="${i.h}" rx="7"/>` +
+      `<text class="nm" text-anchor="middle" y="-1">${i.f.ports}</text><text class="sh" text-anchor="middle" y="10">${i.f.proto.toLowerCase()} · ${i.f.open ? (i.f.src === "any" ? "any" : "limited") : "private"}</text></g>`;
+  }
+  if (i.kind === "domain") {
+    return head(`Domain ${i.d.name}`) + `<rect class="bg" x="${x}" y="${y}" width="${i.w}" height="${i.h}" rx="15"/>` +
+      `<use href="#i-lock" class="icg" x="${x + 10}" y="-6" width="12" height="12"/><text class="nm" x="${x + 28}" y="4">${esc(trunc(i.d.name, 16))}</text><circle class="dot" cx="${-x - 12}" cy="0" r="3.5"/></g>`;
+  }
+  let name, sub;
+  if (i.kind === "gateway") { name = "gateway"; sub = "TLS · HTTP routes"; }
+  else if (i.kind === "pchip") { name = i.p.id; sub = i.counts; }
+  else {
+    const e = i.e; name = e.name; sub = e.sub;
+    if (i.rep) sub = `${e.kind === "app" ? "pod " : ""}${i.rep.i + 1}/${i.rep.n} · ${e.state ? "CrashLoop" : "Running"}`;
+    if (e.kind === "volume") sub = `${e.used} of ${e.size} GiB · ${Math.round((e.used / e.size) * 100)}%`;
+    if (i.dashed) sub = e.kind === "task" ? "ran here · done" : "last ran here";
+  }
+  const icon = ICON[i.kind];
+  let s = head(`${KIND[i.kind] || ""} ${name}${i.status === "bad" ? ", failing" : i.status === "warn" ? ", needs attention" : ""}`) +
+    `<rect class="bg" x="${x}" y="${y}" width="${i.w}" height="${i.h}" rx="8"/>` +
+    `<rect class="ic" x="${x + 7}" y="-12" width="24" height="24" rx="6"/><use href="#${icon}" class="icg" x="${x + 11}" y="-8" width="16" height="16"/>`;
+  if (i.kind === "volume") {
+    const pct = Math.min(1, i.e.used / i.e.size), mw = i.w - 50;
+    s += `<text class="nm" x="${x + 38}" y="-7">${esc(trunc(name, 21))}</text><text class="sb" x="${x + 38}" y="7">${esc(sub)}</text>` +
+      `<rect class="mb" x="${x + 38}" y="13" width="${mw}" height="3.5" rx="1.75"/><rect class="mf" x="${x + 38}" y="13" width="${r1(mw * pct)}" height="3.5" rx="1.75"/>`;
+  } else {
+    s += `<text class="nm" x="${x + 38}" y="-3">${esc(trunc(name, i.kind === "pchip" ? 24 : 16))}</text><text class="sb" x="${x + 38}" y="11">${esc(trunc(sub, i.kind === "pchip" ? 30 : 22))}</text>`;
+    if (i.status && i.kind !== "gateway") s += `<circle class="dot" cx="${-x - 11}" cy="-8" r="3.5"/>`;
+  }
+  return s + "</g>";
+}
+
+function draw(Lx, tween) {
+  const items = Object.values(Lx.I).filter((i) => i.op > 0.01);
+  const backK = ["pbox", "server", "fwband"];
+  const es = Lx.E.map((e) => ({ e, A: Lx.I[e.a], B: Lx.I[e.b] })).filter((o) => o.A && o.B && o.A.op > 0.01 && o.B.op > 0.01 && (o.e.op ?? 1) > 0.01);
+  es.forEach((o) => (o.g = geom(o.A, o.B)));
+  svg.innerHTML =
+    `<g>${items.filter((i) => backK.includes(i.kind)).map(drawItem).join("")}</g>` +
+    `<g>${es.map(drawEdge).join("")}</g>` +
+    `<g>${items.filter((i) => !backK.includes(i.kind)).map(drawItem).join("")}</g>` +
+    `<g>${es.map(drawLabel).join("")}</g>`;
+  if (!tween) applyFocus();
+}
+
+/* ---------------- focus ---------------- */
+function focusSet(sel) {
+  const keys = new Set(), eids = new Set();
+  const node = sel.startsWith("srv:") ? sel.slice(4) : null;
+  for (const k in L.I) { const it = L.I[k]; if (it.sel === sel || (node && it.node === node)) keys.add(k); }
+  for (const e of L.E) if (e.sel === sel || keys.has(e.a) || keys.has(e.b)) eids.add(e.id);
+  for (const e of L.E) if (eids.has(e.id)) { keys.add(e.a); keys.add(e.b); }
+  return { keys, eids };
+}
+function problemSet() {
+  const keys = new Set(), eids = new Set();
+  for (const k in L.I) if (["bad", "warn"].includes(L.I[k].status)) keys.add(k);
+  for (const e of L.E) if (e.tone) { eids.add(e.id); keys.add(e.a); keys.add(e.b); }
+  return { keys, eids };
+}
+function searchSet(q) {
+  const keys = new Set();
+  for (const k in L.I) if ((L.I[k].label || "").toLowerCase().includes(q)) keys.add(k);
+  return { keys, eids: new Set() };
+}
+function applyFocus() {
+  const q = state.q.trim().toLowerCase();
+  const f = state.selected ? focusSet(state.selected) : state.hover ? focusSet(state.hover) : q ? searchSet(q) : state.problems ? problemSet() : null;
+  svg.classList.toggle("focus", !!f);
+  svg.querySelectorAll("[data-key]").forEach((g) => {
+    g.classList.toggle("hl", !!f && f.keys.has(g.dataset.key));
+    g.classList.toggle("sel", !!state.selected && g.dataset.sel === state.selected);
+  });
+  svg.querySelectorAll("[data-eid]").forEach((g) => {
+    g.classList.toggle("hl", !!f && f.eids.has(g.dataset.eid));
+    g.classList.toggle("sel", !!state.selected && g.dataset.sel === state.selected);
+  });
+}
+
+/* ---------------- view box, pan, zoom ---------------- */
+function fit(Lx) {
+  const items = Object.values(Lx.I).filter((i) => i.op > 0.01);
+  let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+  for (const i of items) {
+    x0 = Math.min(x0, i.x - i.w / 2); x1 = Math.max(x1, i.x + i.w / 2);
+    y0 = Math.min(y0, i.y - i.h / 2); y1 = Math.max(y1, i.y + i.h / 2 + (i.kind === "net" ? 30 : 0));
+  }
+  const pad = 22;
+  let vb = { x: x0 - pad, y: y0 - pad, w: x1 - x0 + 2 * pad, h: y1 - y0 + 2 * pad + 44 };
+  const minW = 1000;
+  if (vb.w < minW) { vb.x -= (minW - vb.w) / 2; vb.w = minW; }
+  return vb;
+}
+function setVB() { const v = state.vb; svg.setAttribute("viewBox", `${r1(v.x)} ${r1(v.y)} ${r1(v.w)} ${r1(v.h)}`); }
+function unitsPerPx() { const m = svg.getScreenCTM(); return m ? 1 / m.a : 1; }
+function zoomAt(f, cx, cy) {
+  const v = state.vb;
+  if (cx == null) { cx = v.x + v.w / 2; cy = v.y + v.h / 2; }
+  const nw = Math.min(Math.max(v.w * f, 300), 4000), k = nw / v.w;
+  state.vb = { x: cx - (cx - v.x) * k, y: cy - (cy - v.y) * k, w: nw, h: v.h * k };
+  state.userZoom = true;
+  setVB();
+}
+function svgPoint(ev) {
+  const m = svg.getScreenCTM();
+  if (!m) return [null, null];
+  const p = new DOMPoint(ev.clientX, ev.clientY).matrixTransform(m.inverse());
+  return [p.x, p.y];
+}
+
+/* ---------------- relayout & tween ---------------- */
+function relayout(refit = true) {
+  L = layout(state.lens);
+  if (refit || !state.userZoom) { state.vb = fit(L); state.userZoom = false; }
+  setVB();
+  draw(L);
+  inspect();
+}
+function lerp(a, b, t) { return a + (b - a) * t; }
+function tweenTo(lens) {
+  const A = L, B = layout(lens);
+  state.lens = lens;
+  const vbA = state.vb, vbB = fit(B);
+  state.userZoom = false;
+  if (reduced) { L = B; state.vb = vbB; setVB(); draw(L); inspect(); return; }
+  const keys = new Set([...Object.keys(A.I), ...Object.keys(B.I)]);
+  const parentPos = (Lx, k) => { const p = Lx.I[k.split("~")[0]]; return p ? { x: p.x, y: p.y } : null; };
+  const pairs = [];
+  for (const k of keys) {
+    let a = A.I[k], b = B.I[k];
+    if (!a) a = { ...b, ...(parentPos(A, k) || {}), op: 0 };
+    if (!b) b = { ...a, ...(parentPos(B, k) || {}), op: 0 };
+    pairs.push([k, a, b]);
+  }
+  const eA = new Map(A.E.map((e) => [e.id, e])), eB = new Map(B.E.map((e) => [e.id, e]));
+  const eids = new Set([...eA.keys(), ...eB.keys()]);
+  const t0 = performance.now(), D = 560;
+  svg.classList.remove("focus");
+  const frame = (now) => {
+    const raw = Math.min(1, (now - t0) / D), t = raw < 0.5 ? 2 * raw * raw : 1 - Math.pow(-2 * raw + 2, 2) / 2;
+    const I = {};
+    for (const [k, a, b] of pairs) I[k] = { ...(t < 0.5 ? a : b), x: lerp(a.x, b.x, t), y: lerp(a.y, b.y, t), w: lerp(a.w, b.w, t), h: lerp(a.h, b.h, t), op: lerp(a.op, b.op, t) };
+    const E = [...eids].map((id) => { const a = eA.get(id), b = eB.get(id); return { ...(b || a), op: a && b ? 1 : a ? Math.max(0, 1 - 2 * t) : Math.max(0, 2 * t - 1) }; });
+    state.vb = { x: lerp(vbA.x, vbB.x, t), y: lerp(vbA.y, vbB.y, t), w: lerp(vbA.w, vbB.w, t), h: lerp(vbA.h, vbB.h, t) };
+    setVB();
+    draw({ I, E }, true);
+    if (raw < 1) requestAnimationFrame(frame);
+    else { L = B; state.vb = vbB; setVB(); draw(L); inspect(); }
+  };
+  requestAnimationFrame(frame);
+}
+
+/* ---------------- inspector ---------------- */
+const insp = $("#bm-insp");
+const pill = (tone, text) => `<span class="pill ${tone}">${text}</span>`;
+const kv = (k, v) => `<div class="kv"><span>${k}</span><div>${v}</div></div>`;
+const lk = (id, label) => `<button class="lk" data-goto="${esc(id)}">${esc(label)}</button>`;
+const act = (label, what, pri) => `<button class="btn sm${pri ? " pri" : ""}" data-mock="${esc(what)}">${label}</button>`;
+const sec = (title, body) => `<div><h5>${title}</h5>${body}</div>`;
+function flows(rows) {
+  if (!rows.length) return `<p class="empty">None</p>`;
+  return `<div class="flows">${rows.map((f) => `<button class="fl" data-goto="${esc(f.goto)}"><i class="sw ${f.kind || ""}"></i><span class="fn">${esc(f.label)}</span><span class="fc ${f.tone || ""}">${f.count}</span>${f.sub ? `<span class="fs">${esc(f.sub)}</span>` : ""}</button>`).join("")}</div>`;
+}
+const toneOf = { ok: ["ok", "Running"], bad: ["bad", "Failing"], warn: ["warn", "Needs attention"], info: ["info", "Issuing"] };
+function shell(eyebrow, title, pills, body, acts) {
+  return `<div class="ihd"><span class="eb">${eyebrow}</span><h4>${esc(title)}</h4>${pills ? `<div class="pills">${pills}</div>` : ""}<button class="x" data-goto="" aria-label="Close"><svg><use href="#i-x"/></svg></button></div>` +
+    `<div class="ibd">${body}</div>${acts ? `<div class="iacts">${acts}</div>` : ""}`;
+}
+function rulesInto(id) {
+  const ds = DS(), rows = [];
+  ds.domains.filter((d) => d.to === id).forEach((d) => rows.push({ goto: d.id, label: d.name, sub: `domain · ${d.port}`, count: d.allowed ? fmt(d.allowed) : "—" }));
+  ds.rules.filter((r) => r.to.includes(id)).forEach((r) => rows.push({ goto: "edge:" + r.id, label: r.from.map(nameOf).join(", "), sub: `${r.id} · ${r.ports}`, count: fmt(r.allowed) }));
+  ds.drops.filter((d) => d.to === id).forEach((d) => rows.push({ goto: "edge:" + d.id, kind: "drop", label: nameOf(d.from), sub: `no rule allows ${d.ports}`, count: `${d.dropped} dropped`, tone: "bad" }));
+  return rows;
+}
+function rulesFrom(id) {
+  const ds = DS(), rows = [];
+  ds.rules.filter((r) => r.from.includes(id)).forEach((r) => rows.push({ goto: "edge:" + r.id, label: r.to.map(nameOf).join(", "), sub: `${r.id} · ${r.ports}`, count: r.dropped ? `${fmt(r.allowed)} · ${r.dropped}✕` : fmt(r.allowed), tone: r.dropped ? "warn" : "" }));
+  ds.drops.filter((d) => d.from === id).forEach((d) => rows.push({ goto: "edge:" + d.id, kind: "drop", label: nameOf(d.to), sub: `no rule allows ${d.ports}`, count: `${d.dropped} dropped`, tone: "bad" }));
+  return rows;
+}
+function nodesOf(list) {
+  const c = {};
+  list.forEach((n) => (c[n] = (c[n] || 0) + 1));
+  return `<div class="nodes">${Object.entries(c).map(([n, k]) => lk("srv:" + n, srv(n).name + (k > 1 ? ` ×${k}` : ""))).join("")}</div>`;
+}
+function detail(sel) {
+  const ds = DS();
+  if (sel.startsWith("edge:")) {
+    const id = sel.slice(5), r = ds.rules.find((x) => x.id === id), d = ds.drops.find((x) => x.id === id);
+    if (d) return shell("Dropped traffic", `${nameOf(d.from)} → ${nameOf(d.to)}`, pill("bad", `${d.dropped} dropped`),
+      `<div class="note-bad"><b>No traffic rule allows this.</b> ${esc(nameOf(d.from))} tries to reach ${esc(nameOf(d.to))} on ${d.ports}; the project denies traffic that no rule allows.</div>` +
+      `<div class="kvs">${kv("From", lk(d.from, nameOf(d.from)))}${kv("To", lk(d.to, nameOf(d.to)))}${kv("Port", d.ports)}${kv("Seen", d.since)}</div>` +
+      sec("Suggested rule", `<p class="mono" style="font-size:11.5px">billing-to-api · ${esc(nameOf(d.from))} → ${esc(nameOf(d.to))} · ${d.ports}</p>`),
+      act("Create allow rule", "opens Network › Traffic rules with this rule prefilled", true) + act("Open Network", "opens Network › Traffic rules"));
+    const tone = r.dropped ? pill("warn", `${r.dropped} dropped`) : pill("ok", "Active");
+    return shell("Traffic rule", r.id, tone + ` <span class="tag">${r.ports}</span>`,
+      `<p>${esc(r.desc || "")}</p><div class="kvs">${kv("From", r.from.map((f) => lk(f, nameOf(f))).join(", "))}${kv("To", r.to.map((t) => (t === "@out" ? lk("out", "Internet (outbound)") : lk(t, nameOf(t)))).join(", "))}${kv("Ports", r.ports)}${kv("Allowed", `<span class="mono">${fmt(r.allowed)}</span> in the last hour`)}${kv("Dropped", `<span class="mono">${r.dropped}</span>${r.dropped ? " · by the egress policy, other ports" : ""}`)}</div>`,
+      act("Edit rule", "opens the rule editor") + act("Open Network", "opens Network › Traffic rules"));
+  }
+  if (sel.startsWith("srv:")) {
+    const s = srv(sel.slice(4));
+    const pods = ds.ents.filter((e) => e.kind === "app").flatMap((e) => e.replicas.filter((n) => n === s.id).map(() => e));
+    const vols = ds.ents.filter((e) => e.kind === "volume" && e.node === s.id);
+    return shell("Server", s.name, pill("ok", "Ready") + ` <span class="tag">${esc(s.type)}</span>`,
+      `<div class="kvs">${kv("Role", s.role)}${kv("Public IP", `<span class="mono">${s.ip}</span>`)}${kv("Private IP", `<span class="mono">${s.priv}</span>`)}</div>` +
+      sec("Usage", `<div class="kvs">${kv("CPU", `${s.cpu}%<div class="mtr"><i class="acc" style="width:${s.cpu}%"></i></div>`)}${kv("Memory", `${s.mem}%<div class="mtr"><i class="acc" style="width:${s.mem}%"></i></div>`)}</div>`) +
+      sec(`Runs ${plural(pods.length, "pod")}`, `<div class="nodes">${[...new Set(pods)].map((e) => lk(e.id, e.name + (pods.filter((p) => p === e).length > 1 ? ` ×${pods.filter((p) => p === e).length}` : ""))).join("")}</div>`) +
+      sec("Volumes on this server", vols.length ? `<div class="nodes">${vols.map((v) => lk(v.id, v.name)).join("")}</div>` : `<p class="empty">None</p>`),
+      act("Open node", "opens Clusters › Nodes") + act("Drain", "asks to drain the node first"));
+  }
+  if (sel === "fwband" || sel.startsWith("fw:")) {
+    const list = sel === "fwband" ? ds.firewall : ds.firewall.filter((f) => "fw:" + f.id === sel);
+    const f = list[0];
+    const body = sel === "fwband"
+      ? `<p>Applies to every server; mirrored to the Hetzner Cloud Firewall for cloud nodes.</p>${flows(ds.firewall.map((x) => ({ goto: "fw:" + x.id, label: `${x.ports}/${x.proto.toLowerCase()}`, sub: x.purpose, count: x.src === "any" ? "any" : x.open ? "limited" : "private" })))}`
+      : `<div class="kvs">${kv("Port", `<span class="mono">${f.ports}</span>`)}${kv("Protocol", f.proto)}${kv("Source", `<span class="mono">${esc(f.src)}</span>`)}${kv("Applies to", f.applies)}</div><p>${esc(f.purpose)}.${f.id === "ssh" ? " Your current IP is covered." : ""}${!f.open ? " Not reachable from the internet." : ""}</p>`;
+    return shell("Server firewall", sel === "fwband" ? "Firewall" : `${f.ports}/${f.proto.toLowerCase()}`, sel === "fwband" ? pill("ok", "Synced 2 min ago") : f.open ? pill("ok", "Open") : pill("mute", "Private"),
+      body, act("Open firewall", "opens Network › Server firewall"));
+  }
+  if (sel === "gateway") {
+    return shell("Gateway", "gateway", pill("ok", "Running") + ` <span class="tag">80·443</span>`,
+      `<p>Terminates TLS for ${plural(ds.domains.length, "domain")} and routes each hostname to its app. Listens on every server.</p>` +
+      sec("Domains", flows(ds.domains.map((d) => ({ goto: d.id, label: d.name, sub: `→ ${nameOf(d.to)}`, count: d.allowed ? fmt(d.allowed) : "—" })))),
+      act("Domains & TLS", "opens Network › Domains & TLS"));
+  }
+  if (sel === "internet") {
+    return shell("Outside", "Internet", "",
+      `<p>Reaches the cluster only through firewall ports open to “any”: web traffic on 80 and 443 to the gateway. SSH is limited to ${esc(ds.firewall.find((f) => f.id === "ssh")?.src || "—")}.</p>` +
+      sec("Public domains", flows(ds.domains.map((d) => ({ goto: d.id, label: d.name, sub: `→ ${nameOf(d.to)}`, count: d.allowed ? fmt(d.allowed) : "—" })))), "");
+  }
+  if (sel === "out") {
+    const rs = ds.rules.filter((r) => r.to.includes("@out"));
+    return shell("Outbound", "Internet", "",
+      `<p>Apps reach the internet only where a rule allows it; everything else is dropped.</p>` +
+      sec("Allowed by", flows(rs.map((r) => ({ goto: "edge:" + r.id, label: r.from.map(nameOf).join(", "), sub: `${r.id} · ${r.ports}`, count: r.dropped ? `${fmt(r.allowed)} · ${r.dropped}✕` : fmt(r.allowed), tone: r.dropped ? "warn" : "" })))), "");
+  }
+  if (sel.startsWith("prj:")) {
+    const p = sel.slice(4), mem = ds.ents.filter((e) => e.project === p);
+    return shell("Project", p, pill(...toneOf[worst(mem.map((e) => e.status))] || ["ok", "Running"]),
+      `<p>Collapsed: connections to and from its apps are drawn to this box.</p>` +
+      sec("Contains", `<div class="nodes">${mem.map((e) => lk(e.id, e.name)).join("")}</div>`),
+      `<button class="btn sm pri" data-act="collapse" data-p="${p}">Expand project</button>`);
+  }
+  const d = dom(sel);
+  if (d) {
+    return shell("Domain", d.name, d.cert === "ok" ? pill("ok", "Certificate valid") : pill("info", "Certificate issuing"),
+      `<div class="kvs">${kv("Routes to", lk(d.to, nameOf(d.to)))}${kv("Port", d.port)}${kv("Expires", d.expires)}${kv("Requests", d.allowed ? `<span class="mono">${fmt(d.allowed)}</span> in the last hour` : "none yet")}${d.opts ? kv("Options", esc(d.opts)) : ""}</div>` +
+      (d.cert !== "ok" ? `<div class="note-warn">Waiting for the DNS-01 challenge; the domain serves the default certificate until it completes.</div>` : ""),
+      act("Open domain", "opens Network › Domains & TLS"));
+  }
+  const e = ent(sel);
+  if (!e) return null;
+  if (e.kind === "app") {
+    const vols = ds.ents.filter((v) => v.kind === "volume" && v.mountedBy.includes(e.id));
+    const st = e.status === "bad" ? pill("bad", e.state) : pill("ok", "Running");
+    return shell(`App · ${e.project}`, e.name, st + ` <span class="tag">${e.ready} ready</span>`,
+      (e.status === "bad" ? `<div class="note-bad"><b>${e.restarts} restarts in 30 min.</b> The last crash logged “connection refused” to api:8080, which matches the dropped traffic below.</div>` : "") +
+      `<div class="kvs">${kv("Source", esc(e.source))}${kv("Revision", esc(e.rev))}${kv("Ports", `<span class="mono">${e.ports}</span>`)}${kv("Size", e.size)}${kv("Replicas", nodesOf(e.replicas))}</div>` +
+      sec("Reached from", flows(rulesInto(e.id))) + sec("Talks to", flows(rulesFrom(e.id))) +
+      (vols.length ? sec("Volumes", flows(vols.map((v) => ({ goto: v.id, kind: "mount", label: v.name, sub: v.path, count: `${Math.round((v.used / v.size) * 100)}%`, tone: v.status === "warn" ? "warn" : "" })))) : ""),
+      (e.status === "bad" ? act("Open logs", "opens the app's logs at the last crash", true) + act("Open app", "opens Apps › " + e.name) : act("Open app", "opens Apps › " + e.name, true) + act("Logs", "opens the app's live logs")) + act("Shell", "opens a recorded shell in a replica"));
+  }
+  if (e.kind === "job" || e.kind === "task") {
+    const runs = e.runs ? `<div class="runs" aria-label="Last 10 runs">${[...e.runs].map((c) => `<i class="${c === "b" ? "b" : ""}" title="${c === "b" ? "failed" : "succeeded"}"></i>`).join("")}</div>` : "";
+    const tone = e.status === "warn" ? pill("warn", "Last run failed") : pill("ok", e.kind === "task" ? "Succeeded" : "Last run passed");
+    return shell(`${e.kind === "task" ? "Task" : "Scheduled job"} · ${e.project}`, e.name, tone,
+      `<div class="kvs">${e.schedule ? kv("Schedule", esc(e.schedule)) : ""}${kv("Runs as", e.fromApp ? lk(e.fromApp, nameOf(e.fromApp)) + " (image, env, rules)" : esc(e.image || "own image"))}${kv("Last run", esc(e.last))}${e.next ? kv("Next run", e.next) : ""}${kv("Ran on", lk("srv:" + e.node, srv(e.node).name))}</div>` +
+      (runs ? sec("Last 10 runs", runs) : "") + sec("Talks to", flows(rulesFrom(e.id))),
+      (e.kind === "job" ? act("Run now", "asks to start a run now", true) : "") + act(e.kind === "task" ? "Open task" : "Open job", "opens Jobs › " + e.name));
+  }
+  if (e.kind === "volume") {
+    const pct = Math.round((e.used / e.size) * 100);
+    return shell(`Volume · ${e.project}`, e.name, e.status === "warn" ? pill("warn", `${pct}% full`) : pill("ok", "Bound"),
+      `<div><div class="kvs">${kv("Used", `${e.used} of ${e.size} GiB<div class="mtr"><i class="${e.status === "warn" ? "warn" : ""}" style="width:${pct}%"></i></div>`)}${kv("Storage", e.cls)}${kv("On server", lk("srv:" + e.node, srv(e.node).name))}</div></div>` +
+      (e.forecast ? `<div class="note-warn">${esc(e.forecast)}</div>` : "") +
+      sec("Mounted by", flows(e.mountedBy.map((m) => ({ goto: m, kind: "mount", label: nameOf(m), sub: e.path, count: "rw" })))),
+      act("Expand volume", "opens the expand dialog", e.status === "warn") + act("Back up now", "starts a backup of this volume"));
+  }
+  return null;
+}
+function inspect() {
+  const html = state.selected ? detail(state.selected) : null;
+  if (!html) { insp.hidden = true; insp.innerHTML = ""; return; }
+  insp.innerHTML = html;
+  insp.hidden = false;
+}
+function counts() {
+  const ds = DS();
+  const n = (k) => ds.ents.filter((e) => e.kind === k).length;
+  $("#m-count").textContent = `${ds.servers.length} servers · ${plural(n("app"), "app")} · ${plural(n("job") + n("task"), "job")} · ${plural(n("volume"), "volume")} · ${plural(ds.domains.length, "domain")} · ${plural(ds.rules.length, "traffic rule")}`;
+}
+
+/* ---------------- interaction ---------------- */
+function keepVisible(sel) {
+  const it = Object.values(L.I).find((i) => i.sel === sel || ("srv:" + i.node === sel && false));
+  if (!it) return;
+  const m = svg.getScreenCTM(), box = $("#bm-canvas").getBoundingClientRect();
+  if (!m) return;
+  const sx = it.x * m.a + m.e - box.left, sy = it.y * m.d + m.f - box.top;
+  const limit = box.width - 340;
+  if (sx > limit || sx < 20 || sy < 20 || sy > box.height - 20) {
+    const u = 1 / m.a;
+    const tx = Math.min(limit, Math.max(60, sx)), ty = Math.min(box.height - 60, Math.max(60, sy));
+    state.vb = { ...state.vb, x: state.vb.x + (sx - tx) * u, y: state.vb.y + (sy - ty) * u };
+    setVB();
+  }
+}
+function select(sel) {
+  state.selected = sel || null;
+  applyFocus();
+  inspect();
+  if (sel) keepVisible(sel);
+}
+function toggleCollapse(p) {
+  if (state.collapsed.has(p)) state.collapsed.delete(p); else state.collapsed.add(p);
+  if (state.lens !== "traffic") setLens("traffic");
+  else relayout(false);
+  if (state.selected && !Object.values(L.I).some((i) => i.sel === state.selected) && !state.selected.startsWith("edge:")) select(null);
+}
+
+let drag = null, suppressClick = false;
+svg.addEventListener("pointerdown", (ev) => {
+  if (ev.button !== 0 || ev.target.closest("[data-sel],[data-act]")) return;
+  drag = { x: ev.clientX, y: ev.clientY, vb: { ...state.vb }, u: unitsPerPx(), moved: false };
+  svg.setPointerCapture(ev.pointerId);
+});
+svg.addEventListener("pointermove", (ev) => {
+  if (drag) {
+    const dx = ev.clientX - drag.x, dy = ev.clientY - drag.y;
+    if (!drag.moved && Math.hypot(dx, dy) > 3) { drag.moved = true; svg.classList.add("panning"); }
+    if (drag.moved) { state.vb = { ...drag.vb, x: drag.vb.x - dx * drag.u, y: drag.vb.y - dy * drag.u }; state.userZoom = true; setVB(); }
+    return;
+  }
+  const g = ev.target.closest(".e");
+  const tip = $("#bm-tip");
+  if (g) {
+    const e = L.E.find((x) => x.id === g.dataset.eid);
+    if (e && e.tip) {
+      const box = $("#bm-canvas").getBoundingClientRect();
+      tip.innerHTML = e.tip;
+      tip.hidden = false;
+      const x = Math.min(ev.clientX - box.left + 14, box.width - tip.offsetWidth - 8);
+      tip.style.left = x + "px";
+      tip.style.top = ev.clientY - box.top + 14 + "px";
+      return;
+    }
+  }
+  tip.hidden = true;
+});
+svg.addEventListener("pointerup", (ev) => {
+  if (drag) { suppressClick = drag.moved; svg.classList.remove("panning"); drag = null; }
+});
+svg.addEventListener("pointerleave", () => { $("#bm-tip").hidden = true; if (state.hover) { state.hover = null; applyFocus(); } });
+svg.addEventListener("mouseover", (ev) => {
+  const t = ev.target.closest("[data-sel]");
+  const s = t ? t.dataset.sel : null;
+  if (s !== state.hover) { state.hover = s; if (!state.selected) applyFocus(); }
+});
+svg.addEventListener("click", (ev) => {
+  if (suppressClick) { suppressClick = false; return; }
+  const a = ev.target.closest("[data-act]");
+  if (a) { toggleCollapse(a.dataset.p); return; }
+  const t = ev.target.closest("[data-sel]");
+  if (t) select(state.selected === t.dataset.sel ? null : t.dataset.sel);
+  else select(null);
+});
+svg.addEventListener("keydown", (ev) => {
+  if (ev.key !== "Enter" && ev.key !== " ") return;
+  const a = ev.target.closest("[data-act]");
+  if (a) { ev.preventDefault(); toggleCollapse(a.dataset.p); return; }
+  const t = ev.target.closest("[data-sel]");
+  if (t) { ev.preventDefault(); select(state.selected === t.dataset.sel ? null : t.dataset.sel); }
+});
+let hintT;
+svg.addEventListener("wheel", (ev) => {
+  if (!(ev.ctrlKey || ev.metaKey)) {
+    const h = $("#bm-hint"); h.classList.add("on"); clearTimeout(hintT); hintT = setTimeout(() => h.classList.remove("on"), 1200);
+    return;
+  }
+  ev.preventDefault();
+  const [cx, cy] = svgPoint(ev);
+  zoomAt(Math.exp(ev.deltaY * 0.0025), cx, cy);
+}, { passive: false });
+$("#z-in").onclick = () => zoomAt(0.8);
+$("#z-out").onclick = () => zoomAt(1.25);
+$("#z-fit").onclick = () => { state.vb = fit(L); state.userZoom = false; setVB(); };
+
+insp.addEventListener("click", (ev) => {
+  const a = ev.target.closest("[data-act]");
+  if (a) { toggleCollapse(a.dataset.p); return; }
+  const g = ev.target.closest("[data-goto]");
+  if (g) { select(g.dataset.goto || null); return; }
+  const m = ev.target.closest("[data-mock]");
+  if (m) toast(`Mockup: in the console this ${m.dataset.mock}.`);
+});
+let toastT;
+function toast(text) { const t = $("#bm-toast"); t.textContent = text; t.hidden = false; clearTimeout(toastT); toastT = setTimeout(() => (t.hidden = true), 2600); }
+
+function setLens(l) {
+  if (l === state.lens) return;
+  $("#lens-traffic").setAttribute("aria-pressed", String(l === "traffic"));
+  $("#lens-placement").setAttribute("aria-pressed", String(l === "placement"));
+  tweenTo(l);
+}
+$("#lens-traffic").onclick = () => setLens("traffic");
+$("#lens-placement").onclick = () => setLens("placement");
+document.querySelectorAll("[data-layer]").forEach((b) => (b.onclick = () => {
+  const k = b.dataset.layer;
+  state.layers[k] = !state.layers[k];
+  b.setAttribute("aria-pressed", String(state.layers[k]));
+  relayout(false);
+}));
+$("#m-prob").onclick = (ev) => { state.problems = !state.problems; ev.currentTarget.setAttribute("aria-pressed", String(state.problems)); applyFocus(); };
+$("#m-q").addEventListener("input", (ev) => { state.q = ev.target.value; applyFocus(); });
+$("#m-proj").onchange = (ev) => { state.project = ev.target.value; select(null); relayout(true); };
+function fillProjects() {
+  $("#m-proj").innerHTML = `<option value="all">All projects</option>` + DS().projects.map((p) => `<option value="${p.id}">${p.id}</option>`).join("");
+  $("#m-proj").value = "all";
+}
+$("#m-cluster").onchange = (ev) => {
+  state.cluster = ev.target.value; state.project = "all"; state.collapsed.clear(); state.selected = null;
+  fillProjects(); counts(); relayout(true);
+};
+$("#m-full").onclick = (ev) => {
+  const c = $("#bpmapcard"), on = !c.classList.contains("full");
+  c.classList.toggle("full", on);
+  ev.currentTarget.setAttribute("aria-pressed", String(on));
+  ev.currentTarget.querySelector("span").textContent = on ? "Exit full screen" : "Full screen";
+  requestAnimationFrame(() => { if (!state.userZoom) { state.vb = fit(L); setVB(); } });
+};
+document.addEventListener("keydown", (ev) => {
+  if (ev.key !== "Escape") return;
+  if (state.selected) select(null);
+  else if ($("#bpmapcard").classList.contains("full")) $("#m-full").click();
+});
+document.querySelectorAll("[data-show]").forEach((b) => (b.onclick = () => {
+  const target = b.dataset.show;
+  if (state.cluster !== "fsn1") { $("#m-cluster").value = "fsn1"; $("#m-cluster").dispatchEvent(new Event("change")); }
+  const e = ent(target);
+  let changed = false;
+  if (state.project !== "all") { state.project = "all"; $("#m-proj").value = "all"; changed = true; }
+  if (e && state.collapsed.has(e.project)) { state.collapsed.delete(e.project); changed = true; }
+  for (const k of ["volumes", "domains", "rules"]) if (!state.layers[k]) { state.layers[k] = true; document.querySelector(`[data-layer="${k}"]`).setAttribute("aria-pressed", "true"); changed = true; }
+  const go = () => { $("#bpmapcard").scrollIntoView({ behavior: reduced ? "auto" : "smooth", block: "center" }); select(target); };
+  if (target.startsWith("edge:") && state.lens !== "traffic") { setLens("traffic"); setTimeout(go, 620); return; }
+  if (changed) relayout(false);
+  go();
+}));
+
+/* ---------------- boot ---------------- */
+fillProjects();
+counts();
+relayout(true);
 })();
 </script>

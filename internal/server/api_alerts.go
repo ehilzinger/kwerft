@@ -917,9 +917,10 @@ func ruleView(r *kwerftv1.AlertRule, firing int) ruleJSON {
 	return out
 }
 
-func nonNil(s []string) []string {
+// nonNil turns a nil slice into an empty one, so it encodes as [] not null.
+func nonNil[T any](s []T) []T {
 	if s == nil {
-		return []string{}
+		return []T{}
 	}
 	return s
 }

@@ -155,6 +155,28 @@ type firewallJSON struct {
 	Cloud *kwerftv1.CloudFirewallStatus `json:"cloud,omitempty"`
 }
 
+// sortFirewallRules puts the required rules first, in the installer's
+// order, then custom ones by name.
+func sortFirewallRules(rules []firewallRuleJSON) {
+	order := map[string]int{}
+	for i, req := range firewall.Required("") {
+		order[req.Name] = i + 1
+	}
+	slices.SortFunc(rules, func(a, b firewallRuleJSON) int {
+		oa, ob := order[a.Name], order[b.Name]
+		if oa == 0 {
+			oa = 1000
+		}
+		if ob == 0 {
+			ob = 1000
+		}
+		if oa != ob {
+			return oa - ob
+		}
+		return strings.Compare(a.Name, b.Name)
+	})
+}
+
 func fwRuleJSON(r *kwerftv1.FirewallRule) firewallRuleJSON {
 	out := firewallRuleJSON{
 		Name: r.Name, Port: r.Spec.Port, EndPort: r.Spec.EndPort, Protocol: r.Spec.Protocol, Sources: nonNil(r.Spec.Sources),
@@ -250,24 +272,7 @@ func (fw *firewallAPI) get(w http.ResponseWriter, r *http.Request) {
 			sshSources = rule.Spec.Sources
 		}
 	}
-	// Required rules first, in the installer's order; then custom ones by name.
-	order := map[string]int{}
-	for i, req := range firewall.Required("") {
-		order[req.Name] = i + 1
-	}
-	slices.SortFunc(out.Rules, func(a, b firewallRuleJSON) int {
-		oa, ob := order[a.Name], order[b.Name]
-		if oa == 0 {
-			oa = 1000
-		}
-		if ob == 0 {
-			ob = 1000
-		}
-		if oa != ob {
-			return oa - ob
-		}
-		return strings.Compare(a.Name, b.Name)
-	})
+	sortFirewallRules(out.Rules)
 
 	addr, verifiable := fw.clientAddr(r)
 	out.Client = firewallClientJSON{IP: fw.clientIP(r), Verifiable: verifiable, SSH: firewall.SSHReaches(sshSources, addr, alwaysSSH(list.Items)...)}

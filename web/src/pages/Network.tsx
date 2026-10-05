@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Link } from "@tanstack/react-router";
+import { Link, useSearch } from "@tanstack/react-router";
 import { useQuery } from "@tanstack/react-query";
 import { useClusters } from "../clusters";
 import { ClusterBadge } from "../components/ClusterUI";
@@ -19,7 +19,8 @@ type Tab = "rules" | "firewall" | "domains";
 // Network: traffic rules and the server firewall arrive in Phase 4; Domains
 // & TLS lists the hostnames Apps claim, with their certificates.
 export function Network() {
-  const [tab, setTab] = useState<Tab>("domains");
+  const search = useSearch({ strict: false }) as { tab?: Tab };
+  const [tab, setTab] = useState<Tab>(search.tab ?? "domains");
   const domains = useQuery({ queryKey: ["domains"], queryFn: () => jobs.domains(), refetchInterval: 15000 });
   const tabs: { id: Tab; label: string; n?: number }[] = [
     { id: "rules", label: "Traffic rules" },

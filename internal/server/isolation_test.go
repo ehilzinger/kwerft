@@ -449,6 +449,47 @@ func TestProjectIsolation(t *testing.T) {
 		}
 	})
 
+	// The Overview's map gathers all of the above, plus pods and servers.
+	t.Run("the infrastructure map leaves out the projects a user does not reach", func(t *testing.T) {
+		var owner topologyResp
+		if code := e.owner.do(t, "GET", "/api/v1/topology", nil, &owner); code != http.StatusOK ||
+			!slices.ContainsFunc(owner.Apps, func(a topoAppResp) bool { return a.Project == isoB && len(a.Pods) == 1 }) {
+			t.Errorf("owner: %d, apps %+v: want iso-b's web with its pod", code, owner.Apps)
+		}
+		for _, u := range e.members() {
+			var m topologyResp
+			if code := u.s.do(t, "GET", "/api/v1/topology", nil, &m); code != http.StatusOK {
+				t.Fatalf("%s: topology: %d", u.name, code)
+			}
+			var projects []string
+			for _, p := range m.Projects {
+				projects = append(projects, p.Name)
+			}
+			for _, a := range m.Apps {
+				projects = append(projects, a.Project)
+				for _, p := range a.Pods {
+					if p.Name == "web-b-1" {
+						t.Errorf("%s: sees iso-b's pod", u.name)
+					}
+				}
+			}
+			for _, l := range [][]listed{m.Schedules, m.Tasks, m.Domains, m.Rules} {
+				for _, it := range l {
+					projects = append(projects, it.Project)
+				}
+			}
+			for _, v := range m.Volumes {
+				projects = append(projects, v.Project)
+			}
+			if slices.Contains(projects, isoB) || !slices.Contains(projects, isoA) {
+				t.Errorf("%s: map covers %v, want iso-a and never iso-b", u.name, projects)
+			}
+			if m.Firewall != nil || !m.NodesPartial {
+				t.Errorf("%s: firewall %v, nodes partial %v: servers and firewall are for owners and admins", u.name, m.Firewall, m.NodesPartial)
+			}
+		}
+	})
+
 	// Single objects and streams: impersonated, so Kubernetes answers 403.
 	b := "/api/v1/projects/" + isoB
 	refused := []struct{ method, path string }{

@@ -94,4 +94,8 @@ var (
 
 	AppsCPU    = `sum by (namespace, app) (` + RecordCPU + `)`
 	AppsMemory = `sum by (namespace, app) (` + RecordMemory + `)`
+
+	// Volume fill per claim (the Overview map); any scope.
+	VolumeUsed     = `sum by (namespace, persistentvolumeclaim) (kubelet_volume_stats_used_bytes)`
+	VolumeCapacity = `sum by (namespace, persistentvolumeclaim) (kubelet_volume_stats_capacity_bytes)`
 )

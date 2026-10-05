@@ -1,0 +1,180 @@
+/* The Overview's infrastructure map (components/InfraMap.tsx). Colours come
+   from tokens.css, so both themes follow; mirrors docs/blueprint.html. */
+.imap .ch-h { flex-wrap: wrap; }
+.imap-title { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; min-width: 0; }
+.imap-title .dim { font-weight: 400; font-size: 12.5px; color: var(--muted); }
+.imap-acts { display: flex; gap: 8px; align-items: center; }
+.imap .imap-select { width: auto; padding: 4px 8px; font-size: 12.5px; }
+
+.imap-tool { display: flex; flex-wrap: wrap; gap: 8px 14px; align-items: center; padding: 9px 16px; border-bottom: 1px solid var(--line-2); }
+.imap-tool .seg button { display: inline-flex; gap: 6px; align-items: center; }
+.imap-tool .seg svg { width: 14px; height: 14px; }
+.imap-layers { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+.imap-lbl { font-size: 11px; text-transform: uppercase; letter-spacing: .08em; color: var(--faint); margin-right: 2px; }
+.imap-chip { border: 1px solid var(--line); background: var(--surface); border-radius: 999px; padding: 2px 10px 2px 8px; font-size: 12px; display: inline-flex; gap: 6px; align-items: center; color: var(--faint); }
+.imap-chip i { width: 14px; height: 3px; border-radius: 2px; background: var(--line); }
+.imap-chip[aria-pressed="true"] { color: var(--ink-2); border-color: color-mix(in srgb, var(--accent) 35%, var(--line)); }
+.imap-chip[aria-pressed="true"] i { background: var(--sw); }
+.imap-chip.prob i { width: 7px; height: 7px; border-radius: 50%; }
+.imap-chip.prob[aria-pressed="true"] { background: var(--bad-bg); border-color: color-mix(in srgb, var(--bad) 45%, transparent); color: var(--bad); }
+.imap-find { display: flex; align-items: center; gap: 6px; border: 1px solid var(--line); border-radius: 7px; padding: 3px 8px; background: var(--surface-2); margin-left: auto; }
+.imap-find svg { width: 13px; height: 13px; color: var(--faint); }
+.imap-find input { border: 0; background: transparent; outline: 0; font-size: 12.5px; width: 150px; }
+.imap-find:focus-within { border-color: var(--accent); }
+
+.imap-canvas { position: relative; height: 620px; overflow: hidden; border-radius: 0 0 10px 10px;
+  background: radial-gradient(circle, color-mix(in srgb, var(--line) 80%, transparent) 1px, transparent 1.3px) 0 0 / 20px 20px, var(--surface-2); }
+.imap.full { position: fixed; inset: 12px; z-index: 50; display: flex; flex-direction: column; box-shadow: 0 2px 4px rgba(0,0,0,.08), 0 16px 40px rgba(0,0,0,.18); }
+.imap.full .imap-canvas { flex: 1; height: auto; }
+.imap-svg { width: 100%; height: 100%; display: block; touch-action: none; cursor: grab; user-select: none; -webkit-user-select: none; }
+.imap-svg:active { cursor: grabbing; }
+.imap-state { position: absolute; left: 50%; top: 40%; transform: translateX(-50%); margin: 0; padding: 8px 14px; border-radius: 8px; background: var(--surface); border: 1px solid var(--line); font-size: 13px; color: var(--muted); display: flex; gap: 6px; align-items: center; }
+
+.imap-zoom { position: absolute; right: 12px; bottom: 12px; display: flex; flex-direction: column; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); overflow: hidden; }
+.imap-zoom button { border: 0; background: transparent; width: 30px; height: 28px; display: grid; place-items: center; color: var(--ink-2); border-bottom: 1px solid var(--line-2); }
+.imap-zoom button:last-child { border-bottom: 0; }
+.imap-zoom button:hover { background: var(--sunk); }
+.imap-zoom svg { width: 14px; height: 14px; }
+.imap-legend { position: absolute; left: 12px; bottom: 12px; display: flex; flex-wrap: wrap; gap: 4px 14px; align-items: center; max-width: calc(100% - 80px); padding: 6px 10px; border: 1px solid var(--line); border-radius: 8px; background: color-mix(in srgb, var(--surface) 92%, transparent); font-size: 11.5px; color: var(--muted); }
+.imap-legend span { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
+.imap-legend svg { width: 26px; height: 8px; overflow: visible; }
+.imap-hint { position: absolute; left: 50%; top: 12px; transform: translateX(-50%); background: var(--ink); color: var(--surface); font-size: 12px; padding: 4px 10px; border-radius: 6px; opacity: 0; transition: opacity .2s; pointer-events: none; }
+.imap-hint.on { opacity: .92; }
+.imap-tip { position: absolute; pointer-events: none; background: var(--ink); color: var(--surface); font-size: 12px; line-height: 1.4; padding: 6px 9px; border-radius: 7px; max-width: 280px; z-index: 3; }
+
+/* inspector */
+.imap-insp { position: absolute; top: 12px; right: 12px; bottom: 12px; width: 310px; background: var(--surface); border: 1px solid var(--line); border-radius: 10px; box-shadow: 0 2px 4px rgba(0,0,0,.06), 0 16px 40px rgba(0,0,0,.14); display: flex; flex-direction: column; overflow: hidden; z-index: 2; }
+.imap-insp .ihd { padding: 12px 14px 10px; border-bottom: 1px solid var(--line-2); display: grid; gap: 3px; position: relative; }
+.imap-insp .eb { font-size: 10.5px; text-transform: uppercase; letter-spacing: .09em; color: var(--faint); }
+.imap-insp h4 { margin: 0; font-family: var(--mono); font-size: 15px; font-weight: 600; padding-right: 28px; overflow-wrap: anywhere; }
+.imap-insp .pills { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 2px; align-items: center; }
+.imap-insp .x { position: absolute; right: 8px; top: 8px; border: 0; background: transparent; width: 26px; height: 26px; border-radius: 6px; color: var(--muted); display: grid; place-items: center; }
+.imap-insp .x:hover { background: var(--sunk); }
+.imap-insp .x svg { width: 14px; height: 14px; }
+.imap-insp .ibd { padding: 12px 14px 14px; overflow: auto; display: grid; gap: 14px; align-content: start; flex: 1; }
+.imap-insp h5 { margin: 0 0 5px; font-size: 10.5px; text-transform: uppercase; letter-spacing: .09em; color: var(--muted); font-weight: 500; }
+.imap-insp p { margin: 0; font-size: 12.5px; color: var(--ink-2); }
+.imap-insp .empty { color: var(--faint); font-size: 12px; }
+.imap-insp .kvs { display: grid; gap: 5px; }
+.imap-insp .kv { display: grid; grid-template-columns: 86px 1fr; gap: 8px; font-size: 12.5px; }
+.imap-insp .kv > span { color: var(--muted); }
+.imap-insp .kv > div { min-width: 0; overflow-wrap: anywhere; color: var(--ink-2); }
+.imap-insp .lk { border: 0; background: transparent; padding: 0; color: var(--accent); font-family: var(--mono); font-size: 12px; text-align: left; }
+.imap-insp .lk:hover { text-decoration: underline; }
+.imap-ends { display: inline-flex; flex-wrap: wrap; gap: 0 4px; }
+.imap-insp .nodes { display: flex; flex-wrap: wrap; gap: 4px; }
+.imap-insp .nodes .lk { background: var(--sunk); border-radius: 4px; padding: 0 6px; font-size: 11.5px; color: var(--ink-2); }
+.imap-insp .nodes .lk:hover { color: var(--accent); text-decoration: none; }
+.imap-insp .flows { display: grid; border: 1px solid var(--line-2); border-radius: 8px; overflow: hidden; }
+.imap-insp .fl { display: grid; grid-template-columns: 14px minmax(0, 1fr) auto; gap: 2px 8px; align-items: center; border: 0; border-bottom: 1px solid var(--line-2); background: var(--surface); padding: 6px 9px; text-align: left; font-size: 12px; }
+.imap-insp .fl:last-child { border-bottom: 0; }
+.imap-insp .fl:hover { background: var(--surface-2); }
+.imap-insp .fl .sw { width: 12px; height: 2px; border-radius: 1px; background: color-mix(in srgb, var(--accent) 65%, var(--line)); }
+.imap-insp .fl .sw.drop { background: repeating-linear-gradient(90deg, var(--bad) 0 4px, transparent 4px 6px); }
+.imap-insp .fl .sw.mount { background: repeating-linear-gradient(90deg, var(--c2) 0 2px, transparent 2px 4px); }
+.imap-insp .fl .fn { font-family: var(--mono); color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.imap-insp .fl .fs { grid-column: 2 / 4; color: var(--muted); font-size: 11.5px; margin-top: -2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.imap-insp .fl .fc { font-family: var(--mono); font-size: 11.5px; color: var(--ink-2); font-variant-numeric: tabular-nums; }
+.imap-insp .fl .fc.bad { color: var(--bad); }
+.imap-insp .fl .fc.warn { color: var(--warn); }
+.imap-insp .iacts { display: flex; gap: 6px; flex-wrap: wrap; padding: 10px 14px; border-top: 1px solid var(--line-2); background: var(--surface-2); }
+.imap-insp .iacts .btn { text-decoration: none; color: inherit; }
+.imap-insp .iacts .btn.pri { color: var(--accent-ink); }
+.imap-note { border-radius: 8px; padding: 8px 10px; font-size: 12.5px; color: var(--ink); }
+.imap-note.bad { background: var(--bad-bg); }
+.imap-note.warn { background: var(--warn-bg); }
+.imap-note.info { background: var(--accent-2); }
+.imap-meter { height: 6px; border-radius: 3px; background: var(--sunk); overflow: hidden; margin-top: 4px; }
+.imap-meter i { display: block; height: 100%; border-radius: 3px; background: var(--accent); }
+.imap-meter i.warn { background: var(--warn); }
+.imap-meter i.bad { background: var(--bad); }
+.imap-small { font-size: 11.5px; }
+
+/* the drawing */
+.imap-svg text { font-family: var(--sans); }
+.imap-it { cursor: pointer; transition: opacity .15s; }
+.imap-it .bg { fill: var(--surface); stroke: var(--line); stroke-width: 1; }
+.imap-it:hover .bg { stroke: var(--faint); }
+.imap-it:focus { outline: none; }
+.imap-it:focus-visible .bg { stroke: var(--accent); stroke-width: 2; }
+.imap-it .ic { fill: var(--sunk); }
+.imap-svg .icg { color: var(--muted); }
+.imap-svg .icf { color: var(--faint); }
+.imap-it.k-app .ic { fill: var(--accent-2); }
+.imap-it.k-app .icg { color: var(--accent); }
+.imap-it.k-volume .ic { fill: color-mix(in srgb, var(--c2) 14%, var(--surface)); }
+.imap-it.k-volume .icg { color: var(--c2); }
+.imap-it.k-net .icg { color: var(--accent); }
+.imap-it .nm { font-family: var(--mono); font-size: 11px; font-weight: 500; fill: var(--ink); }
+.imap-it .sb { font-size: 10.5px; fill: var(--muted); }
+.imap-it .fs { font-size: 9px; font-family: var(--mono); fill: var(--faint); }
+.imap-it .dot { fill: var(--ok); }
+.imap-it.s-warn .dot { fill: var(--warn); }
+.imap-it.s-bad .dot { fill: var(--bad); }
+.imap-it.s-info .dot { fill: var(--accent); }
+.imap-it.s-mute .dot { fill: var(--faint); }
+.imap-it.s-bad .bg { fill: var(--bad-bg); stroke: color-mix(in srgb, var(--bad) 50%, transparent); }
+.imap-it.s-bad .sb { fill: var(--bad); }
+.imap-it.s-warn .bg { stroke: color-mix(in srgb, var(--warn) 60%, transparent); }
+.imap-it.dashed .bg { stroke-dasharray: 4 3; }
+.imap-it.sel .bg { stroke: var(--accent); stroke-width: 2; }
+.imap-it .mb, .imap-box .mb { fill: var(--sunk); }
+.imap-it .mf { fill: var(--c2); }
+.imap-it.s-warn .mf { fill: var(--warn); }
+.imap-it.s-bad .mf { fill: var(--bad); }
+.imap-it.k-fw.closed .bg { stroke-dasharray: 3 3; fill: var(--surface-2); }
+.imap-it.k-fw.closed .nm { fill: var(--faint); }
+
+.imap-box .bx { fill: color-mix(in srgb, var(--surface) 70%, transparent); stroke: var(--line); }
+.imap-box .bl { font-size: 12px; font-weight: 600; fill: var(--ink-2); }
+.imap-box .bc { font-size: 11px; fill: var(--faint); }
+.imap-box .tg { cursor: pointer; }
+.imap-box .tg text { font-size: 11px; fill: var(--accent); font-weight: 500; }
+.imap-box .tg:hover text { text-decoration: underline; }
+.imap-box .tg:focus { outline: none; }
+.imap-box .tg:focus-visible rect { stroke: var(--accent); }
+.imap-box.k-server { cursor: pointer; }
+.imap-box.k-server .sx { fill: var(--surface); stroke: var(--line); }
+.imap-box.k-server:hover .sx { stroke: var(--faint); }
+.imap-box.k-server.sel .sx { stroke: var(--accent); stroke-width: 2; }
+.imap-box.k-server.s-bad .sx { stroke: color-mix(in srgb, var(--bad) 60%, transparent); }
+.imap-box.k-server .sh { stroke: var(--line-2); }
+.imap-box.k-server .snm { font-family: var(--mono); font-size: 12px; font-weight: 600; fill: var(--ink); }
+.imap-box.k-server .sty { font-size: 10.5px; fill: var(--muted); }
+.imap-box.k-server .mk { font-size: 9.5px; fill: var(--faint); letter-spacing: .06em; }
+.imap-box.k-server .mv { font-family: var(--mono); font-size: 10px; fill: var(--ink-2); }
+.imap-box.k-server .mf { fill: var(--accent); }
+.imap-box.k-fwband { cursor: pointer; }
+.imap-box.k-fwband .fb { fill: color-mix(in srgb, var(--surface) 50%, transparent); stroke: var(--faint); stroke-dasharray: 4 4; }
+.imap-box.k-fwband.sel .fb { stroke: var(--accent); stroke-dasharray: none; }
+.imap-box.k-fwband text { font-size: 10px; letter-spacing: .1em; fill: var(--muted); font-weight: 600; }
+
+.imap-e { transition: opacity .15s; }
+.imap-e .v { fill: none; stroke-width: 1.5; stroke-linecap: round; stroke: color-mix(in srgb, var(--accent) 55%, var(--line)); }
+.imap-e.k-mount .v { stroke: var(--c2); stroke-dasharray: 2 4; }
+.imap-e.k-drop .v { stroke: var(--bad); stroke-dasharray: 6 5; stroke-width: 1.7; }
+.imap-e.k-ssh .v, .imap-e.k-runs .v { stroke: var(--faint); stroke-dasharray: 3 4; }
+.imap-e.hl .v, .imap-e.sel .v { stroke-width: 2.2; }
+.imap-e .hit { fill: none; stroke: transparent; stroke-width: 12; cursor: pointer; }
+.imap-e .flow { fill: none; stroke: var(--accent); stroke-width: 2.8; stroke-linecap: round; stroke-dasharray: .1 16; animation: imap-flow var(--d, 2s) linear infinite; pointer-events: none; }
+.imap-e.k-drop .flow { stroke: var(--bad); stroke-dasharray: .1 11; animation-duration: 1.1s; }
+@keyframes imap-flow { to { stroke-dashoffset: -16.1; } }
+.imap-lbl { opacity: 0; transition: opacity .15s; pointer-events: none; }
+.imap-lbl rect { fill: var(--surface); stroke: var(--line); }
+.imap-lbl text { font-family: var(--mono); font-size: 10px; fill: var(--ink-2); }
+.imap-lbl.hl, .imap-lbl.k-drop { opacity: 1; }
+.imap-lbl.k-drop rect { fill: var(--bad-bg); stroke: color-mix(in srgb, var(--bad) 45%, transparent); }
+.imap-lbl.k-drop text { fill: var(--bad); font-weight: 600; }
+.imap-svg.focus .imap-it:not(.hl) { opacity: .22; }
+.imap-svg.focus .imap-e:not(.hl) { opacity: .08; }
+.imap-svg.focus .imap-lbl.k-drop:not(.hl) { opacity: .12; }
+
+@media (max-width: 760px) {
+  .imap-canvas { height: 480px; }
+  .imap-insp { left: 12px; width: auto; top: auto; max-height: 60%; }
+  .imap-find { margin-left: 0; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .imap-e .flow { animation: none; display: none; }
+  .imap-e, .imap-it, .imap-lbl, .imap-hint { transition: none; }
+}

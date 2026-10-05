@@ -5,6 +5,10 @@ import { api } from "../api";
 import { alertingUnavailable, attentionHeadline, attentionItems, type AttentionItem } from "../alerts";
 import type { Build } from "../builds";
 import { Icon } from "../components/Icon";
+import { InfraMap, type MapRequest } from "../components/InfraMap";
+import { LOCAL, useClusters } from "../clusters";
+import { attentionTarget, topologyApi, topologyKey } from "../topology";
+import { errorText } from "./Apps";
 import { jobs } from "../jobs";
 import { ago, workloads } from "../workloads";
 import { RouterLink, useFiringAlerts } from "./MonitoringAlerts";
@@ -21,6 +25,7 @@ const SHOWN = 6;
 export function Overview() {
   const version = useQuery({ queryKey: ["version"], queryFn: api.version, staleTime: Infinity });
   const attention = useAttention();
+  const map = useMap();
   const { title, detail } = attentionHeadline(attention.items);
   const worst = attention.items.some((i) => i.tone === "bad") ? "bad" : "warn";
   const alerts = attention.items.filter((i) => i.alert).length;
@@ -61,9 +66,39 @@ export function Overview() {
           <span className="s">Detected by the installer</span>
         </div>
       </div>
-      <NeedsAttention {...attention} items={[...attention.items, ...news]} />
+      <NeedsAttention {...attention} items={[...attention.items, ...news]} onMap={map.has} onShow={map.show} />
+      <InfraMap topology={map.q.data} loading={map.q.isPending} error={map.q.isError ? errorText(map.q.error) : undefined}
+        clusters={map.clusters} cluster={map.cluster} onCluster={map.setCluster} request={map.request} />
     </section>
   );
+}
+
+/** The map's cluster and data, and "Show on map" for Needs attention. */
+function useMap() {
+  const { clusters } = useClusters();
+  const names = clusters.filter((c) => c.connected).map((c) => c.name);
+  const [cluster, setCluster] = useState(LOCAL);
+  const q = useQuery({ queryKey: topologyKey(cluster), queryFn: () => topologyApi.get(cluster), refetchInterval: POLL, retry: false });
+  const [request, setRequest] = useState<MapRequest>();
+  const target = (i: AttentionItem) => attentionTarget(i.key, i.alert?.project, i.alert?.app);
+  const has = (i: AttentionItem) => {
+    const id = target(i);
+    if (!id || !q.data) return false;
+    const [kind, rest] = [id.slice(0, id.indexOf(":")), id.slice(id.indexOf(":") + 1)];
+    const [project, name] = rest.split("/");
+    const t = q.data;
+    switch (kind) {
+      case "app": return t.apps.some((a) => a.project === project && a.name === name);
+      case "job": return t.schedules.some((s) => s.project === project && s.name === name);
+      case "dom": return t.domains.some((d) => d.project === project && d.name === name);
+      default: return false;
+    }
+  };
+  const show = (i: AttentionItem) => {
+    const id = target(i);
+    if (id) setRequest((r) => ({ id, seq: (r?.seq ?? 0) + 1 }));
+  };
+  return { q, cluster, setCluster, clusters: names.length ? names : [LOCAL], request, has, show };
 }
 
 /** Firing alerts plus what the console knows on its own; each source may fail without hiding the others. */
@@ -97,7 +132,11 @@ function useAttention() {
   };
 }
 
-function NeedsAttention({ items, loading, alertingOff, failed }: { items: AttentionItem[]; loading: boolean; alertingOff: boolean; failed: string[] }) {
+function NeedsAttention({ items, loading, alertingOff, failed, onMap, onShow }: {
+  items: AttentionItem[]; loading: boolean; alertingOff: boolean; failed: string[];
+  /** The item is on the infrastructure map (below), which onShow selects it on. */
+  onMap: (i: AttentionItem) => boolean; onShow: (i: AttentionItem) => void;
+}) {
   const [all, setAll] = useState(false);
   const shown = all ? items : items.slice(0, SHOWN);
   return (
@@ -120,6 +159,7 @@ function NeedsAttention({ items, loading, alertingOff, failed }: { items: Attent
                 {i.detail && <p>{i.detail}</p>}
                 <div className="acts">
                   <RouterLink href={i.action.href} className="btn ghost sm">{i.action.label} →</RouterLink>
+                  {onMap(i) && <button type="button" className="btn ghost sm" onClick={() => onShow(i)}>Show on map →</button>}
                 </div>
               </div>
               {i.since && <span className="when" title={new Date(i.since).toLocaleString()}>{ago(i.since)}</span>}

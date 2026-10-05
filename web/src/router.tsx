@@ -127,7 +127,12 @@ const routeTree = root.addChildren([
         ...projectSearch(s), ...(typeof s.set === "string" && s.set ? { set: s.set } : {}),
       }),
     }),
-    createRoute({ getParentRoute: () => authed, path: "/network", component: Network }),
+    // ?tab=rules|firewall|domains opens that tab (the Overview's map links there).
+    createRoute({
+      getParentRoute: () => authed, path: "/network", component: Network,
+      validateSearch: (s: Record<string, unknown>): { tab?: "rules" | "firewall" | "domains" } =>
+        s.tab === "rules" || s.tab === "firewall" || s.tab === "domains" ? { tab: s.tab } : {},
+    }),
     // Access › Shell recordings (owners and admins); /access itself is Members.
     createRoute({ getParentRoute: () => authed, path: "/access/recordings", component: AccessRecordings, validateSearch: recordingsSearch }),
     createRoute({ getParentRoute: () => authed, path: "/settings", component: Settings }),

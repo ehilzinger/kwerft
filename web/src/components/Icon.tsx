@@ -19,6 +19,11 @@ const paths = {
   disk: <><ellipse cx="8" cy="4" rx="5.5" ry="2" /><path d="M2.5 4v8c0 1.1 2.5 2 5.5 2s5.5-.9 5.5-2V4M2.5 8c0 1.1 2.5 2 5.5 2s5.5-.9 5.5-2" /></>,
   play: <path d="M5 3.2v9.6L12.6 8z" />,
   gear: <><circle cx="8" cy="8" r="2.2" /><path d="M8 1.5v2M8 12.5v2M1.5 8h2M12.5 8h2M3.4 3.4l1.4 1.4M11.2 11.2l1.4 1.4M3.4 12.6l1.4-1.4M11.2 4.8l1.4-1.4" /></>,
+  search: <><circle cx="7" cy="7" r="4.5" /><path d="M10.5 10.5L14 14" /></>,
+  minus: <path d="M3 8h10" />,
+  fit: <path d="M2 6V2h4M10 2h4v4M14 10v4h-4M6 14H2v-4" />,
+  expand: <path d="M9.5 2H14v4.5M14 2L9 7M6.5 14H2V9.5M2 14l5-5" />,
+  x: <path d="M4 4l8 8M12 4l-8 8" />,
 } as const;
 
 export type IconName = keyof typeof paths;
