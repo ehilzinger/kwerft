@@ -3,7 +3,9 @@ package hetzner_test
 import (
 	"context"
 	"errors"
+	"net/http"
 	"net/netip"
+	"strings"
 	"testing"
 	"time"
 
@@ -221,5 +223,19 @@ func TestLoadBalancer(t *testing.T) {
 	}
 	if len(srv.LoadBalancers()) != 0 {
 		t.Error("not deleted")
+	}
+}
+
+// A 403 over a project limit is Hetzner's own message, not a rejected token.
+func TestForbiddenIsNotAlwaysTheToken(t *testing.T) {
+	srv := cloudFake(t)
+	srv.Handle("servers", func(s *hetznertest.Server, w http.ResponseWriter, r *http.Request, parts []string) {
+		hetznertest.WriteError(w, http.StatusForbidden, "resource_limit_exceeded", "server limit exceeded")
+	})
+	_, err := srv.Client().ServerSummaries(context.Background(), "")
+	var apiErr *hetzner.APIError
+	if errors.Is(err, hetzner.ErrTokenRejected) || !errors.As(err, &apiErr) || apiErr.Code != "resource_limit_exceeded" ||
+		!strings.Contains(err.Error(), "server limit exceeded") {
+		t.Fatalf("err = %v", err)
 	}
 }

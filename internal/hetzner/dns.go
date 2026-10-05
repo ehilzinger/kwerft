@@ -261,7 +261,13 @@ func (c *Client) do(ctx context.Context, method, path string, in, out any) error
 	case res.StatusCode == http.StatusUnauthorized:
 		return ErrTokenRejected
 	case res.StatusCode == http.StatusForbidden:
-		return errForbidden{}
+		// 403 is also how Hetzner refuses over a project's limits
+		// (resource_limit_exceeded …): only "forbidden" is the token's.
+		e := decodeAPIError(limited, res.StatusCode)
+		if e.Code == "" || e.Code == "forbidden" {
+			return errForbidden{}
+		}
+		return e
 	case res.StatusCode == http.StatusNotFound:
 		return ErrNotFound
 	case res.StatusCode == http.StatusTooManyRequests:
@@ -271,14 +277,7 @@ func (c *Client) do(ctx context.Context, method, path string, in, out any) error
 		}
 		return &RateLimitError{Reset: reset}
 	case res.StatusCode >= 300:
-		var e struct {
-			Error struct {
-				Code    string `json:"code"`
-				Message string `json:"message"`
-			} `json:"error"`
-		}
-		_ = json.NewDecoder(limited).Decode(&e)
-		return &APIError{Status: res.StatusCode, Code: e.Error.Code, Message: e.Error.Message}
+		return decodeAPIError(limited, res.StatusCode)
 	}
 	if out == nil {
 		return nil
@@ -287,4 +286,16 @@ func (c *Client) do(ctx context.Context, method, path string, in, out any) error
 		return fmt.Errorf("Hetzner API: %w", err)
 	}
 	return nil
+}
+
+// decodeAPIError reads Hetzner's {"error": {"code", "message"}}.
+func decodeAPIError(body io.Reader, status int) *APIError {
+	var e struct {
+		Error struct {
+			Code    string `json:"code"`
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	_ = json.NewDecoder(body).Decode(&e)
+	return &APIError{Status: status, Code: e.Error.Code, Message: e.Error.Message}
 }
