@@ -9,6 +9,8 @@ which publishes:
 | SBOM (SPDX) | next to the image in GHCR (`sha256-<digest>.sbom`) and on the GitHub Release |
 | Helm chart, version = appVersion = 0.2.0 | `oci://ghcr.io/ehilzinger/charts/kwerft` |
 | `install.sh` and `join.sh` stamped with 0.2.0, plus `SHA256SUMS` | the GitHub Release here, and the public install repository |
+| `manifest.json`: what the release pins and how to upgrade to it ([below](#the-release-manifest)) | the GitHub Release, and `v0.2.0/` in the install repository |
+| `NOTES.md` (the GitHub Release's notes) and `releases.json` (every release) | the install repository, where consoles discover updates |
 | GitHub Release with generated notes | this repository |
 | Signatures (opt-in) | cosign keyless, stored next to the image and chart |
 
@@ -19,12 +21,18 @@ The image, the chart and the install script are public too, so
 ## Cut a release
 
 1. Make sure `main` is green in CI and you are on the commit to release.
-2. Tag and push:
+2. Tag and push. Always an annotated tag (`-a`): its message can carry
+   hand-written notes and the [trailers](#upgrade-path-and-rollback-safety)
+   `Upgrade-From` and `Rollback-Safe`.
 
    ```bash
    git tag -a v0.2.0 -m "Kwerft v0.2.0"
    git push origin v0.2.0
    ```
+
+   The workflow first checks that the CRDs are still compatible with the
+   previous releases ([crdcompat](#crd-compatibility)) and stops before
+   building anything if they are not.
 
 3. Watch the `release` workflow in the Actions tab. It runs the CI checks
    first, then builds, then publishes. The run summary lists the image and
@@ -61,17 +69,116 @@ top-level `install.sh` keeps pointing at the latest stable release.
 - The image and chart locations are read from the pinned block of
   `install/install.sh` (`KWERFT_IMAGE_REPO`, `KWERFT_CHART_REPO`).
 
+### The release manifest
+
+Consoles learn about releases from the install repository
+(`docs/phase6-upgrades.md`, Releases): `releases.json` lists every release,
+`v<version>/manifest.json` describes one, `v<version>/NOTES.md` has its notes.
+`hack/release.sh manifest` writes the manifest after the image and chart are
+pushed; it is attached to the GitHub Release, and the `install-repo` job
+copies it from there.
+
+```json
+{
+  "version": "0.6.0",
+  "channel": "stable",
+  "published": "2026-11-02T10:00:00Z",
+  "upgradeFrom": "0.4.0",
+  "rollbackSafe": true,
+  "kubernetes": { "pinned": "v1.37.1+k3s1", "supported": ["1.36", "1.37"] },
+  "components": { "helm": "v4.3.0", "cilium": "1.20.2", "certManager": "v1.21.2", "traefikChart": "41.6.1", "…": "…" },
+  "image": "ghcr.io/ehilzinger/kwerft@sha256:…",
+  "chart": { "ref": "oci://ghcr.io/ehilzinger/charts/kwerft", "version": "0.6.0", "digest": "sha256:…" }
+}
+```
+
+| Field | Source |
+|---|---|
+| `channel` | `edge` for prereleases (`0.6.0-rc.1`), else `stable` |
+| `published` | the tag's date, in UTC |
+| `upgradeFrom`, `rollbackSafe` | the tag's trailers, or their defaults (next section) |
+| `kubernetes.pinned` | `K3S_VERSION` of the stamped `install.sh`; `supported` is its minor and the one before |
+| `components` | every other `*_VERSION` of the pinned block, in camelCase without the suffix: `CERT_MANAGER_VERSION` → `certManager`, `TRAEFIK_CHART_VERSION` → `traefikChart`. A new pin shows up by itself. |
+| `image`, `chart.digest` | the digests `push-image` and `push-chart` reported |
+
+`releases.json` is a JSON array of `{version, channel, published}`, newest
+version first (semver order: `0.6.0` above `0.6.0-rc.1` above `0.5.0`).
+`install-repo` adds or replaces the release's entry, so re-running the job is
+harmless. Releases before the manifest existed (up to 0.5.x) are not in it.
+`LATEST` and the top-level scripts work as before.
+
+### Upgrade path and rollback safety
+
+Two trailers in the tag message override the defaults; nothing is bumped in
+the source tree:
+
+| Trailer | Default | Meaning |
+|---|---|---|
+| `Upgrade-From: 0.5.0` | two minor lines back: `0.4.0` for 0.6.x | the oldest version a console may upgrade from directly. Older ones are offered the newest release that allows them first. |
+| `Rollback-Safe: no` | `yes` | a failed upgrade to this release also restores the console's database copy from before it (losing what changed in between), so the owner must accept that. Also lets incompatible CRD changes through. |
+
+```bash
+git tag -a v0.6.0 -F - <<'EOF'
+Kwerft v0.6.0
+
+Upgrades from the console. The store's audit table moves to a new schema.
+
+Upgrade-From: 0.5.0
+Rollback-Safe: no
+EOF
+```
+
+The paragraphs between the first line and the trailers go on top of the
+release notes. The default counts minor lines that have a release tag,
+prereleases included (a major release counts the lines before it), so the
+workflow checks out the full history. `hack/release.sh trailers 0.6.0` prints
+what a tag resolves to; the run's summary shows it too. A lightweight tag
+has no message: the defaults apply, with a warning in the log.
+
+### CRD compatibility
+
+An upgrade's rollback restores the Helm releases but never the CRDs, so the
+previous console must keep working with the new ones. Within a served
+version (`v1alpha1`), CRDs may only gain optional fields. `hack/crdcompat`
+compares `charts/kwerft/crds` with those of the newest stable release before
+this one and, if newer, the newest prerelease, and fails on:
+
+- a removed CRD, version, short name or status subresource; a changed scope or kind
+- a removed field (a rename is a removal; it suggests the new name)
+- a new required field, or an existing field becoming required (required
+  fields inside a *new* optional field are fine)
+- a narrowed enum (or an enum on a field that had none), a changed type,
+  lower maxima or higher minima, a new `pattern` or `format`, a map that no
+  longer takes arbitrary keys, `x-kubernetes-preserve-unknown-fields` or
+  int-or-string turned off
+
+New or changed CEL rules (`x-kubernetes-validations`) and changed patterns
+are printed as warnings: the tool cannot tell whether they reject old objects,
+so check by hand. The release workflow runs it before building; a tag with
+`Rollback-Safe: no` passes despite findings (they are still printed).
+
+```bash
+hack/release.sh crdcompat 0.6.0                 # as the workflow does
+go run ./hack/crdcompat OLD_DIR charts/kwerft/crds
+```
+
 ### Rehearse
 
 Nothing is published by either of these:
 
-- Locally, without Docker (needs Go, Node and Helm):
+- Locally, without Docker (needs Go, Node, Helm and jq):
 
   ```bash
   make release-dry-run RELEASE_VERSION=0.2.0
   ls dist/release   # install.sh join.sh SHA256SUMS kwerft-0.2.0.tgz
                     # kwerft-image-0.2.0-linux-{amd64,arm64}.tar sbom/ NOTES.md
+                    # manifest.json install-repo/
   ```
+
+  It also runs crdcompat, and writes `manifest.json` as a draft: the image
+  by tag and no chart digest, since nothing is pushed. `install-repo/` is a
+  scratch git repository showing what the install repository would get
+  (`v0.2.0/`, `releases.json`, `LATEST`), starting from an empty one.
 
   The image tarballs work with `install.sh --image ghcr.io/ehilzinger/kwerft:0.2.0
   --image-archive kwerft-image-0.2.0-linux-amd64.tar`.
@@ -127,9 +234,9 @@ gh repo create ehilzinger/kwerft-install --public --add-readme \
 ```
 
 It must have a `main` branch (`--add-readme` creates it). The workflow writes
-`v<version>/{install.sh,join.sh,SHA256SUMS}` for every release and, for stable
-releases, the same files plus `LATEST` at the top level. A README there could
-say:
+`v<version>/{install.sh,join.sh,SHA256SUMS,manifest.json,NOTES.md}` and
+updates `releases.json` for every release and, for stable releases, copies
+the three scripts plus `LATEST` to the top level. A README there could say:
 
 > `curl -fsSL https://kwerft.dev/install.sh | sudo bash -s -- --domain ops.example.com --yes`
 > installs the latest stable Kwerft; `v<version>/install.sh` installs a specific
@@ -164,11 +271,12 @@ before the first stable release.
    or Settings → Secrets and variables → Actions → New repository secret.
 
 If a release ran before the secret existed, publish its scripts afterwards:
-re-run the `install-repo` job of that run (it fetches the stamped scripts from
-the GitHub Release), or by hand:
+re-run the `install-repo` job of that run (it fetches the stamped scripts,
+`manifest.json` and the notes from the GitHub Release), or by hand:
 
 ```bash
-gh release download v0.2.0 -R ehilzinger/kwerft -p install.sh -p join.sh -p SHA256SUMS -D /tmp/kwerft-0.2.0
+gh release download v0.2.0 -R ehilzinger/kwerft -p install.sh -p join.sh -p SHA256SUMS -p manifest.json -D /tmp/kwerft-0.2.0
+gh release view v0.2.0 -R ehilzinger/kwerft --json body --jq .body >/tmp/kwerft-0.2.0/NOTES.md
 git clone https://github.com/ehilzinger/kwerft-install /tmp/kwerft-install
 hack/release.sh install-repo /tmp/kwerft-install 0.2.0 /tmp/kwerft-0.2.0
 git -C /tmp/kwerft-install push
@@ -339,6 +447,11 @@ below the recommended 8 GB: the platform takes about 2.5 GB and a Git build
 - The steps live in `hack/release.sh`; the workflow and `make release-dry-run`
   call the same commands. ko's SBOM covers the Go modules in the binary, not
   the files of the distroless base image.
+- The manifest, `releases.json` and the version arithmetic (semver order,
+  minor lines) use jq, which the runners have. `install/test/release.bats`
+  covers trailers, manifest, notes, install repository and the crdcompat
+  wrapper in scratch repositories; `hack/crdcompat` has Go tests with fixture
+  CRDs.
 - The `build` job has no write permissions; only `publish` (packages, contents),
   `sign` (OIDC) and `install-repo` (its own token) can write.
 
@@ -352,3 +465,11 @@ below the recommended 8 GB: the platform takes about 2.5 GB and a Git build
   `publish` job, or `--version` has a typo.
 - **raw.githubusercontent.com serves the old `install.sh`** — its CDN caches
   for a few minutes; the versioned path is never stale.
+- **"the CRDs changed incompatibly"** — the release stopped before building
+  anything. Make the change additive (keep the old field, add the new one,
+  migrate in a later release), or, if a rollback across it is acceptable,
+  delete the tag and tag again with `Rollback-Safe: no`
+  (`git tag -d v0.6.0 && git push origin :refs/tags/v0.6.0`).
+- **"lightweight tag" in the log** — the tag was made without `-a`, so its
+  trailers were not read and the defaults apply. Re-tag with `git tag -a` if
+  it should carry trailers.

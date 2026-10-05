@@ -1,0 +1,133 @@
+# A release that breaks ../old: spec.color renamed to spec.colour, the enum
+# of spec.mode narrowed. Gadgets are unchanged; Sprockets are new. Several
+# CRDs in one file, as `kubectl get crd -o yaml` would write them.
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: widgets.kwerft.dev
+spec:
+  group: kwerft.dev
+  names:
+    kind: Widget
+    listKind: WidgetList
+    plural: widgets
+    singular: widget
+    shortNames: [wg]
+  scope: Namespaced
+  versions:
+  - name: v1alpha1
+    served: true
+    storage: true
+    subresources:
+      status: {}
+    schema:
+      openAPIV3Schema:
+        type: object
+        properties:
+          apiVersion:
+            type: string
+          kind:
+            type: string
+          metadata:
+            type: object
+          spec:
+            type: object
+            required: [name]
+            properties:
+              name:
+                type: string
+                maxLength: 63
+              colour:
+                type: string
+              mode:
+                type: string
+                enum: [Fast]
+              size:
+                type: integer
+                minimum: 1
+                maximum: 10
+              tags:
+                type: array
+                maxItems: 8
+                items:
+                  type: string
+              labels:
+                type: object
+                additionalProperties:
+                  type: string
+              port:
+                x-kubernetes-int-or-string: true
+              limits:
+                type: object
+                properties:
+                  cpu:
+                    type: string
+              rules:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    host:
+                      type: string
+                    path:
+                      type: string
+          status:
+            type: object
+            properties:
+              phase:
+                type: string
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: gadgets.kwerft.dev
+spec:
+  group: kwerft.dev
+  names:
+    kind: Gadget
+    listKind: GadgetList
+    plural: gadgets
+    singular: gadget
+  scope: Cluster
+  versions:
+  - name: v1alpha1
+    served: true
+    storage: true
+    schema:
+      openAPIV3Schema:
+        type: object
+        properties:
+          spec:
+            type: object
+            properties:
+              owner:
+                type: string
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: sprockets.kwerft.dev
+spec:
+  group: kwerft.dev
+  names:
+    kind: Sprocket
+    listKind: SprocketList
+    plural: sprockets
+    singular: sprocket
+  scope: Cluster
+  versions:
+  - name: v1alpha1
+    served: true
+    storage: true
+    schema:
+      openAPIV3Schema:
+        type: object
+        required: [spec]
+        properties:
+          spec:
+            type: object
+            required: [teeth]
+            properties:
+              teeth:
+                type: integer

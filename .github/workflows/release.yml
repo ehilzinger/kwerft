@@ -48,15 +48,33 @@ jobs:
       PUBLISH: ${{ github.event_name == 'push' }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # every release tag: upgradeFrom's default and crdcompat's baselines
+      # checkout can leave the pushed tag as a lightweight copy; the annotated
+      # tag's message carries the trailers (Upgrade-From, Rollback-Safe).
+      - name: Fetch the annotated tag
+        if: github.event_name == 'push'
+        run: git fetch --force --no-tags origin "+refs/tags/$GITHUB_REF_NAME:refs/tags/$GITHUB_REF_NAME"
       - id: meta
         env:
           REF: ${{ github.event_name == 'push' && github.ref_name || inputs.version }}
         run: hack/release.sh meta "$REF" | tee -a "$GITHUB_OUTPUT"
       - id: pins
         run: sed -n -E 's/^(HELM_VERSION)="([^"]*)".*/\1=\2/p' install/install.sh | tee -a "$GITHUB_OUTPUT"
+      - id: trailers
+        name: Upgrade path (tag trailers or defaults)
+        env:
+          VERSION: ${{ steps.meta.outputs.version }}
+        run: hack/release.sh trailers "$VERSION" | tee -a "$GITHUB_OUTPUT"
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
+      # Before anything is built or published: CRDs are never rolled back, so
+      # they must stay compatible with the releases a rollback lands on.
+      - name: CRDs compatible with the previous releases
+        env:
+          VERSION: ${{ steps.meta.outputs.version }}
+        run: hack/release.sh crdcompat "$VERSION"
       - uses: actions/setup-node@v4
         with:
           node-version: lts/*
@@ -69,7 +87,13 @@ jobs:
       - run: hack/release.sh dry-run "$VERSION" dist/release
         env:
           VERSION: ${{ steps.meta.outputs.version }}
-      - run: cat dist/release/NOTES.md >>"$GITHUB_STEP_SUMMARY"
+      - run: |
+          {
+            cat dist/release/NOTES.md
+            printf '<details><summary>manifest.json (draft: the digests come with the push)</summary>\n\n```json\n'
+            cat dist/release/manifest.json
+            printf '```\n\n</details>\n'
+          } >>"$GITHUB_STEP_SUMMARY"
 
       - uses: docker/login-action@v3
         if: env.PUBLISH == 'true'
@@ -94,6 +118,13 @@ jobs:
         env:
           VERSION: ${{ steps.meta.outputs.version }}
         run: echo "ref=$(hack/release.sh push-chart "$VERSION" dist/release)" >>"$GITHUB_OUTPUT"
+      # The final manifest, with the digests just pushed. It travels to the
+      # install-repo job as a release asset, like the stamped scripts.
+      - name: Write manifest.json
+        if: env.PUBLISH == 'true'
+        env:
+          VERSION: ${{ steps.meta.outputs.version }}
+        run: hack/release.sh manifest "$VERSION" dist/release
       - name: Create the GitHub Release
         if: env.PUBLISH == 'true'
         env:
@@ -103,9 +134,12 @@ jobs:
           PRERELEASE: ${{ steps.meta.outputs.prerelease }}
           IMAGE: ${{ steps.image.outputs.ref }}
           CHART: ${{ steps.chart.outputs.ref }}
+          UPGRADE_FROM: ${{ steps.trailers.outputs.upgrade_from }}
+          ROLLBACK_SAFE: ${{ steps.trailers.outputs.rollback_safe }}
+          CHANNEL: ${{ steps.trailers.outputs.channel }}
         run: |
           hack/release.sh notes "$VERSION" dist/release >dist/release/NOTES.md
-          assets=(dist/release/install.sh dist/release/join.sh dist/release/SHA256SUMS
+          assets=(dist/release/install.sh dist/release/join.sh dist/release/SHA256SUMS dist/release/manifest.json
                   "dist/release/kwerft-$VERSION.tgz" dist/release/sbom/*.spdx.json)
           if gh release view "$TAG" >/dev/null 2>&1; then
             # A re-run of this workflow: refresh the files, keep the notes.
@@ -120,6 +154,7 @@ jobs:
             echo
             echo "- Image: \`$IMAGE\`"
             echo "- Chart: \`$CHART\`"
+            echo "- Upgrades from: $UPGRADE_FROM · rollback-safe: $ROLLBACK_SAFE · channel: $CHANNEL"
           } >>"$GITHUB_STEP_SUMMARY"
 
   # Opt-in (repository variable SIGN_RELEASES=true): keyless cosign signatures.
@@ -170,20 +205,28 @@ jobs:
           repository: ${{ env.INSTALL_REPO }}
           token: ${{ secrets.INSTALL_REPO_TOKEN }}
           path: install-repo
-      # The stamped scripts exactly as attached to the GitHub Release.
-      - name: Fetch the stamped scripts from the release
+      # The stamped scripts and manifest.json exactly as attached to the
+      # GitHub Release, and its notes (consoles read them from here).
+      - name: Fetch the stamped scripts, manifest and notes from the release
         if: env.HAS_TOKEN == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release download "$TAG" --pattern install.sh --pattern join.sh --pattern SHA256SUMS --dir dist/release
-      - name: Publish the stamped scripts
+        run: |
+          gh release download "$TAG" --pattern install.sh --pattern join.sh --pattern SHA256SUMS \
+            --pattern manifest.json --dir dist/release
+          gh release view "$TAG" --json body --jq .body >dist/release/NOTES.md
+      - name: Publish the stamped scripts, manifest.json, NOTES.md and releases.json
         if: env.HAS_TOKEN == 'true'
         run: |
           git -C install-repo config user.name "github-actions[bot]"
           git -C install-repo config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           hack/release.sh install-repo install-repo "$VERSION" dist/release
           git -C install-repo push origin HEAD:main
-          echo "Install script: https://raw.githubusercontent.com/$INSTALL_REPO/main/v$VERSION/install.sh" >>"$GITHUB_STEP_SUMMARY"
+          {
+            echo "Install script: https://raw.githubusercontent.com/$INSTALL_REPO/main/v$VERSION/install.sh"
+            echo
+            echo "Manifest: https://raw.githubusercontent.com/$INSTALL_REPO/main/v$VERSION/manifest.json"
+          } >>"$GITHUB_STEP_SUMMARY"
 
   # The published release on fresh Hetzner Cloud servers: a fresh install and
   # an upgrade from the stable release before it (e2e.yml, RELEASING.md).
