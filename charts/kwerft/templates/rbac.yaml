@@ -26,6 +26,15 @@ rules:
   - apiGroups: [""]
     resources: [pods/exec]
     verbs: [create]
+  # Draining nodes (node pools, "remove node"): evictions respect
+  # PodDisruptionBudgets; local volumes pinned to a node hold its removal.
+  # Join material: k3s bootstrap tokens are Secrets in kube-system (above).
+  - apiGroups: [""]
+    resources: [pods/eviction]
+    verbs: [create]
+  - apiGroups: [""]
+    resources: [persistentvolumes]
+    verbs: [get, list, watch]
   - apiGroups: [apps]
     resources: [deployments, statefulsets, replicasets]
     verbs: [get, list, watch, create, update, patch, delete]

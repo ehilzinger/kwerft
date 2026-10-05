@@ -15,6 +15,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
+	"github.com/ehilzinger/kwerft/internal/clusters"
 	"github.com/ehilzinger/kwerft/internal/git"
 	"github.com/ehilzinger/kwerft/internal/hubble"
 	"github.com/ehilzinger/kwerft/internal/kube"
@@ -95,6 +96,11 @@ type Config struct {
 	// dropped connections; see api_traffic.go); nil when Hubble is off.
 	Hubble *hubble.Aggregator
 
+	// Clusters reaches remote clusters' Kubernetes APIs (the agent tunnel);
+	// nil means the management cluster only. The nodes API uses it (W2);
+	// W4 makes the rest of the console cluster-aware on it.
+	Clusters clusters.Registry
+
 	// TrustedProxy reports whether a TCP peer is Traefik, whose X-Real-Ip
 	// names the client (see clientip.go); nil trusts loopback only.
 	TrustedProxy func(netip.Addr) bool
@@ -132,6 +138,9 @@ type Config struct {
 	// firewallHook lets tests set the client address the lock-out check
 	// sees; see api_firewall.go.
 	firewallHook func(*firewallAPI)
+	// nodesHook lets tests replace the Hetzner Cloud and Robot endpoints of
+	// the nodes API; see api_nodes.go.
+	nodesHook func(*nodesAPI)
 }
 
 // New returns an http.Server ready to ListenAndServe.

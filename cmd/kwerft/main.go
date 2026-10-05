@@ -27,6 +27,7 @@ import (
 
 	kwerftv1 "github.com/ehilzinger/kwerft/api/v1alpha1"
 	"github.com/ehilzinger/kwerft/internal/auth"
+	"github.com/ehilzinger/kwerft/internal/clusters"
 	"github.com/ehilzinger/kwerft/internal/controllers"
 	"github.com/ehilzinger/kwerft/internal/git"
 	"github.com/ehilzinger/kwerft/internal/hubble"
@@ -116,6 +117,7 @@ func main() {
 	go cleanSessions(ctx, log, st)
 
 	var tokens setup.TokenSource = setup.NewStaticTokenSource("", 0) // expired: no setup possible
+	var clusterRegistry clusters.Registry
 	var ready atomic.Bool
 	var mgr ctrl.Manager
 	// Cilium's flows, read in-cluster from the Hubble relay: the console's
@@ -144,6 +146,13 @@ func main() {
 		})
 		if err != nil {
 			log.Error("cannot start controllers", "err", err)
+			os.Exit(1)
+		}
+		// The management cluster only, until the agent tunnel (W3)
+		// provides a Registry of every cluster.
+		clusterRegistry = &clusters.Static{Config: mgr.GetConfig()}
+		if err := setupNodes(mgr, namespace, key, clusterRegistry, consoleURLFunc(*consoleDomain, activeConsoleDomain(mgr, *dev))); err != nil {
+			log.Error("cannot start the node pool reconcilers", "err", err)
 			os.Exit(1)
 		}
 		tokens = &setup.SecretTokenSource{Reader: mgr.GetAPIReader(), Writer: mgr.GetClient(), Namespace: namespace}
@@ -218,6 +227,7 @@ func main() {
 		Hubble:       flows,
 
 		ActiveConsoleDomain: activeConsoleDomain(mgr, *dev),
+		Clusters:            clusterRegistry,
 	})
 
 	go func() {
@@ -270,7 +280,7 @@ func waitUntilReady(ctx context.Context, log *slog.Logger, mgr ctrl.Manager, rea
 	types := []client.Object{&kwerftv1.Project{}, &kwerftv1.App{}, &kwerftv1.Domain{},
 		&kwerftv1.Volume{}, &kwerftv1.Task{}, &kwerftv1.Schedule{}, &kwerftv1.ConsoleSettings{},
 		&kwerftv1.GitConnection{}, &kwerftv1.Build{}, &kwerftv1.AlertRule{}, &kwerftv1.NotificationChannel{},
-		&kwerftv1.FirewallRule{}}
+		&kwerftv1.FirewallRule{}, &kwerftv1.NodePool{}}
 	for _, obj := range types {
 		for {
 			_, err := mgr.GetCache().GetInformer(ctx, obj, cache.BlockUntilSynced(false))

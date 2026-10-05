@@ -229,7 +229,7 @@ Work split and contracts: `docs/phase5.md`. Full multi-cluster; verification on 
 
 - [x] Types: `Cluster`, `NodePool`; `internal/clusters` (Registry); pluggable Hetzner fake; Clusters page skeleton
 - [ ] W1 Hetzner Cloud integrations: Cloud API token, Cloud Firewall sync, hcloud CCM + CSI, optional Load Balancer
-- [ ] W2 Node pools & HA: Cloud servers as nodes (join, replace, drain, delete), 3-node HA control plane, build pools scaling to zero, dedicated join and remove, vSwitch coupling (fakes)
+- [x] W2 Node pools & HA: Cloud servers as nodes (join, replace, drain, delete), 3-node HA control plane, build pools scaling to zero, dedicated join and remove, vSwitch coupling (fakes); signed join tokens, k3s bootstrap tokens for workers (`docs/phase5.md` › As built (W2); on real Cloud servers: with the exit criteria)
 - [ ] W3 Multi-cluster core: `kwerft agent` tunnel, Cluster reconciler (local, Hetzner Cloud, adopted), agent mode in the installer and chart
 - [ ] W4 Multi-cluster console: every API and page cluster-aware through the Registry, observability per cluster
 - [ ] W5 e2e install runs per release tag and nightly, sweeper

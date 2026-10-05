@@ -51,6 +51,29 @@ setup() {
   [[ "$output" != *"Kubernetes"* ]]
 }
 
+@test "node pools' cloud-init flags: --node-label and --node-taint are checked" {
+  run "$SCRIPT" --dry-run --platform cloud --join https://ops.example.com --token t --role worker \
+    --node-label kwerft.dev/pool=prod-builds --node-label tier=web --node-taint kwerft.dev/builds=true:NoSchedule --yes
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"Join cluster"* ]]
+  run "$SCRIPT" --dry-run --join https://ops.example.com --token t --node-label 'x=y: z'
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"--node-label must look like key=value"* ]]
+  run "$SCRIPT" --dry-run --join https://ops.example.com --token t --node-taint kwerft.dev/builds=true
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"--node-taint must look like"* ]]
+}
+
+@test "node_settings writes the platform label, node labels and taints" {
+  KWERFT_SOURCED=1 source "$SCRIPT"
+  PLATFORM=cloud
+  [ "$(node_settings)" = $'node-label:\n  - kwerft.dev/platform=cloud' ]
+  NODE_LABELS=(kwerft.dev/pool=prod-builds kwerft.dev/builds=true)
+  NODE_TAINTS=(kwerft.dev/builds=true:NoSchedule)
+  expected=$'node-label:\n  - kwerft.dev/platform=cloud\n  - kwerft.dev/pool=prod-builds\n  - kwerft.dev/builds=true\nnode-taint:\n  - kwerft.dev/builds=true:NoSchedule'
+  [ "$(node_settings)" = "$expected" ]
+}
+
 @test "config_get reads top-level scalars and ignores comments and quotes" {
   cfg="$BATS_TEST_TMPDIR/kwerft.yaml"
   printf 'domain: "ops.example.com"   # console\nemail: ops@example.com\nowner:\n  email: nested@example.com\n' >"$cfg"

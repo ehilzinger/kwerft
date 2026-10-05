@@ -99,6 +99,7 @@ func (a *api) register(mux *http.ServeMux) {
 	a.registerAlerts(mux)   // alerts, silences, alert rules, notification channels
 	a.registerTraffic(mux)  // traffic rules, dropped connections, isolation
 	a.registerFirewall(mux) // server firewall rules and their confirmation (api_firewall.go)
+	a.registerNodes(mux)    // node pools, nodes, join commands and the join endpoint (api_nodes.go)
 }
 
 // ---- setup -----------------------------------------------------------------

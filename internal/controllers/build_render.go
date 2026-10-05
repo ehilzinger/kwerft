@@ -73,6 +73,8 @@ type buildRun struct {
 	appArmor      string // Localhost profile for the build container; "" = unconfined
 	registryIP    string
 	timeout       time.Duration
+	// buildNodes: run on a builds pool's nodes (tainted kwerft.dev/builds).
+	buildNodes bool
 
 	contextDir string // relative to the repository root, "" for the root
 	dockerfile string // relative to contextDir
@@ -196,6 +198,14 @@ func (r *buildRun) job() *batchv1ac.JobApplyConfiguration {
 				WithMedium(corev1.StorageMediumMemory).WithSizeLimit(resource.MustParse("16Mi"))),
 			emptyDir("buildkit", buildkitStateSize),
 		)
+	if r.buildNodes {
+		spec.WithTolerations(corev1ac.Toleration().WithKey(LabelBuildNode).WithOperator(corev1.TolerationOpEqual).
+			WithValue("true").WithEffect(corev1.TaintEffectNoSchedule)).
+			WithAffinity(corev1ac.Affinity().WithNodeAffinity(corev1ac.NodeAffinity().
+				WithRequiredDuringSchedulingIgnoredDuringExecution(corev1ac.NodeSelector().WithNodeSelectorTerms(
+					corev1ac.NodeSelectorTerm().WithMatchExpressions(corev1ac.NodeSelectorRequirement().
+						WithKey(LabelBuildNode).WithOperator(corev1.NodeSelectorOpIn).WithValues("true"))))))
+	}
 	if r.builder() == "railpack" {
 		spec.WithInitContainers(r.prepareContainer())
 		spec.WithVolumes(emptyDir("tmp", "1Gi"))

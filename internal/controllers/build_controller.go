@@ -439,7 +439,29 @@ func (r *BuildReconciler) prepare(ctx context.Context, b *kwerftv1.Build) (*buil
 			"Waiting for the registry (Service " + builds.RegistryNamespace + "/" + builds.RegistryService + ")"}, nil
 	}
 	run.registryIP = svc.Spec.ClusterIP
+	if run.buildNodes, err = buildNodesExist(ctx, cmpReader(r.APIReader, r.Client)); err != nil {
+		return nil, nil, nil, err
+	}
 	return run, conn, nil, nil
+}
+
+// buildNodesExist reports whether the cluster has a builds node pool (the
+// node pool reconciler keeps BuildNodesConfigMap while one exists): builds
+// then run on its nodes only, which may first have to start.
+func buildNodesExist(ctx context.Context, c client.Reader) (bool, error) {
+	var cm corev1.ConfigMap
+	err := c.Get(ctx, client.ObjectKey{Namespace: GatewayNamespace, Name: BuildNodesConfigMap}, &cm)
+	if apierrors.IsNotFound(err) {
+		return false, nil
+	}
+	return err == nil, err
+}
+
+func cmpReader(a, b client.Reader) client.Reader {
+	if a != nil {
+		return a
+	}
+	return b
 }
 
 // checkConnection makes sure a project may use the connection for this
