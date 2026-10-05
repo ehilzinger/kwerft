@@ -103,6 +103,7 @@ readonly ETCD_SNAPSHOT_SCHEDULE_DEFAULT="0 */6 * * *"
 readonly ETCD_SNAPSHOT_RETENTION_DEFAULT=28
 readonly VELERO_NS="velero"
 readonly BSL_NAME="kwerft"                # the BackupStorageLocation the console keeps
+readonly BSL_ENCRYPTION_SECRET="kwerft-bsl-encryption"  # velero; sse-c-key: the SSE-C key derived from the recovery key
 readonly CONSOLE_UID=65532                # the chart's podSecurityContext.runAsUser
 RESTORE_TIMEOUT=${KWERFT_RESTORE_TIMEOUT:-14400}          # seconds a restore may take (volume data)
 RESTORE_SYNC_TIMEOUT=${KWERFT_RESTORE_SYNC_TIMEOUT:-600}  # seconds until Velero has read the bucket
@@ -714,9 +715,67 @@ parse_restore_args() {
 
 # recovery_key turns a recovery key as the console shows it (groups of four
 # base32 characters) into the Kopia repository password Velero uses: upper
-# case, without spaces, dashes or line breaks. Reads stdin.
+# case, without spaces, dashes or line breaks. Reads stdin: the file the
+# console offers for download (the key on a line of its own between lines
+# that say what it is for), or just the key, also split over lines.
 recovery_key() {
-  tr -d '[:space:]-' | tr '[:lower:]' '[:upper:]'
+  local all line norm
+  all=$(cat)
+  while IFS= read -r line; do
+    norm=$(printf '%s' "$line" | tr -d '[:space:]-' | tr '[:lower:]' '[:upper:]')
+    if [[ "$norm" =~ ^[A-Z2-7]{52}$ ]]; then printf '%s' "$norm"; return 0; fi
+  done <<<"$all"
+  printf '%s' "$all" | tr -d '[:space:]-' | tr '[:lower:]' '[:upper:]'
+}
+
+# sse_customer_key reads a repository password (recovery_key's output) on
+# stdin and prints, in hex, the 32-byte SSE-C key Velero's AWS plugin
+# encrypts every object in the bucket with: HKDF-SHA256 (RFC 5869) with
+# the password as secret, salt "kwerft.dev/recovery-key" and info
+# "kwerft.dev/backups/sse-c/v1" — exactly the console's
+# backups.SSECustomerKey (internal/backups/sse.go; both test one vector).
+# Shell builtins and sha256sum on pipes only: the key and the values
+# derived from it never appear in a command's arguments.
+sse_customer_key() {
+  local password prk
+  IFS= read -r password || [[ -n "$password" ]] || return 1
+  prk=$(hmac_sha256 "$(str_hex kwerft.dev/recovery-key)" "$(str_hex "$password")") || return 1
+  hmac_sha256 "$prk" "$(str_hex kwerft.dev/backups/sse-c/v1)01"
+}
+
+# str_hex <text> prints the bytes of an ASCII text in hex.
+str_hex() {
+  local s=$1 i out=""
+  for (( i = 0; i < ${#s}; i++ )); do printf -v out '%s%02x' "$out" "'${s:i:1}"; done
+  printf '%s' "$out"
+}
+
+# hex_escapes <hex> prints printf escapes (\xNN…) for those bytes.
+hex_escapes() {
+  local h=$1 i out=""
+  for (( i = 0; i < ${#h}; i += 2 )); do out+="\\x${h:i:2}"; done
+  printf '%s' "$out"
+}
+
+# hmac_sha256 <key hex> <message hex> prints the HMAC-SHA256 (RFC 2104) in
+# hex; the key is at most 64 bytes.
+hmac_sha256() {
+  local key=$1 msg ipad="" opad="" i b inner outer
+  [[ "$key" =~ ^([0-9a-f]{2})*$ && "$2" =~ ^([0-9a-f]{2})*$ ]] && (( ${#key} <= 128 )) || return 1
+  msg=$(hex_escapes "$2")
+  while (( ${#key} < 128 )); do key+="00"; done
+  for (( i = 0; i < 128; i += 2 )); do
+    b=$(( 16#${key:i:2} ))
+    printf -v ipad '%s\\x%02x' "$ipad" $(( b ^ 0x36 ))
+    printf -v opad '%s\\x%02x' "$opad" $(( b ^ 0x5c ))
+  done
+  # shellcheck disable=SC2059 # the formats are \xNN escapes built above
+  read -r inner _ < <({ printf "$ipad"; printf "$msg"; } | sha256sum)
+  [[ "$inner" =~ ^[0-9a-f]{64}$ ]] || return 1
+  # shellcheck disable=SC2059
+  read -r outer _ < <({ printf "$opad"; printf "$(hex_escapes "$inner")"; } | sha256sum)
+  [[ "$outer" =~ ^[0-9a-f]{64}$ ]] || return 1
+  printf '%s\n' "$outer"
 }
 
 # ---------------------------------------------------------------------------
@@ -1968,8 +2027,10 @@ EOF
 # k3s's own etcd snapshots, locally and to the backup bucket, and Velero for
 # backups of projects and of the console itself: file-system volume backups
 # with Kopia (encrypted with the recovery key), S3-compatible storage through
-# the AWS plugin. Velero starts without a BackupStorageLocation: the console
-# creates it from Settings › Backups. --lite leaves Velero out.
+# the AWS plugin, which has the storage encrypt every other object (the
+# backups' object tarballs) with an SSE-C key derived from the recovery key.
+# Velero starts without a BackupStorageLocation: the console creates it from
+# Settings › Backups. --lite leaves Velero out.
 # ---------------------------------------------------------------------------
 stage_backups() {
   local etcd
@@ -2058,9 +2119,16 @@ ensure_etcd_snapshots() {
 # velero_values: no BackupStorageLocation, VolumeSnapshotLocation or cloud
 # credentials (the console's location carries its own), the node agent on
 # every node (build pools are tainted) for file-system backups, and modest
-# requests for small servers.
+# requests for small servers. The AWS plugin reads the location's SSE-C key
+# (config.customerKeyEncryptionSecret: Secret kwerft-bsl-encryption) through
+# the API with Velero's service account, in VELERO_NAMESPACE (the chart
+# sets it): nothing is mounted, and a key written after Velero started
+# takes effect at the plugin's next use.
 velero_values() {
   cat <<EOF
+rbac:
+  create: true
+  clusterAdministrator: true
 image:
   repository: docker.io/velero/velero
   tag: $VELERO_VERSION
@@ -2167,18 +2235,27 @@ apply_kwerft_crds() {
 
 # write_restore_secrets writes, as the console does from Settings ›
 # Backups: velero/velero-repo-credentials (repository-password: the
-# recovery key, the Kopia repository's password) and
-# velero/kwerft-bsl-credentials (cloud: an AWS credentials file with the
-# access keys). The keys pass through a 0700 directory, never arguments or
-# the log.
+# recovery key, the Kopia repository's password),
+# velero/kwerft-bsl-encryption (sse-c-key: the 32-byte SSE-C key derived
+# from the recovery key, which every object Velero wrote is encrypted with)
+# and velero/kwerft-bsl-credentials (cloud: an AWS credentials file with
+# the access keys). The keys pass through a 0700 directory, never
+# arguments or the log.
 write_restore_secrets() {
-  local tmp ok=1
+  local tmp ok=1 sse
   tmp=$(mktemp -d "$HCLOUD_TMP_DIR/restore.XXXXXX")
   printf '[default]\naws_access_key_id=%s\naws_secret_access_key=%s\n' \
     "$(tr -d '[:space:]' <"$BACKUP_ACCESS_KEY_FILE")" "$(tr -d '[:space:]' <"$BACKUP_SECRET_KEY_FILE")" >"$tmp/cloud"
   recovery_key <"$BACKUP_RECOVERY_KEY_FILE" >"$tmp/password"
+  sse=$(sse_customer_key <"$tmp/password") && [[ "$sse" =~ ^[0-9a-f]{64}$ ]] || { rm -rf "$tmp"; die $EXIT_RESTORE "Could not derive the backups' encryption key from the recovery key"; }
+  # shellcheck disable=SC2059 # \xNN escapes of the key's bytes
+  printf "$(hex_escapes "$sse")" >"$tmp/sse-c-key"
   kc -n "$VELERO_NS" create secret generic velero-repo-credentials --from-file=repository-password="$tmp/password" \
     --dry-run=client -o yaml | kc apply -f - >>"$LOG_FILE" 2>&1 || ok=0
+  if (( ok )); then
+    kc -n "$VELERO_NS" create secret generic "$BSL_ENCRYPTION_SECRET" --from-file=sse-c-key="$tmp/sse-c-key" \
+      --dry-run=client -o yaml | kc apply -f - >>"$LOG_FILE" 2>&1 || ok=0
+  fi
   if (( ok )); then
     kc -n "$VELERO_NS" create secret generic kwerft-bsl-credentials --from-file=cloud="$tmp/cloud" \
       --dry-run=client -o yaml | kc apply -f - >>"$LOG_FILE" 2>&1 || ok=0
@@ -2211,6 +2288,7 @@ spec:
     s3Url: "$BACKUP_ENDPOINT"
     s3ForcePathStyle: "true"
     checksumAlgorithm: ""
+    customerKeyEncryptionSecret: "$BSL_ENCRYPTION_SECRET/sse-c-key"
 EOF
 }
 
@@ -2271,7 +2349,7 @@ pick_backup() {
   if [[ -z "$backup" ]]; then
     count=$(kc -n "$VELERO_NS" get backups.velero.io -o name 2>/dev/null | grep -c . || true)
     die $EXIT_RESTORE "There is no complete Cluster backup in $(bucket_url) (${count:-0} backups of any kind there)." \
-      "Check backups.prefix, or name a backup with --restore <name>."
+      "Check backups.prefix, or name a backup with --restore <name>. Backups are encrypted with a key derived from the recovery key: with another key file Velero lists none (its log: kubectl -n $VELERO_NS logs deploy/velero | grep -i sse)."
   fi
   echo "$backup"
 }

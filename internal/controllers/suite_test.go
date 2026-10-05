@@ -133,7 +133,7 @@ func TestMain(m *testing.M) {
 	// Backups (backup_test.go): the tests play Velero.
 	must((&BackupTargetReconciler{Client: mgr.GetClient(), APIReader: mgr.GetAPIReader(), ConsoleDomain: testConsoleDomain}).SetupWithManager(mgr))
 	must((&BackupPlanReconciler{Client: mgr.GetClient()}).SetupWithManager(mgr))
-	must((&RestoreReconciler{Client: mgr.GetClient()}).SetupWithManager(mgr))
+	must((&RestoreReconciler{Client: mgr.GetClient(), APIReader: mgr.GetAPIReader()}).SetupWithManager(mgr))
 	// Clusters (cluster_controller_test.go): agents come and go through a fake tunnel.
 	must((&ClusterReconciler{Client: mgr.GetClient(), APIReader: mgr.GetAPIReader(), Tunnel: testTunnel, Remote: testTunnel.remote,
 		Namespace: GatewayNamespace, ConsoleDomain: testConsoleDomain, Resync: 500 * time.Millisecond,

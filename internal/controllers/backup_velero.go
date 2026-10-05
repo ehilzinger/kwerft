@@ -53,6 +53,14 @@ const (
 	// password (key "repository-password"): the recovery key.
 	RepoPasswordSecret    = "velero-repo-credentials"
 	RepoPasswordSecretKey = "repository-password"
+	// BackupEncryptionSecret holds the SSE-C key Velero's AWS plugin
+	// encrypts every object it writes with (key "sse-c-key": the 32 bytes
+	// backups.SSECustomerKey derives from the recovery key), in the velero
+	// namespace, which no backup includes. The location names it in
+	// config.customerKeyEncryptionSecret ("<secret>/<key>"; the plugin
+	// reads it through the API at every use).
+	BackupEncryptionSecret    = "kwerft-bsl-encryption"
+	BackupEncryptionSecretKey = "sse-c-key"
 	// EtcdS3Secret is k3s's etcd snapshot S3 configuration
 	// (--etcd-s3-config-secret, which install.sh sets), in kube-system.
 	EtcdS3Secret    = "kwerft-etcd-s3"

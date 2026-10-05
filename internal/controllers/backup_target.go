@@ -35,7 +35,9 @@ import (
 // The backup target: ConsoleSettings.spec.backups with the access keys
 // (kwerft-backup-credentials) and the recovery key (kwerft-backup-key)
 // become, in the namespace velero, the Secret kwerft-bsl-credentials, the
-// Kopia repository password velero-repo-credentials and the default
+// Kopia repository password velero-repo-credentials, the SSE-C key
+// kwerft-bsl-encryption (derived from the recovery key: everything Velero
+// writes to the bucket is encrypted) and the default
 // BackupStorageLocation "kwerft" (prefix <prefix>/velero); with etcd
 // snapshots on, also k3s's S3 configuration kube-system/kwerft-etcd-s3
 // (folder <prefix>/etcd). status.backups reports the location's state.
@@ -138,12 +140,16 @@ func (r *BackupTargetReconciler) Reconcile(ctx context.Context, _ ctrl.Request) 
 		return ctrl.Result{RequeueAfter: backupTargetResync}, r.report(ctx, &s, st)
 	}
 	password, err := backups.RepositoryPassword(key)
+	var sseKey []byte
+	if err == nil {
+		sseKey, err = backups.SSECustomerKey(key)
+	}
 	if err != nil {
 		st.State, st.Message = "Error", "The stored recovery key is not one Kwerft made (52 letters and digits). Enter the key of earlier backups under Settings › Backups."
 		return ctrl.Result{RequeueAfter: backupTargetResync}, r.report(ctx, &s, st)
 	}
 	prefix := BackupPrefix(b, ConsoleHost(ctx, r.Client, r.ConsoleDomain))
-	after, err := r.applyVelero(ctx, b, prefix, access, secret, password, st)
+	after, err := r.applyVelero(ctx, b, prefix, access, secret, password, sseKey, st)
 	if err != nil {
 		return ctrl.Result{}, err
 	}
@@ -232,7 +238,7 @@ func credentialsFile(access, secret string) string {
 }
 
 func (r *BackupTargetReconciler) applyVelero(ctx context.Context, b *kwerftv1.BackupSettings, prefix, access, secret, password string,
-	st *kwerftv1.BackupsStatus) (time.Duration, error) {
+	sseKey []byte, st *kwerftv1.BackupsStatus) (time.Duration, error) {
 	noVelero := func() (time.Duration, error) {
 		st.State, st.Message = "Error", "Velero is not installed: re-run the installer (stage Backups; --lite leaves it out)."
 		return time.Minute, nil
@@ -247,6 +253,12 @@ func (r *BackupTargetReconciler) applyVelero(ctx context.Context, b *kwerftv1.Ba
 		// location, and only after this Secret. Its other keys stay.
 		corev1ac.Secret(RepoPasswordSecret, VeleroNamespace).
 			WithData(map[string][]byte{RepoPasswordSecretKey: []byte(password)}),
+		// Before the location: the plugin refuses a location whose key it
+		// cannot read, and must never write an object without it.
+		corev1ac.Secret(BackupEncryptionSecret, VeleroNamespace).
+			WithLabels(map[string]string{LabelManagedBy: ManagedByKwerft}).
+			WithType(corev1.SecretTypeOpaque).
+			WithData(map[string][]byte{BackupEncryptionSecretKey: sseKey}),
 	}
 	for _, sec := range secrets {
 		err := apply(ctx, r.Client, sec)
@@ -272,6 +284,10 @@ func (r *BackupTargetReconciler) applyVelero(ctx context.Context, b *kwerftv1.Ba
 			// S3-compatible stores (Hetzner's among them) reject the AWS
 			// SDK's default CRC32 checksums.
 			"checksumAlgorithm": "",
+			// Every object Velero writes (the backups' object tarballs
+			// with all Secrets, logs, lists) is encrypted by the storage
+			// with the key derived from the recovery key (SSE-C).
+			"customerKeyEncryptionSecret": BackupEncryptionSecret + "/" + BackupEncryptionSecretKey,
 		},
 		"credential": map[string]any{"name": BackupLocationSecret, "key": BackupLocationSecretKey},
 	}

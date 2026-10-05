@@ -1849,6 +1849,54 @@ restore_config() {
   KWERFT_SOURCED=1 source "$SCRIPT"
   [ "$(printf '%s\n' "$RECOVERY_KEY_SHOWN" | recovery_key)" = "$RECOVERY_KEY_PASSWORD" ]
   [ "$(printf 'abcd efgh\nijkl\n' | recovery_key)" = "ABCDEFGHIJKL" ]
+  # The file Settings › Backups offers for download (web/src/backups.ts
+  # recoveryKeyFile): the key on its own line among others.
+  printf 'Kwerft recovery key\n\n%s\n\nConsole: ops.example.com\nCreated: 2026-10-05T12:00:00.000Z\n\nBackups of this console cannot be read without this key.\n' \
+    "$(tr '[:lower:]' '[:upper:]' <<<"$RECOVERY_KEY_SHOWN")" >"$BATS_TEST_TMPDIR/download.txt"
+  [ "$(recovery_key <"$BATS_TEST_TMPDIR/download.txt")" = "$RECOVERY_KEY_PASSWORD" ]
+  [ "$(recovery_key <"$BATS_TEST_TMPDIR/download.txt" | sse_customer_key)" = "be0a7fb9dc10ee8cdbe36ee51a34a723ea6b6ab9c6d87aa824d051b73e4d7e50" ]
+  # No line break at the end: it is the repository password as it is.
+  [ "$(printf '%s\n' "$RECOVERY_KEY_SHOWN" | recovery_key | wc -c | tr -d ' ')" = "52" ]
+}
+
+# The SSE-C key of RECOVERY_KEY_SHOWN: the same vector as the console's
+# TestSSECustomerKey (internal/backups), so --restore reads what the
+# console's backups were encrypted with.
+SSE_KEY_HEX="be0a7fb9dc10ee8cdbe36ee51a34a723ea6b6ab9c6d87aa824d051b73e4d7e50"
+
+@test "sse_customer_key: the console's vector, from the key file as the owner keeps it" {
+  KWERFT_SOURCED=1 source "$SCRIPT"
+  [ "$(printf '%s\n' "$RECOVERY_KEY_SHOWN" | recovery_key | sse_customer_key)" = "$SSE_KEY_HEX" ]
+  [ "$(printf '%s' "$RECOVERY_KEY_PASSWORD" | sse_customer_key)" = "$SSE_KEY_HEX" ]
+  # Another key, another SSE-C key.
+  [ "$(printf 'BBCDEFGHIJKLMNOPQRSTUVWXYZ234567ABCDEFGHIJKLMNOPQRST' | sse_customer_key)" != "$SSE_KEY_HEX" ]
+}
+
+@test "hmac_sha256 and HKDF: RFC 4231 and RFC 5869 test vectors" {
+  KWERFT_SOURCED=1 source "$SCRIPT"
+  # RFC 4231 test cases 1 and 2.
+  [ "$(hmac_sha256 0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b "$(str_hex "Hi There")")" = \
+    "b0344c61d8db38535ca8afceaf0bf12b881dc200c9833da726e9376c2e32cff7" ]
+  [ "$(hmac_sha256 "$(str_hex Jefe)" "$(str_hex "what do ya want for nothing?")")" = \
+    "5bdcc146bf60754e6a042426089575c75a003f089d2739839dec58b964ec3843" ]
+  # RFC 5869 test case 1: extract, then the first block of expand. The PRK
+  # holds a byte 0x36, which makes a NUL in the inner pad.
+  prk=$(hmac_sha256 000102030405060708090a0b0c 0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b)
+  [ "$prk" = "077709362c2e32df0ddc3f0dc47bba6390b6c73bb50f9c3122ec844ad7c2b3e5" ]
+  [ "$(hmac_sha256 "$prk" f0f1f2f3f4f5f6f7f8f901)" = "3cb25f25faacd57a90434f64d0362f2a2d2d0a90cf1a5a4c5db02d56ecc4c5bf" ]
+  # Not hex, or a key over 64 bytes: refused.
+  run hmac_sha256 xyz 00
+  [ "$status" -ne 0 ]
+  run hmac_sha256 "$(printf '%0130d' 0)" 00
+  [ "$status" -ne 0 ]
+}
+
+@test "sse_customer_key agrees with openssl's HKDF" {
+  command -v openssl >/dev/null && openssl kdf -help >/dev/null 2>&1 || skip "no openssl 3"
+  KWERFT_SOURCED=1 source "$SCRIPT"
+  want=$(openssl kdf -keylen 32 -kdfopt digest:SHA256 -kdfopt "key:$RECOVERY_KEY_PASSWORD" \
+    -kdfopt salt:kwerft.dev/recovery-key -kdfopt info:kwerft.dev/backups/sse-c/v1 HKDF | tr -d ':\n' | tr '[:upper:]' '[:lower:]')
+  [ "$want" = "$SSE_KEY_HEX" ]
 }
 
 # etcd snapshots: the k3s config and its drop-in in the test directory,
@@ -1960,6 +2008,11 @@ etcd_env() {
   [[ "$output" == *"defaultBackupStorageLocation: kwerft"* ]]
   # The node agent runs on tainted build nodes too.
   [[ "$output" == *"- operator: Exists"* ]]
+  # The AWS plugin reads the SSE-C key Secret with Velero's own account;
+  # nothing is mounted for it.
+  [[ "$output" == *$'rbac:\n  create: true\n  clusterAdministrator: true'* ]]
+  [[ "$output" != *"customerKeyEncryptionFile"* ]]
+  [[ "$output" != *"extraVolumes"* ]]
 }
 
 backups_env() {
@@ -2015,7 +2068,11 @@ restore_env() {
     case "$a" in
       *"create secret generic"*)
         for arg in "$@"; do
-          if [[ "$arg" == --from-file=*=* ]]; then
+          if [[ "$arg" == --from-file=sse-c-key=* ]]; then
+            # 32 raw bytes: logged in hex.
+            printf '%s sse-c-key=%s (%s bytes)\n' "$(sed -n 's/.*generic \([^ ]*\).*/\1/p' <<<"$a")" \
+              "$(od -An -tx1 "${arg#*=*=}" | tr -d ' \n')" "$(wc -c <"${arg#*=*=}" | tr -d ' ')" >>"$SECRETS_LOG"
+          elif [[ "$arg" == --from-file=*=* ]]; then
             arg=${arg#--from-file=}
             printf '%s %s=%s\n' "$(sed -n 's/.*generic \([^ ]*\).*/\1/p' <<<"$a")" "${arg%%=*}" "$(cat "${arg#*=}")" >>"$SECRETS_LOG"
           fi
@@ -2066,10 +2123,17 @@ restore_env() {
   grep -qx "aws_access_key_id=AKIA-ACCESS" "$SECRETS_LOG"
   grep -qx "aws_secret_access_key=SECRET-KEY-VALUE" "$SECRETS_LOG"
   [ "$(grep -n velero-repo-credentials "$SECRETS_LOG" | cut -d: -f1)" -lt "$(grep -n kwerft-bsl-credentials "$SECRETS_LOG" | cut -d: -f1)" ]
+  # The SSE-C key the console derives (the same vector), as 32 raw bytes,
+  # before the location exists.
+  grep -qx "kwerft-bsl-encryption sse-c-key=$SSE_KEY_HEX (32 bytes)" "$SECRETS_LOG"
+  [ "$(grep -n kwerft-bsl-encryption "$SECRETS_LOG" | cut -d: -f1)" -lt "$(grep -n kwerft-bsl-credentials "$SECRETS_LOG" | cut -d: -f1)" ]
+  [ "$(grep -n 'create secret generic kwerft-bsl-encryption' "$KC_LOG" | cut -d: -f1)" -lt "$(grep -n 'kind: BackupStorageLocation' "$KC_LOG" | cut -d: -f1)" ]
   # Keys never in the log or kubectl's arguments; the temporary files are gone.
   absent "SECRET-KEY-VALUE" "$LOG_FILE"
   absent "SECRET-KEY-VALUE" "$KC_LOG"
   absent "$RECOVERY_KEY_PASSWORD" "$KC_LOG"
+  absent "$SSE_KEY_HEX" "$KC_LOG"
+  absent "$SSE_KEY_HEX" "$LOG_FILE"
   [ -z "$(ls "$HCLOUD_TMP_DIR")" ]
 
   # The location: read-only while restoring, then the console's.
@@ -2077,6 +2141,7 @@ restore_env() {
   grep -q 'prefix: "ops.example.com/velero"' "$KC_LOG"
   grep -q 's3Url: "https://fsn1.your-objectstorage.com"' "$KC_LOG"
   grep -q 'region: "fsn1"' "$KC_LOG"
+  grep -qF 'customerKeyEncryptionSecret: "kwerft-bsl-encryption/sse-c-key"' "$KC_LOG"
   grep -qF 'patch backupstoragelocations.velero.io kwerft --type merge -p {"spec":{"accessMode":"ReadWrite"}}' "$KC_LOG"
 
   # The restore.
@@ -2142,6 +2207,7 @@ restore_env() {
   run pick_backup
   [ "$status" -eq 60 ]
   [[ "$output" == *"no complete Cluster backup in s3://acme-kwerft/ops.example.com/velero at https://fsn1.your-objectstorage.com (1 backups of any kind there)"* ]]
+  [[ "$output" == *"encrypted with a key derived from the recovery key"* ]]
 }
 
 @test "wait_backup_sync: an unreadable bucket exits 60 with Velero's reason" {
