@@ -1009,6 +1009,15 @@ of the default, to watch:
   `internal/server/dns_clusters_test.go` (two-cluster envtest: Domains list,
   remote settings view, the DNS-01 guard).
 
+**Verified 2026-10-05** on `kwerft-dedi-1`: the hatchure `edge` app got
+`router-next.apps.kwerft.dev`; the agent cluster's Domain had a listener at
+once, the console's record (Managed, `65.108.43.91`) followed within a
+minute, the HTTP-01 certificate about a minute after that, and the name
+answered over HTTPS from the dedicated server while other names under
+`apps.kwerft.dev` stayed on the console. Hetzner's anycast nameservers took
+up to a few minutes to agree; a resolver that had cached the wildcard's
+answer kept it for its TTL (300 s).
+
 **Trying it on the real setup** (with the user's go; one certificate for
 the new name):
 1. Deploy the console (`make web && make dev-server HOST=root@46.224.139.73`)
