@@ -36,3 +36,21 @@ const AnnotationResumeAutoPatch = "kwerft.dev/resume-autopatch"
 // LabelInstaller marks the node the installer ran on (install.sh), where
 // /var/lib/kwerft/stages lives; upgrade runners are scheduled there.
 const LabelInstaller = "kwerft.dev/installer"
+
+// AnnotationHold on an Upgrade keeps it Queued with the value as its
+// message, without holding other Upgrades behind it. The console sets it
+// on agent clusters' Upgrades of an "Upgrade all" (they wait for the
+// console's own upgrade and for their turn) and removes it to start one.
+const AnnotationHold = "kwerft.dev/hold"
+
+// LabelFleet groups the agent clusters' Upgrades of one "Upgrade all": the
+// console starts them one after another (internal/upgrades/agents.go).
+const LabelFleet = "kwerft.dev/fleet"
+
+// AnnotationFleetOrder is an Upgrade's place in its fleet (0, 1, …).
+const AnnotationFleetOrder = "kwerft.dev/fleet-order"
+
+// AnnotationAfterUpgrade names the console's own Upgrade that a fleet waits
+// for: its members start only after it Succeeded and are cancelled when it
+// ended otherwise.
+const AnnotationAfterUpgrade = "kwerft.dev/after-upgrade"

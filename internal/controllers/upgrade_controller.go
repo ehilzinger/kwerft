@@ -49,6 +49,11 @@ type UpgradeReconciler struct {
 	DataDir string
 	// RunnerImage returns the running console image pinned by digest.
 	RunnerImage func(ctx context.Context) (string, error)
+	// KubernetesRunnerImage is the runner's image for a Kubernetes
+	// upgrade's etcd snapshot; nil means RunnerImage. Unlike a Kwerft
+	// upgrade, which a development install refuses, it may fall back to
+	// the image as the Deployment names it (an imported dev image).
+	KubernetesRunnerImage func(ctx context.Context) (string, error)
 	// InstallBaseURL is passed to the runner (empty: the public install
 	// repository).
 	InstallBaseURL string
@@ -170,6 +175,11 @@ func (r *UpgradeReconciler) reconcile(ctx context.Context, u *kwerftv1.Upgrade) 
 			r.fail(u, "Preflight", "Kubernetes upgrades are not available in this release.")
 			return ctrl.Result{}, nil
 		}
+		if p == kwerftv1.UpgradePreflight {
+			if res, stop := r.beforePreflight(ctx, u); stop {
+				return res, nil
+			}
+		}
 		return r.Kubernetes.Reconcile(ctx, u)
 	case p == kwerftv1.UpgradePreflight:
 		return r.preflight(ctx, u)
@@ -187,6 +197,12 @@ func (r *UpgradeReconciler) queue(ctx context.Context, u *kwerftv1.Upgrade) (ctr
 		r.cancel(u, by)
 		return ctrl.Result{}, nil
 	}
+	// Held (an agent cluster's turn in an "Upgrade all"): the console
+	// removes the annotation when it is this one's turn.
+	if hold := u.Annotations[kwerftv1.AnnotationHold]; hold != "" {
+		r.wait(u, hold)
+		return ctrl.Result{}, nil
+	}
 	var list kwerftv1.UpgradeList
 	if err := r.APIReader.List(ctx, &list); err != nil {
 		return ctrl.Result{}, err
@@ -199,7 +215,8 @@ func (r *UpgradeReconciler) queue(ctx context.Context, u *kwerftv1.Upgrade) (ctr
 			r.wait(u, "Waiting for "+o.Name+" to finish.")
 			return ctrl.Result{}, nil
 		}
-		if !upgrades.Finished(o.Status.Phase) && o.DeletionTimestamp.IsZero() && olderUpgrade(&o, u) {
+		// A held one is not in line yet: it does not hold the others.
+		if !upgrades.Finished(o.Status.Phase) && o.DeletionTimestamp.IsZero() && o.Annotations[kwerftv1.AnnotationHold] == "" && olderUpgrade(&o, u) {
 			r.wait(u, "Waiting behind "+o.Name+".")
 			return ctrl.Result{}, nil
 		}
@@ -299,17 +316,27 @@ func (r *UpgradeReconciler) from(ctx context.Context) *kwerftv1.UpgradeVersions 
 	return v
 }
 
-func (r *UpgradeReconciler) preflight(ctx context.Context, u *kwerftv1.Upgrade) (ctrl.Result, error) {
+// beforePreflight handles what ends or delays an Upgrade in Preflight
+// before its checks run, for either component: a cancel, and an
+// auto-update whose window closed.
+func (r *UpgradeReconciler) beforePreflight(ctx context.Context, u *kwerftv1.Upgrade) (ctrl.Result, bool) {
 	if by := u.Annotations[kwerftv1.AnnotationCancelRequested]; by != "" {
 		r.cancel(u, by)
-		return ctrl.Result{}, nil
+		return ctrl.Result{}, true
 	}
 	if auto(u) {
 		if open, _, err := r.window(ctx); err != nil || !open {
 			// Not started within the window: wait for the next one.
 			r.wait(u, "Waiting for the next maintenance window.")
-			return ctrl.Result{Requeue: true}, nil
+			return ctrl.Result{Requeue: true}, true
 		}
+	}
+	return ctrl.Result{}, false
+}
+
+func (r *UpgradeReconciler) preflight(ctx context.Context, u *kwerftv1.Upgrade) (ctrl.Result, error) {
+	if res, stop := r.beforePreflight(ctx, u); stop {
+		return res, nil
 	}
 	if r.Checks == nil {
 		r.fail(u, "Preflight", "Kwerft upgrades are not available here.")
@@ -367,24 +394,11 @@ func (r *UpgradeReconciler) observeRunner(ctx context.Context, u *kwerftv1.Upgra
 		if u.Spec.Component != kwerftv1.UpgradeKwerft || upgrades.Finished(u.Status.Phase) {
 			return ctrl.Result{}, nil
 		}
-		if r.RunnerImage == nil {
-			r.fail(u, "Runner", "The upgrade runner's image is unknown.")
-			return ctrl.Result{}, nil
-		}
-		image, err := r.RunnerImage(ctx)
-		if err != nil {
-			if u.Status.Phase == kwerftv1.UpgradeBackingUp {
-				r.fail(u, "Runner", "Cannot pin the console image for the runner: "+err.Error()+". Nothing was changed.")
-				return ctrl.Result{}, nil
-			}
-			return ctrl.Result{}, err
-		}
 		// A runner Job missing later (deleted by hand) is created again:
 		// the runner resumes from the status.
-		if err := r.Create(ctx, r.runnerJob(u, image)); err != nil && !apierrors.IsAlreadyExists(err) {
+		if err := r.createRunner(ctx, u); err != nil {
 			return ctrl.Result{}, err
 		}
-		log.FromContext(ctx).Info("upgrade runner started", "upgrade", u.Name, "image", image)
 		return ctrl.Result{RequeueAfter: time.Minute}, nil
 	case err != nil:
 		return ctrl.Result{}, err
@@ -402,8 +416,57 @@ func (r *UpgradeReconciler) observeRunner(ctx context.Context, u *kwerftv1.Upgra
 	return ctrl.Result{RequeueAfter: time.Minute}, nil
 }
 
-// finished: drop the finalizer, pause AutoPatch after a failed
-// auto-update, and keep only the newest Upgrades.
+// createRunner creates u's runner Job. Without an image it fails u while
+// nothing changed yet (Backup), and returns an error after that.
+func (r *UpgradeReconciler) createRunner(ctx context.Context, u *kwerftv1.Upgrade) error {
+	image := r.RunnerImage
+	if u.Spec.Component == kwerftv1.UpgradeKubernetes && r.KubernetesRunnerImage != nil {
+		image = r.KubernetesRunnerImage
+	}
+	if image == nil {
+		r.fail(u, "Runner", "The upgrade runner's image is unknown.")
+		return nil
+	}
+	ref, err := image(ctx)
+	if err != nil {
+		if u.Status.Phase == kwerftv1.UpgradeBackingUp {
+			r.fail(u, "Runner", "Cannot pin the console image for the runner: "+err.Error()+". Nothing was changed.")
+			return nil
+		}
+		return err
+	}
+	if err := r.Create(ctx, r.runnerJob(u, ref)); err != nil && !apierrors.IsAlreadyExists(err) {
+		return err
+	}
+	log.FromContext(ctx).Info("upgrade runner started", "upgrade", u.Name, "image", ref)
+	return nil
+}
+
+// EnsureRunner returns u's runner Job, creating it when missing (a
+// Kubernetes upgrade's etcd snapshot). It returns nil right after creating
+// it, and when it could not start, in which case u is Failed.
+func (r *UpgradeReconciler) EnsureRunner(ctx context.Context, u *kwerftv1.Upgrade) (*batchv1.Job, error) {
+	var job batchv1.Job
+	err := r.Get(ctx, client.ObjectKey{Namespace: r.ns(), Name: RunnerJobName(u.Name)}, &job)
+	switch {
+	case apierrors.IsNotFound(err):
+		return nil, r.createRunner(ctx, u)
+	case err != nil:
+		return nil, err
+	}
+	return &job, nil
+}
+
+// DeleteRunner removes u's runner Job (a cancel in Backup).
+func (r *UpgradeReconciler) DeleteRunner(ctx context.Context, u *kwerftv1.Upgrade) error {
+	job := &batchv1.Job{ObjectMeta: metav1.ObjectMeta{Name: RunnerJobName(u.Name), Namespace: r.ns()}}
+	return client.IgnoreNotFound(r.Delete(ctx, job, client.PropagationPolicy(metav1.DeletePropagationBackground)))
+}
+
+// finished: drop the finalizer, pause AutoPatch after an auto-update that
+// changed something and then failed or rolled back (a failed preflight or
+// backup changed nothing and leaves AutoPatch on), and keep only the newest
+// Upgrades.
 func (r *UpgradeReconciler) finished(ctx context.Context, u *kwerftv1.Upgrade) error {
 	if controllerutil.ContainsFinalizer(u, upgradeFinalizer) {
 		controllerutil.RemoveFinalizer(u, upgradeFinalizer)
@@ -412,7 +475,7 @@ func (r *UpgradeReconciler) finished(ctx context.Context, u *kwerftv1.Upgrade) e
 		}
 	}
 	if auto(u) && (u.Status.Phase == kwerftv1.UpgradeFailed || u.Status.Phase == kwerftv1.UpgradeRolledBack) &&
-		!meta.IsStatusConditionTrue(u.Status.Conditions, ConditionAutoPatchPaused) {
+		upgrades.ReachedRunning(u) && !meta.IsStatusConditionTrue(u.Status.Conditions, ConditionAutoPatchPaused) {
 		if err := r.pauseAutoPatch(ctx, u.Name); err != nil {
 			return err
 		}

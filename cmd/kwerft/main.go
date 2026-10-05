@@ -234,6 +234,11 @@ func main() {
 			log.Error("cannot start the node pool reconcilers", "err", err)
 			os.Exit(1)
 		}
+		// Agent clusters' upgrades of an "Upgrade all", one after another.
+		if err := setupAgentUpgrades(mgr, hub); err != nil {
+			log.Error("cannot start the agent upgrade reconciler", "err", err)
+			os.Exit(1)
+		}
 		tokens = &setup.SecretTokenSource{Reader: mgr.GetAPIReader(), Writer: mgr.GetClient(), Namespace: namespace}
 		go waitUntilReady(ctx, log, mgr, &ready)
 		go func() {

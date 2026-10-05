@@ -354,6 +354,12 @@ func (k *KubeCluster) appsBack(ctx context.Context, before map[string]int32) str
 	if err != nil {
 		return "Apps: " + err.Error()
 	}
+	return AppsBehind(before, now)
+}
+
+// AppsBehind names the Apps with fewer ready replicas now than before
+// ("" when none); Apps that are gone are not counted.
+func AppsBehind(before, now map[string]int32) string {
 	var behind []string
 	for app, want := range before {
 		got, ok := now[app]

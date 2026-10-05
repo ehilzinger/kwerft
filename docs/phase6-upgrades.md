@@ -849,6 +849,7 @@ window (a cancelled one is not retried in the same window). An auto-update
 in `Queued` or `Preflight` waits for the next window once this one closed.
 Any `Failed` or `RolledBack` auto-update pauses AutoPatch, preflight
 failures included (nothing changed then, but an owner should look).
+Superseded: only after it reached `Running` (As built (U4) › AutoPatch).
 
 **Tests.** `internal/upgrades`: the runner state machine against a fake
 host and cluster (success; installer exit 50 → rollback in order; failed
@@ -873,3 +874,250 @@ now and the interval, Off, and the NodePool gate. Nothing ran on a host.
   label) is refused with a hint to re-run the installer once; e2e (E1)
   should start from a release with U2.
 - Owners' `patch` on `upgrades` (cancel) belongs to U5's roles matrix.
+
+## As built (U4): Kubernetes upgrades and agent clusters
+
+Files: `internal/controllers/k3s_upgrade.go` (the driver),
+`k3s_plans.go` (Plans, per-node progress), `k3s_preflight.go`,
+`agent_upgrades.go` (fleets of agent clusters), `internal/upgrades/k3s.go`
+(SUC names, the deprecated-API metric, the API server's etcd check, the
+restore hint, `ReachedRunning`), `internal/upgrades/agents.go` (version
+gating, `PlanFleet`), the runner's snapshot mode (`runner.go`), small
+changes to `upgrade_controller.go`, `cmd/kwerft/upgrades.go` and `main.go`,
+new annotation constants in `api/v1alpha1/annotations.go`, chart RBAC, and
+SUC's Plan CRD v0.20.2 vendored for envtest
+(`internal/controllers/testdata/crds/plans.upgrade.cattle.io.yaml`). No
+type changes.
+
+### Kubernetes upgrade
+
+`controllers.KubernetesUpgrader` is the `KubernetesUpgrades` plug-in, set up
+in every cluster (console and agents) by `setupUpgrades`. The Upgrade
+controller still handles the queue, a cancel or a closed window in
+Preflight (shared `beforePreflight`), the AutoPatch pause and retention.
+
+| Phase | What happens |
+|---|---|
+| `Preflight` | `UpgradeChecks.Kubernetes` (below). Passed: the Apps' ready replicas go into the log ConfigMap `<upgrade>-log` (key `apps-before.json`). |
+| `Backup` | The runner Job (same Job as a Kwerft upgrade, `RunnerJobName`) takes `k3s etcd-snapshot save --name pre-<upgrade>` on the installer node, after checking 2 GiB free in `/var/lib`, records `status.backup.etcdSnapshot` and exits. A cancel deletes the Job (`Cancelled`). A Job that gave up fails with reason `Backup`, "Nothing was changed". |
+| `Running` | The Plans are created (below); `status.nodes` follows them every 10 s; the log gets a line per node state change. |
+| `Verifying` | Every 10 s for up to 10 min (`VerifyTimeout`). |
+| `Succeeded` / `Failed` | The Plans are deleted. |
+
+No finalizer and no `RollingBack`. Conditions `NodesUpgraded` and `Verified`
+carry the start times (lastTransitionTime) of Running and Verifying.
+Running times out after 40 min per node + 10 min (reason `Timeout`).
+
+**The runner image** for the snapshot is the console's image pinned by
+digest, else (`KubernetesRunnerImage`, a development install's imported
+image) the image as the Deployment names it: k3s upgrades also work on
+`make dev-server` installs.
+
+**Plans** (namespace `system-upgrade`, service account `system-upgrade`,
+label `kwerft.dev/upgrade`, owned by the Upgrade; `spec.version` = the
+target, `upgrade.image: rancher/k3s-upgrade`, `concurrency: 1`,
+`tolerations: [{operator: Exists}]`):
+
+| Plan | Nodes | Node handling | Job deadline |
+|---|---|---|---|
+| `k3s-server` | `node-role.kubernetes.io/control-plane In [true]` | `cordon: true` | 15 min |
+| `k3s-agent` | no control-plane label, `kubernetes.io/hostname NotIn` the single-node pools | `drain: {timeout: 10m, ignoreDaemonSets, deleteEmptydirData, force}` (evictions, so PDBs hold it; a drain that times out fails the Job); `prepare: [prepare, k3s-server]` waits for the servers | 30 min |
+| `k3s-agent-cordon` | workers alone in their pool (`kwerft.dev/pool`; workers of no pool count as one pool) | `cordon: true`, same `prepare` | 15 min |
+
+The third Plan exists only when some pool has a single worker; `k3s-agent`
+only when there are other workers. Plans are created once and never
+updated (SUC would apply a changed one again); a Plan of the same name left
+by another Upgrade is deleted first. `force: true` deletes pods without a
+controller; Kwerft runs none of its own.
+
+**Progress** (`status.nodes`, control-plane nodes first, then by name),
+from the newest SUC Job per node (labels `upgrade.cattle.io/plan` and
+`/node`) and its pod's init containers:
+
+| State | When |
+|---|---|
+| `Waiting` | no Job yet ("waiting for its turn", "after the control plane"), or the pod's `prepare` init container runs |
+| `Draining` | the `drain` init container runs |
+| `Upgrading` | `cordon` or the `upgrade` container runs, or the kubelet is on the target but not Ready yet, or the Job completed and the kubelet does not report the target yet |
+| `Done` | the kubelet reports the target and is Ready, no Job running |
+| `Failed` | the node's Job failed (SUC's `Complete=False, reason JobFailed` on a Plan counts too, once the Job's TTL removed it) |
+
+`status.message` says "N of M done" and what the current node does.
+
+**Preflight** (`UpgradeChecks.Kubernetes(ctx, spec, self)`; U5 calls it
+synchronously as for Kwerft). New field `UpgradeChecks.APIServer`
+(`upgrades.APIServer` over the discovery REST client).
+
+| Check | Blocks when |
+|---|---|
+| `Target` | not a k3s version (`v1.38.1+k3s1`); not newer than every node (downgrade, or already there); more than one minor ahead of the oldest node |
+| `NodesReady` | a node is not Ready |
+| `NodesSameVersion` | the kubelets differ (an unfinished upgrade) |
+| `Etcd` | `/readyz/etcd` fails; etcd members (`node-role.kubernetes.io/etcd`, else control-plane) not Ready, quorum lost or not. Two members: passes with a warning (quorum is lost while either restarts) |
+| `DeprecatedAPIs` | `apiserver_requested_deprecated_apis` (value 1) with `removed_release` ≤ the target's minor: blocks a minor, warns on a patch. An unreadable metric blocks a minor, warns on a patch. The metric covers requests since that API server started (in HA: the one that answered) |
+| `DiskSpace` | a node has `DiskPressure` (the runner checks 2 GiB on the installer node) |
+| `NoOtherOperation` | as for Kwerft |
+| `KwerftSupports` | the running release's manifest does not list the target's minor in `kubernetes.supported`, or cannot be read ("upgrade Kwerft first"); a development build only warns |
+| `UpgradeController` | Plan CRD missing or not established, `system-upgrade/system-upgrade-controller` missing or not ready ("re-run the installer") |
+| `InstallerNode` | as for Kwerft (the snapshot is taken there) |
+
+**Verification:** every node on the target, Ready and not cordoned;
+DaemonSet `kube-system/cilium`; Deployment `kube-system/coredns`; Traefik in
+`traefik` (DaemonSet, or a Deployment); CRDs `gatewayclasses`, `gateways`,
+`httproutes.gateway.networking.k8s.io` established; HTTPRoute
+`kwerft-system/kwerft-console-https` Accepted by every parent (skipped where
+it does not exist: agents, consoles without a domain); no App with fewer
+ready replicas than in the baseline.
+
+**Failure** (a node's Job failed, timeout, verification): the Plans are
+deleted (SUC deletes their Jobs and starts no further node), the node is
+marked `Failed`, and `Failed` gets reason `Kubernetes`, `Timeout` or
+`Verify` with a message that names the node, the nodes on the target and
+those still on the old version, the snapshot, and the short restore
+procedure (`upgrades.RestoreHint`), which links here.
+
+**After a restore** the cluster has the Upgrade in `Backup` again (the
+snapshot was taken there) without the snapshot recorded. The runner writes
+`/var/lib/kwerft/upgrade/<upgrade>/snapshot-recorded` on the installer
+node after recording the snapshot; finding it with no snapshot in the
+status, it fails the Upgrade ("restored from this upgrade's etcd snapshot:
+the upgrade is not repeated") instead of upgrading again.
+
+### Restoring after a failed Kubernetes upgrade
+
+Kwerft never does this. k3s cannot be downgraded, and restoring etcd resets
+every Kubernetes object (Kwerft's included) to the moment of the snapshot;
+data in volumes is not in etcd and stays as it is. Usually it is better to
+fix the cause (the failed node's Job: `kubectl -n system-upgrade logs
+job/<job>`) and upgrade again: kubelets one minor behind work within the
+version skew policy. To go back:
+
+1. On the installer node (`kwerft.dev/installer=true`), find the file:
+   `k3s etcd-snapshot ls` lists `pre-<upgrade>-<node>-<timestamp>` under
+   `/var/lib/rancher/k3s/server/db/snapshots/` (with S3 snapshots
+   configured, a copy is in the backup bucket too).
+2. Stop k3s everywhere: `systemctl stop k3s` on servers, `systemctl stop
+   k3s-agent` on workers.
+3. On every node that was upgraded, put the old binary back, e.g. for
+   `v1.37.1+k3s1` on amd64: `curl -fLo /usr/local/bin/k3s
+   https://github.com/k3s-io/k3s/releases/download/v1.37.1%2Bk3s1/k3s &&
+   chmod 755 /usr/local/bin/k3s` (`k3s-arm64` on ARM).
+4. On the installer node: `k3s server --cluster-reset
+   --cluster-reset-restore-path=<file>`; when it says to restart without
+   `--cluster-reset`, `systemctl start k3s`.
+5. On every other server: `rm -rf /var/lib/rancher/k3s/server/db`, then
+   `systemctl start k3s` (they join the restored member).
+6. On the workers: `systemctl start k3s-agent`.
+7. Check `kubectl get nodes`. The Upgrade ends `Failed` (above); start a
+   new one when the cause is fixed.
+
+### Agent clusters (W6)
+
+Console N works with agents of the same minor and the one before
+(`upgrades.AgentCompatible`). U3's `AgentSkew` check refuses a console
+upgrade that would leave a connected agent two minors behind; an agent is
+never upgraded past the console (`upgrades.AgentTargetAllowed(console,
+agent, target)`).
+
+**"Upgrade all" (fleets).** Every remote Upgrade is created by the API as
+the owner (impersonated through the tunnel: `clusterConn.kube.For(email,
+role)` of the agent's cluster); the console only releases or cancels them,
+under its own identity there:
+
+- The members: `controllers.FleetMember(fleet, after, order, version,
+  email)` returns the Upgrade to create in an agent cluster
+  (`generateName` as `GenerateName`, label `kwerft.dev/fleet: <fleet>`,
+  annotations `kwerft.dev/hold: <message>`, `kwerft.dev/fleet-order`,
+  `kwerft.dev/after-upgrade`, `kwerft.dev/requested-by`).
+- The agent's Upgrade controller keeps a held Upgrade `Queued` with the
+  hold as its message, and a held one does not hold the cluster's other
+  Upgrades in line.
+- `controllers.AgentUpgradesReconciler` (console only, `main.go`) lists the
+  Upgrades with `kwerft.dev/fleet` in every Connected cluster, on any
+  change of the console's Upgrades or Clusters and every 30 s while a fleet
+  is unfinished. Per fleet: if `after-upgrade` names the console's Upgrade
+  and it is not finished, wait; if it ended other than `Succeeded` or is
+  gone, annotate the held members `kwerft.dev/cancel-requested: kwerft
+  (the console's upgrade X ended RolledBack)`. Otherwise, while no
+  released member is unfinished, release the next by order (remove the
+  hold) after `AgentTargetAllowed` (else cancel it with the reason), and
+  set the others' hold to "Waiting for its turn: <cluster> upgrades
+  first.". A failed or rolled-back member does not stop the fleet.
+- Disconnected clusters are not seen: their members wait and go in turn
+  when the cluster is back. The console's Upgrade gets condition
+  `AgentClusters` ("Agent clusters (edge-1: Running, edge-2: waiting).",
+  True when all are finished).
+
+**For U5.**
+- *Upgrade all to V*: preflight the console's upgrade
+  (`UpgradeChecks.Kwerft`), create it as the owner (name L), then
+  `upgrades.PlanFleet(V, agents)` with `AgentCluster{Name, Connected:
+  phase Connected, AgentVersion}` from the Cluster objects; for each queued
+  agent, in order, create `FleetMember(L, L, i, V, email)` in its cluster
+  as the owner; show `skipped` (warnings: disconnected or unknown version;
+  others: already on V). A create that fails there: skip and warn.
+- *The console already runs V* (only agents behind): fleet
+  `upgrades.NewFleetID()`, `after` "": the members start one by one at
+  once.
+- *One agent cluster*: refuse unless `AgentTargetAllowed(console, agent,
+  V)`; create a plain Upgrade there as the owner (no fleet). The
+  synchronous preflight can run `UpgradeChecks{Reader: <the cluster's
+  system client>, Releases, Registry, Version: <agent version>, Cluster:
+  <name>}.Kwerft(…)` (no `Self`, no `DataDir`: those checks are skipped).
+- *Kubernetes on an agent*: an Upgrade in that cluster as the owner, never
+  queued across clusters. Its preflight: `UpgradeChecks{…, APIServer:
+  &upgrades.APIServer{REST: <discovery client of that cluster's
+  RESTConfig>.RESTClient()}}.Kubernetes(…)` (the agent's service account
+  has the same `/metrics` and `/readyz/etcd` rights).
+- Progress of a fleet: list `kwerft.dev/fleet=<L or id>` in each
+  cluster as the user, or read L's `AgentClusters` condition. A Kubernetes
+  Upgrade's `status.nodes` is the per-node view; its log ConfigMap
+  (`install.log`) has a line per node state change.
+
+### AutoPatch (coordinator decision, in U3's controller)
+
+AutoPatch pauses only when an auto-update ended `RolledBack` or `Failed`
+after it reached `Running` (`upgrades.ReachedRunning`: a Kwerft upgrade
+records its Helm revisions in the same write that moves it to Running, and
+its installer steps after; a Kubernetes one its nodes). A preflight or
+backup failure (nothing changed) leaves AutoPatch on; it tries again in the
+next window. This replaces "preflight failures included" in U3's notes.
+
+### RBAC
+
+`kwerft-controller` (console and agents) gains: `upgrade.cattle.io` plans
+(all verbs), `apps` daemonsets (read), `apiextensions.k8s.io`
+customresourcedefinitions (read), and `nonResourceURLs: [/metrics,
+/readyz/etcd]` (get). SUC's Jobs and pods are read with the existing core
+and batch rules. The runner's rights are unchanged.
+
+### Tests
+
+`internal/upgrades`: the deprecated-API metric parser and `RemovedBy`, k3s
+versions, the restore hint, `ReachedRunning`, `AgentTargetAllowed`,
+`PlanFleet`, the runner's snapshot mode (taken once, retried pod, failed
+snapshot, disk, cancel, other phases, a restored cluster).
+`internal/controllers`: the Kubernetes preflight against a fake API (every
+check), envtest with SUC's Plan CRD for the whole flow (Plans validated by
+the CRD, per-node progress through Draining to Done, verification,
+success), a failed node (Plans deleted, message), a verification timeout,
+a cancel in Backup, a blocked preflight; the held Upgrade in the queue;
+AutoPatch not paused by a failed preflight; the fleet against fake
+clusters (waits for the console, one at a time, a rolled-back member does
+not stop it, cancelled when the console's upgrade failed or is gone,
+disconnected clusters skipped, never past the console). Nothing ran on a
+host or against SUC itself.
+
+### Open
+
+- SUC's real behaviour (the `prepare k3s-server` wait, drain timeouts,
+  Job names, init container names) is taken from its v0.20.2 source, not
+  run; E1's 3-node run is the first real test.
+- The deprecated-API metric counts requests since the API server started:
+  a server restarted shortly before the check knows little. A minor
+  upgrade blocked by it needs the clients changed, not a retry.
+- Upgrading Kubernetes on the console's own cluster restarts the API
+  server under the console; the controller resumes from the status. With
+  one server the API is gone for the restart (as for any k3s upgrade).
+- The fleet's hold is an annotation the owner could remove by hand in an
+  agent cluster; that only starts that member early.
