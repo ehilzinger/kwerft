@@ -575,8 +575,18 @@ func TestBuildRetentionKeepsRunningRevision(t *testing.T) {
 	for i := 2; i <= MaxBuildsPerApp+2; i++ {
 		made = append(made, newBuild(t, app, i, "push", true, cancelled))
 	}
+	// Cancelled, or already pruned: retention removes the oldest finished
+	// builds while the later ones are still being cancelled.
 	for _, b := range made {
-		waitForBuild(t, b, buildPhase(kwerftv1.BuildCancelled))
+		eventually(t, func() error {
+			var cur kwerftv1.Build
+			if err := k8s.Get(ctx, client.ObjectKeyFromObject(b), &cur); apierrors.IsNotFound(err) {
+				return nil
+			} else if err != nil {
+				return err
+			}
+			return buildPhase(kwerftv1.BuildCancelled)(&cur)
+		})
 	}
 	eventually(t, func() error {
 		poke(t, first) // a finished build's reconcile prunes; #1 stays
