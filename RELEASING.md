@@ -44,7 +44,12 @@ The image, the chart and the install script are public too, so
      | sudo bash -s -- --domain ops.example.com --yes
    ```
 
-   Re-running the installer of a newer release on an existing server upgrades it.
+   Re-running the installer of a newer release on an existing server upgrades
+   Kwerft and its platform: system packages, Helm, Cilium, cert-manager,
+   Traefik, the observability stack, system-upgrade-controller and the
+   console, with the settings remembered in `/var/lib/kwerft/install.env`. It
+   does not upgrade Kubernetes: k3s keeps the version it was installed with,
+   on every node, until it is upgraded from the console (Settings › Updates).
 
    The workflow does this itself once everything is published: its `e2e`
    job installs the release on a fresh Hetzner Cloud server, and upgrades a

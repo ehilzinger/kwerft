@@ -38,7 +38,7 @@ setup() {
 @test "--dry-run lists every install stage in order" {
   run "$SCRIPT" --dry-run --platform cloud --domain ops.example.com
   [ "$status" -eq 0 ]
-  expected="Preflight System Firewall Kubernetes Registry Helm Network Hetzner Ingress Observability Kwerft Handoff"
+  expected="Preflight System Firewall Kubernetes Registry Helm Upgrades Network Hetzner Ingress Observability Kwerft Handoff"
   actual=$(printf '%s\n' "$output" | sed -n 's/^→ \([A-Za-z]*\).*/\1/p' | tr '\n' ' ' | sed 's/ $//')
   [ "$actual" = "$expected" ]
 }
@@ -954,7 +954,7 @@ AGENT_TOKEN="kwag_edge-1_abcdefghijklmnopqrstuvwxyzABCDEFGHIJ-_0123"
 @test "--dry-run in agent mode installs the cluster without the console's handoff" {
   run "$SCRIPT" --dry-run --platform cloud --agent --console https://ops.example.com --cluster-token "$AGENT_TOKEN"
   [ "$status" -eq 0 ]
-  expected="Preflight System Firewall Kubernetes Registry Helm Network Hetzner Ingress Observability Kwerft"
+  expected="Preflight System Firewall Kubernetes Registry Helm Upgrades Network Hetzner Ingress Observability Kwerft"
   actual=$(printf '%s\n' "$output" | sed -n 's/^→ \([A-Za-z]*\).*/\1/p' | tr '\n' ' ' | sed 's/ $//')
   [ "$actual" = "$expected" ]
   [[ "$output" == *"Kwerft agent"* ]]
@@ -1343,4 +1343,375 @@ hcloud_env() {
   run "$SCRIPT" --dry-run --platform cloud --agent --console https://ops.example.com --cluster-token "$AGENT_TOKEN" --await-cloud-token
   [ "$status" -eq 0 ]
   sed -n '/^stage_kwerft_agent()/,/^}/p' "$SCRIPT" | grep -qF '"${hcloud_args[@]}"'
+}
+
+# ---- upgrades (docs/phase6-upgrades.md, installer changes W2) ---------------
+
+# effective [flags...] parses the flags in a fresh copy of the installer, with
+# install.env at $BATS_TEST_TMPDIR/install.env, and prints the settings.
+# STUBS is evaluated after sourcing (stub functions).
+effective() {
+  (
+    KWERFT_SOURCED=1 source "$SCRIPT"
+    INSTALL_ENV_FILE="$BATS_TEST_TMPDIR/install.env"
+    eval "${STUBS:-}"
+    parse_args "$@"
+    echo "mode=$MODE email=$ACME_EMAIL acme=$ACME_SERVER platform=$PLATFORM iface=$PRIVATE_IFACE lite=$LITE ssh=$HARDEN_SSH channel=$CHANNEL console=$CONSOLE_URL token=$CLUSTER_TOKEN"
+  )
+}
+write_install_env() { printf '%b' "$1" >"$BATS_TEST_TMPDIR/install.env"; }
+STAGING="https://acme-staging-v02.api.letsencrypt.org/directory"
+
+@test "remember_settings: install.env holds the effective settings, 0600, no hostname or tokens" {
+  KWERFT_SOURCED=1 source "$SCRIPT"
+  INSTALL_ENV_FILE="$BATS_TEST_TMPDIR/install.env"
+  MODE=install ACME_EMAIL=ops@example.com ACME_SERVER=$ACME_STAGING_URL PLATFORM=cloud PRIVATE_IFACE=enp7s0 PRIVATE_IFACE_GIVEN=""
+  LITE=1 HARDEN_SSH=0 CHANNEL=edge DOMAIN=ops.example.com JOIN_TOKEN=kwft_join_secret CONSOLE_URL=""
+  remember_settings
+  [[ "$(ls -l "$INSTALL_ENV_FILE")" == -rw-------* ]]
+  expected="KWERFT_MODE=install
+KWERFT_EMAIL=ops@example.com
+KWERFT_ACME_SERVER=https://acme-staging-v02.api.letsencrypt.org/directory
+KWERFT_PLATFORM=cloud
+KWERFT_PRIVATE_IFACE=
+KWERFT_LITE=1
+KWERFT_HARDEN_SSH=0
+KWERFT_CHANNEL=edge"
+  [ "$(grep -v '^#' "$INSTALL_ENV_FILE")" = "$expected" ]
+  ! grep -q 'ops.example.com\|kwft_join\|DOMAIN' "$INSTALL_ENV_FILE"
+  [ ! -e "$INSTALL_ENV_FILE.kwerft-new" ]
+  # Agent mode adds the console, never the agent token; a dry run writes nothing.
+  MODE=agent CONSOLE_URL=https://ops.example.com CLUSTER_TOKEN="$AGENT_TOKEN" PRIVATE_IFACE_GIVEN=enp7s0
+  remember_settings
+  grep -qx 'KWERFT_MODE=agent' "$INSTALL_ENV_FILE"
+  grep -qx 'KWERFT_CONSOLE=https://ops.example.com' "$INSTALL_ENV_FILE"
+  grep -qx 'KWERFT_PRIVATE_IFACE=enp7s0' "$INSTALL_ENV_FILE"
+  ! grep -qF "$AGENT_TOKEN" "$INSTALL_ENV_FILE"
+  rm "$INSTALL_ENV_FILE"
+  DRY_RUN=1 remember_settings
+  [ ! -e "$INSTALL_ENV_FILE" ]
+}
+
+@test "install.env: what a run remembered is read back by the next" {
+  (
+    KWERFT_SOURCED=1 source "$SCRIPT"
+    INSTALL_ENV_FILE="$BATS_TEST_TMPDIR/install.env"
+    parse_args --email ops@example.com --acme-server staging --platform dedicated --private-iface enp7s0 --lite --harden-ssh --channel edge
+    remember_settings
+  )
+  run effective
+  [ "$output" = "mode=install email=ops@example.com acme=$STAGING platform=dedicated iface=enp7s0 lite=1 ssh=1 channel=edge console= token=" ]
+}
+
+@test "install.env: precedence is flag, then KWERFT_*, then install.env, then the default" {
+  write_install_env 'KWERFT_MODE=install\nKWERFT_EMAIL=file@example.com\nKWERFT_ACME_SERVER=https://acme.example.com/directory\nKWERFT_PLATFORM=dedicated\nKWERFT_LITE=1\nKWERFT_CHANNEL=edge\n'
+  run effective
+  [ "$output" = "mode=install email=file@example.com acme=https://acme.example.com/directory platform=dedicated iface= lite=1 ssh=0 channel=edge console= token=" ]
+  KWERFT_EMAIL=env@example.com KWERFT_LITE=0 KWERFT_CHANNEL=stable run effective
+  [ "$output" = "mode=install email=env@example.com acme=https://acme.example.com/directory platform=dedicated iface= lite=0 ssh=0 channel=stable console= token=" ]
+  KWERFT_EMAIL=env@example.com run effective --email flag@example.com --platform cloud --acme-server staging
+  [ "$output" = "mode=install email=flag@example.com acme=$STAGING platform=cloud iface= lite=1 ssh=0 channel=edge console= token=" ]
+  # Without the file: the defaults.
+  rm "$BATS_TEST_TMPDIR/install.env"
+  run effective
+  [ "$output" = "mode=install email= acme= platform=auto iface= lite=0 ssh=0 channel=stable console= token=" ]
+}
+
+@test "install.env: an email in this run's --config wins over the remembered one" {
+  write_install_env 'KWERFT_EMAIL=file@example.com\n'
+  cfg="$BATS_TEST_TMPDIR/kwerft.yaml"
+  printf 'email: config@example.com\n' >"$cfg"
+  run effective --config "$cfg"
+  [[ "$output" == *"email=config@example.com "* ]]
+  printf 'domain: ops.example.com\n' >"$cfg"
+  run effective --config "$cfg"
+  [[ "$output" == *"email=file@example.com "* ]]
+}
+
+@test "install.env: values are checked like flags, and the file is never sourced" {
+  write_install_env 'KWERFT_CHANNEL=nightly\n'
+  run effective
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"--channel must be stable or edge"* ]]
+  write_install_env 'KWERFT_EMAIL=$(touch '"$BATS_TEST_TMPDIR"'/pwned)\nrm -rf /tmp/nothing\nKWERFT_UNKNOWN=x\r\nKWERFT_PLATFORM=cloud\r\n'
+  run effective
+  [ "$status" -eq 0 ]
+  [ ! -e "$BATS_TEST_TMPDIR/pwned" ]
+  [[ "$output" == *'email=$(touch '*"platform=cloud "* ]]
+}
+
+@test "install.env: an agent re-run needs no flags; its token comes back from the Secret" {
+  write_install_env 'KWERFT_MODE=agent\nKWERFT_CONSOLE=https://ops.example.com\nKWERFT_PLATFORM=cloud\n'
+  STUBS='k3s() { :; }; kc() { [[ "$*" == "-n kwerft-system get secret kwerft-agent -o jsonpath={.data.token}" ]] && printf %s "$AGENT_TOKEN" | base64; }'
+  run effective --version 0.6.0 --yes
+  [ "$status" -eq 0 ]
+  [ "$output" = "mode=agent email= acme= platform=cloud iface= lite=0 ssh=0 channel=stable console=https://ops.example.com token=$AGENT_TOKEN" ]
+  # Before k3s runs there is no Secret to read: the console's command is needed.
+  STUBS='kc() { return 1; }'
+  run effective
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"--agent needs --console and --cluster-token"* ]]
+}
+
+@test "install.env: a flag that chooses the mode wins over the remembered one" {
+  write_install_env 'KWERFT_MODE=agent\nKWERFT_CONSOLE=https://ops.example.com\n'
+  run effective --join https://ops.example.com --token t
+  [ "$status" -eq 0 ]
+  [[ "$output" == "mode=join "*"console= "* ]]
+  run effective --uninstall
+  [[ "$output" == "mode=uninstall "* ]]
+}
+
+@test "install.env: a joined node re-runs in join mode without the join command" {
+  write_install_env 'KWERFT_MODE=join\nKWERFT_PLATFORM=cloud\n'
+  STUBS='stage_done() { [[ $1 == join ]]; }'
+  run effective --yes
+  [ "$status" -eq 0 ]
+  [[ "$output" == "mode=join "* ]]
+  # Not joined yet: the join command is needed again.
+  STUBS='stage_done() { return 1; }'
+  run effective --yes
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"has not joined its cluster yet"* ]]
+}
+
+@test "install.env: installed before it existed, the stages tell the mode" {
+  STUBS='stage_done() { [[ $1 == join ]]; }'
+  run effective
+  [[ "$output" == "mode=join "* ]]
+  STUBS='stage_done() { [[ $1 == kubernetes ]]; }'
+  run effective
+  [[ "$output" == "mode=install "* ]]
+}
+
+@test "main remembers the settings once preflight passed, never in a dry run" {
+  [ "$(sed -n '/^main() {/,/^}/p' "$SCRIPT" | grep -A1 'run_stage preflight' | tail -n1 | tr -d ' ')" = "remember_settings" ]
+  grep -qF '  if (( DRY_RUN )) || [[ ! -w ' "$SCRIPT"
+}
+
+# ---- --progress -------------------------------------------------------------
+
+progress_env() {
+  KWERFT_SOURCED=1 source "$SCRIPT"
+  PROGRESS_FILE="$BATS_TEST_TMPDIR/progress.jsonl"; : >"$PROGRESS_FILE"
+  LOG_FILE="$BATS_TEST_TMPDIR/install.log"; : >"$LOG_FILE"
+  DONE=""
+  stage_done() { [[ " $DONE " == *" $1 "* ]]; }
+  mark_done() { :; }
+}
+# line <n> prints line n of the progress file without its timestamp.
+line() { sed -n "${1}p" "$PROGRESS_FILE" | sed -E 's/,"at":"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z"}$/}/'; }
+
+@test "progress: a JSON line per stage with its summary" {
+  progress_env
+  network() { echo "noise"; echo 'Cilium 1.20.2 · "WireGuard" \ Hubble'; }
+  run_stage network "Network" network force >/dev/null
+  DONE="registry"
+  run_stage registry "Registry mirror" network >/dev/null
+  [ "$(line 1)" = '{"id":"network","label":"Network","state":"ok","detail":"Cilium 1.20.2 · \"WireGuard\" \\ Hubble"}' ]
+  [ "$(line 2)" = '{"id":"registry","label":"Registry mirror","state":"skip","detail":"already done"}' ]
+  grep -qE '"at":"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:]{8}Z"}$' "$PROGRESS_FILE"
+  [ "$(wc -l <"$PROGRESS_FILE" | tr -d ' ')" -eq 2 ]
+  # Without --progress nothing is written anywhere.
+  PROGRESS_FILE=""
+  run_stage network "Network" network force >/dev/null
+}
+
+@test "progress: a failed stage gets one line, with die's message" {
+  progress_env
+  CURRENT_STAGE=Helm CURRENT_STAGE_ID=helm
+  (die 40 "Helm checksum mismatch") 2>/dev/null || true
+  on_error 40 123 2>/dev/null   # the top-level shell reports it again
+  [ "$(line 1)" = '{"id":"helm","label":"Helm","state":"fail","detail":"Helm checksum mismatch"}' ]
+  [ "$(wc -l <"$PROGRESS_FILE" | tr -d ' ')" -eq 1 ]
+  # A command that fails without die: the line says where.
+  CURRENT_STAGE=Network CURRENT_STAGE_ID=network
+  on_error 1 77 2>/dev/null
+  [ "$(line 2)" = "{\"id\":\"network\",\"label\":\"Network\",\"state\":\"fail\",\"detail\":\"exit 1 at line 77; see $LOG_FILE\"}" ]
+  # Outside a stage (arguments, mode checks) only the exit line is written.
+  CURRENT_STAGE_ID=""
+  (die 2 "Unknown option") 2>/dev/null || true
+  [ "$(wc -l <"$PROGRESS_FILE" | tr -d ' ')" -eq 2 ]
+}
+
+@test "progress: the installer ends the file with its exit code" {
+  [[ $EUID -ne 0 ]] || skip "would install: runs as root"
+  f="$BATS_TEST_TMPDIR/progress.jsonl"
+  echo stale >"$f"
+  run "$SCRIPT" --dry-run --platform cloud --domain ops.example.com --progress "$f"
+  [ "$status" -eq 0 ]
+  [ "$(cat "$f")" = '{"exit":0}' ]
+  # A usage error before anything ran.
+  rm "$f"
+  run "$SCRIPT" --progress "$f" --platform aws
+  [ "$status" -eq 2 ]
+  [ "$(cat "$f")" = '{"exit":2}' ]
+  # Preflight refuses to run without root: one fail line, then the exit code.
+  run "$SCRIPT" --platform dedicated --domain ops.example.com --yes --progress "$f"
+  [ "$status" -eq 10 ]
+  [ "$(sed -n 1p "$f" | sed -E 's/,"at":"[^"]*"}$/}/')" = '{"id":"preflight","label":"Preflight","state":"fail","detail":"Run as root (sudo)."}' ]
+  [ "$(sed -n 2p "$f")" = '{"exit":10}' ]
+  [ "$(wc -l <"$f" | tr -d ' ')" -eq 2 ]
+}
+
+@test "--progress needs an existing directory" {
+  run "$SCRIPT" --dry-run --platform cloud --progress "$BATS_TEST_TMPDIR/missing/progress.jsonl"
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"--progress: the directory"* ]]
+}
+
+@test "json_str escapes what JSON needs and drops terminal colours" {
+  KWERFT_SOURCED=1 source "$SCRIPT"
+  [ "$(json_str $'a\\b"c\td\ne\033[31mf · ›')" = '"a\\b\"c\td\ne[31mf · ›"' ]
+  [ "$(json_str "")" = '""' ]
+}
+
+# ---- converging stages, k3s versions ----------------------------------------
+
+@test "system and helm converge on every run; kubernetes and join run once" {
+  body=$(sed -n '/^main() {/,/^}/p' "$SCRIPT")
+  grep -qE 'run_stage system +"System" +stage_system force$' <<<"$body"
+  grep -qE 'run_stage helm +"Helm" +stage_helm force$' <<<"$body"
+  grep -qE 'run_stage upgrades +"Upgrades" +stage_upgrades force$' <<<"$body"
+  grep -qE 'run_stage kubernetes +"Kubernetes" +stage_kubernetes$' <<<"$body"
+  grep -qE 'run_stage join "Join cluster" stage_join$' <<<"$body"
+}
+
+@test "k3s_older compares k3s releases" {
+  KWERFT_SOURCED=1 source "$SCRIPT"
+  k3s_older v1.37.1+k3s1 v1.37.2+k3s1
+  k3s_older v1.36.9+k3s3 v1.37.0+k3s1
+  k3s_older v1.37.1+k3s1 v1.37.1+k3s2
+  k3s_older v1.9.0+k3s1 v1.10.0+k3s1
+  ! k3s_older v1.37.1+k3s1 v1.37.1+k3s1
+  ! k3s_older v1.38.0+k3s1 v1.37.9+k3s1
+  ! k3s_older garbage v1.37.1+k3s1
+}
+
+@test "a skipped Kubernetes stage says when k3s is older than the pin" {
+  progress_env
+  DONE="kubernetes"
+  k3s() { echo "k3s version v1.36.4+k3s1 (0123abcd)"; echo "go version go1.25"; }
+  run_stage kubernetes "Kubernetes" stage_kubernetes >"$BATS_TEST_TMPDIR/out"
+  [[ "$(<"$BATS_TEST_TMPDIR/out")" == *"k3s v1.36.4+k3s1 is older than this release's $K3S_VERSION: upgrade it in Settings › Updates"* ]]
+  [[ "$(line 1)" == *'"state":"skip","detail":"k3s v1.36.4+k3s1 is older than this release'* ]]
+  k3s() { echo "k3s version $K3S_VERSION (0123abcd)"; }
+  run_stage kubernetes "Kubernetes" stage_kubernetes >"$BATS_TEST_TMPDIR/out"
+  [[ "$(<"$BATS_TEST_TMPDIR/out")" == *"k3s $K3S_VERSION · installed"* ]]
+  # A joined node says the same about its own k3s.
+  DONE="join"
+  k3s() { echo "k3s version v1.36.4+k3s1 (0123abcd)"; }
+  run_stage join "Join cluster" stage_join >"$BATS_TEST_TMPDIR/out"
+  [[ "$(<"$BATS_TEST_TMPDIR/out")" == *"is older than this release's"* ]]
+}
+
+@test "--k3s-version: a k3s release, used by new servers and joins" {
+  run "$SCRIPT" --dry-run --platform cloud --join https://ops.example.com --token t --k3s-version v1.36.4+k3s1
+  [ "$status" -eq 0 ]
+  run "$SCRIPT" --dry-run --platform cloud --agent --console https://ops.example.com --cluster-token "$AGENT_TOKEN" --k3s-version v1.38.0-rc1+k3s1
+  [ "$status" -eq 0 ]
+  for bad in 1.36.4 v1.36.4 latest "v1.36.4+k3s1;x"; do
+    run "$SCRIPT" --dry-run --platform cloud --k3s-version "$bad"
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"--k3s-version must be a k3s release"* ]]
+  done
+  # KWERFT_K3S_VERSION (e2e) works like the flag.
+  [ "$(KWERFT_K3S_VERSION=v1.36.1+k3s2 effective_k3s)" = "v1.36.1+k3s2" ]
+  KWERFT_SOURCED=1 source "$SCRIPT"
+  [ "$(k3s_target)" = "$K3S_VERSION" ]
+  parse_args --k3s-version v1.36.4+k3s1
+  [ "$(k3s_target)" = "v1.36.4+k3s1" ]
+  # Both k3s installs take it.
+  [ "$(sed -n '/^stage_kubernetes() {/,/^}/p' "$SCRIPT" | grep -c 'version=$(k3s_target)\|INSTALL_K3S_VERSION="$version"')" -eq 2 ]
+  [ "$(sed -n '/^stage_join() {/,/^}/p' "$SCRIPT" | grep -c 'version=$(k3s_target)\|INSTALL_K3S_VERSION="$version"')" -eq 2 ]
+  ! grep -qF 'INSTALL_K3S_VERSION="$K3S_VERSION"' "$SCRIPT"
+}
+effective_k3s() { ( KWERFT_SOURCED=1 source "$SCRIPT"; k3s_target ); }
+
+@test "node pools pass the installer's --k3s-version in its format" {
+  root="$BATS_TEST_DIRNAME/../.."
+  grep -qF '"--k3s-version", j.K3sVersion' "$root/internal/controllers/nodepool_cloudinit.go"
+  # The Go pattern and the installer's agree.
+  re=$(sed -n 's/^var k3sVersionRE = regexp.MustCompile(`\(.*\)`)$/\1/p' "$root/internal/controllers/nodepool_cloudinit.go")
+  [ -n "$re" ]
+  [ "$re" = "$(sed -n '/^valid_k3s_version() {/,/^}/p' "$SCRIPT" | sed -n 's/.*=~ \(.*\) \]\]$/\1/p')" ]
+}
+
+# ---- stage upgrades ---------------------------------------------------------
+
+upgrades_env() {
+  KWERFT_SOURCED=1 source "$SCRIPT"
+  LOG_FILE="$BATS_TEST_TMPDIR/install.log"; : >"$LOG_FILE"
+  KC_LOG="$BATS_TEST_TMPDIR/kc.log"; : >"$KC_LOG"
+  READY=True LABELLED="kwerft-1"
+  hostname() { echo "Kwerft-1"; }
+  kc() {
+    printf 'kc %s\n' "$*" >>"$KC_LOG"
+    case "$*" in
+      "get node kwerft-1") return 0 ;;
+      "get node "*" -o jsonpath={.status.conditions"*) echo "$READY" ;;
+      "get nodes -l kwerft.dev/installer=true"*) echo "$LABELLED" ;;
+    esac
+    return 0
+  }
+}
+
+@test "stage_upgrades: system-upgrade-controller at its pin, and the installer node's label" {
+  upgrades_env
+  LABELLED="kwerft-1 kwerft-old"
+  run stage_upgrades
+  [ "$status" -eq 0 ]
+  [ "$output" = "system-upgrade-controller $SYSTEM_UPGRADE_CONTROLLER_VERSION (ready) · installer node kwerft-1" ]
+  base="https://github.com/rancher/system-upgrade-controller/releases/download/$SYSTEM_UPGRADE_CONTROLLER_VERSION"
+  # The CRDs first, established, then the controller.
+  [ "$(grep -n "apply --server-side --force-conflicts -f $base/crd.yaml" "$KC_LOG" | cut -d: -f1)" -lt \
+    "$(grep -n "apply --server-side --force-conflicts -f $base/system-upgrade-controller.yaml" "$KC_LOG" | cut -d: -f1)" ]
+  grep -q "wait --for=condition=Established crd/plans.upgrade.cattle.io" "$KC_LOG"
+  grep -q "rollout status deployment/system-upgrade-controller" "$KC_LOG"
+  grep -qx "kc label node kwerft-1 kwerft.dev/installer=true --overwrite" "$KC_LOG"
+  # Only one node is the installer's.
+  grep -qx "kc label node kwerft-old kwerft.dev/installer-" "$KC_LOG"
+  ! grep -q "label node kwerft-1 kwerft.dev/installer-" "$KC_LOG"
+}
+
+@test "stage_upgrades: on a first install the controller starts with the network" {
+  upgrades_env
+  READY=False
+  run stage_upgrades
+  [ "$status" -eq 0 ]
+  [ "$output" = "system-upgrade-controller $SYSTEM_UPGRADE_CONTROLLER_VERSION (starts with the network) · installer node kwerft-1" ]
+  ! grep -q "rollout status" "$KC_LOG"
+}
+
+@test "installer_node: by host name, else by this server's address" {
+  upgrades_env
+  [ "$(installer_node)" = "kwerft-1" ]
+  hostname() { echo "srv-renamed"; }
+  PRIVATE_IP=10.0.0.2
+  kc() {
+    case "$*" in
+      "get nodes -o jsonpath="*) printf 'kwerft-1 10.0.0.2\nkwerft-2 10.0.0.3\n' ;;
+      *) return 1 ;;
+    esac
+  }
+  [ "$(installer_node)" = "kwerft-1" ]
+  PRIVATE_IP=10.0.0.9
+  [ -z "$(installer_node)" ]
+  run label_installer_node
+  [ "$status" -eq 30 ]
+}
+
+@test "system-upgrade-controller's pin is a release, dated with the others" {
+  KWERFT_SOURCED=1 source "$SCRIPT"
+  [[ "$SYSTEM_UPGRADE_CONTROLLER_VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
+  grep -B2 '^SYSTEM_UPGRADE_CONTROLLER_VERSION=' "$SCRIPT" | grep -q '20[0-9][0-9]-[0-9][0-9]-[0-9][0-9]'
+}
+
+@test "--help documents the new flags and what a re-run converges" {
+  run "$SCRIPT" --help
+  [[ "$output" == *"--progress FILE"* ]]
+  [[ "$output" == *"--k3s-version V"* ]]
+  [[ "$output" == *"/var/lib/kwerft/install.env"* ]]
+  [[ "$output" != *"Give it on every run"* ]]
+  ! grep -q 'Re-running repairs a broken install or upgrades it' "$SCRIPT"
 }

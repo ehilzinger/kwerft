@@ -7,8 +7,13 @@
 # Released copies come from the public ehilzinger/kwerft-install repository:
 # main holds the latest stable release, v<version>/install.sh every release.
 #
-# The script is idempotent: every stage records completion in $STATE_DIR and is
-# skipped on the next run. Re-running repairs a broken install or upgrades it.
+# The script is idempotent and safe to re-run. Most stages converge on every
+# run: system packages and sysctls, the firewall, Helm, the platform charts and
+# Kwerft itself, so re-running the installer of a newer release upgrades Kwerft
+# and its platform. Kubernetes (k3s) and joining a cluster run once: k3s keeps
+# the version it was installed with, on every node, and is upgraded from the
+# console (Settings › Updates), node by node. Settings given once (--email,
+# --acme-server, --lite, …) are remembered in /var/lib/kwerft/install.env.
 #
 # Everything lives inside functions and `main` is called on the last line, so a
 # truncated download (curl | bash) never executes a partial script.
@@ -48,6 +53,9 @@ HCLOUD_LOCATIONS="fsn1 nbg1 hel1 ash hil sin"
 ZOT_VERSION="v2.1.21"                   # in-cluster registry, ghcr.io/project-zot/zot-minimal
 BUILDKIT_VERSION="v0.33.1"              # docker.io/moby/buildkit:<version>-rootless
 RAILPACK_VERSION="v0.40.1"              # ghcr.io/railwayapp/railpack-frontend (contains the railpack CLI)
+# k3s upgrades from the console (Settings › Updates) go through Rancher's
+# system-upgrade-controller and its Plans; latest stable as of 2026-10-05.
+SYSTEM_UPGRADE_CONTROLLER_VERSION="v0.20.2"
 KWERFT_CHART_REPO="oci://ghcr.io/ehilzinger/charts/kwerft"
 KWERFT_IMAGE_REPO="ghcr.io/ehilzinger/kwerft"   # the chart's image.repository; checked before installing
 
@@ -79,8 +87,19 @@ FIREWALL_STATE_DIR="$STATE_DIR/firewall"  # the node agent's state (internal/fir
 HCLOUD_TOKEN_SUM_FILE="$STATE_DIR/hcloud-token.sha256"  # likewise; tells a changed Cloud API token from the same one
 HCLOUD_TMP_DIR="$STATE_DIR"               # likewise; short-lived copies of the Cloud API token (0700)
 K3S_CONFIG_FILE="/etc/rancher/k3s/config.yaml"  # likewise
+INSTALL_ENV_FILE="$STATE_DIR/install.env" # settings later runs reuse (remember_settings); likewise
+readonly INSTALLER_NODE_LABEL="kwerft.dev/installer"   # the node this script runs on, where $STATE_DIR is
 
-# Options (flags override KWERFT_* environment variables).
+# env_bool <value> prints 1 for 1/true/yes, 0 for 0/false/no, nothing else.
+env_bool() {
+  case "$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')" in
+    1|true|yes) echo 1 ;;
+    0|false|no) echo 0 ;;
+  esac
+}
+
+# Options. Precedence: flag, then KWERFT_* environment variable, then what an
+# earlier run remembered in install.env (apply_install_env), then the default.
 DOMAIN="${KWERFT_DOMAIN:-}"
 ACME_EMAIL="${KWERFT_EMAIL:-}"
 ACME_SERVER="${KWERFT_ACME_SERVER:-}"   # empty: the chart's default, Let's Encrypt production
@@ -110,11 +129,15 @@ HCLOUD_LB=""            # --config hcloud.loadBalancer: true|false, a Load Balan
 MODE="install"
 DRY_RUN=0
 ASSUME_YES=0
-HARDEN_SSH=0
+HARDEN_SSH=$(env_bool "${KWERFT_HARDEN_SSH:-}"); HARDEN_SSH=${HARDEN_SSH:-0}
 AGENT=0                 # --agent (MODE becomes agent unless --uninstall or --reset-firewall)
 AWAIT_CLOUD_TOKEN=0     # --await-cloud-token (agent mode): Cloud Volumes once the console hands over its token
 CLOUD_TOKEN_WAIT=${KWERFT_CLOUD_TOKEN_WAIT:-300}   # seconds --await-cloud-token waits
-LITE=0
+LITE=$(env_bool "${KWERFT_LITE:-}"); LITE=${LITE:-0}
+K3S_REQUESTED="${KWERFT_K3S_VERSION:-}"   # --k3s-version: what a new server installs instead of K3S_VERSION
+PROGRESS_FILE="${KWERFT_PROGRESS:-}"      # --progress: one JSON line per stage (progress)
+FLAGS_GIVEN=" "         # install.env keys this run's flags set (apply_install_env leaves them alone)
+PRIVATE_IFACE_GIVEN=""  # --private-iface as given (flag, environment or install.env), not as detected
 
 # Discovered facts.
 PUBLIC_IP=""
@@ -124,6 +147,7 @@ PRIVATE_NETWORK=""      # the whole private network the nodes share (private_net
 HCLOUD_NETWORK_ID=""    # the Cloud Network of PRIVATE_IP (metadata service), for the CCM
 HCLOUD_NETWORK_RANGE="" # its IP range: Traefik accepts the PROXY protocol from it (Load Balancer)
 CURRENT_STAGE="startup"
+CURRENT_STAGE_ID=""     # the id of the stage running now (--progress)
 START_TS=$(date +%s)
 
 # ---------------------------------------------------------------------------
@@ -137,10 +161,15 @@ fi
 
 log()  { [[ -w "$LOG_FILE" ]] && printf '%s %s\n' "$(date -u +%FT%TZ)" "$*" >>"$LOG_FILE"; return 0; }
 say()  { printf '%s\n' "$*"; log "$*"; }
-ok()   { printf '%s✓%s %-15s %s\n' "$C_OK" "$C_0" "$1" "${2:-}"; log "OK $1 $2"; }
-skip() { printf '%s·%s %-15s %s%s%s\n' "$C_DIM" "$C_0" "$1" "$C_DIM" "${2:-already done}" "$C_0"; log "SKIP $1"; }
+ok()   { printf '%s✓%s %-15s %s\n' "$C_OK" "$C_0" "$1" "${2:-}"; log "OK $1 ${2:-}"; progress ok "$1" "${2:-}"; }
+skip() { printf '%s·%s %-15s %s%s%s\n' "$C_DIM" "$C_0" "$1" "$C_DIM" "${2:-already done}" "$C_0"; log "SKIP $1"; progress skip "$1" "${2:-already done}"; }
 warn() { printf '%s!%s %s\n' "$C_WARN" "$C_0" "$*" >&2; log "WARN $*"; }
-die()  { local code=$1; shift; printf '%s✗ %s%s\n' "$C_ERR" "$*" "$C_0" >&2; log "FAIL($code) $*"; exit "$code"; }
+die()  {
+  local code=$1; shift
+  printf '%s✗ %s%s\n' "$C_ERR" "$*" "$C_0" >&2; log "FAIL($code) $*"
+  progress_fail "$*"
+  exit "$code"
+}
 
 on_error() {
   local rc=$1 line=$2
@@ -148,6 +177,59 @@ on_error() {
   printf '\n%s✗ Stage "%s" failed (exit %s, line %s).%s\n' "$C_ERR" "$CURRENT_STAGE" "$rc" "$line" "$C_0" >&2
   printf '  Full log: %s · re-run the same command to resume.\n' "$LOG_FILE" >&2
   log "ERROR stage=$CURRENT_STAGE rc=$rc line=$line"
+  progress_fail "exit $rc at line $line; see $LOG_FILE"
+}
+
+# ---------------------------------------------------------------------------
+# Progress (--progress FILE), read by the console's upgrade runner
+# (docs/phase6-upgrades.md): one JSON object per line and stage,
+#   {"id":"network","label":"Network","state":"ok","detail":"Cilium …","at":"2026-10-05T10:00:00Z"}
+# with state ok, skip or fail, and last {"exit":<code>}.
+# ---------------------------------------------------------------------------
+# json_str prints $1 as a JSON string. Other control characters (terminal
+# colours) are dropped.
+json_str() {
+  local s=$1 bs=\\ q=\"
+  s=${s//"$bs"/"$bs$bs"}
+  s=${s//"$q"/"$bs$q"}
+  s=${s//$'\t'/"${bs}t"}
+  s=${s//$'\n'/"${bs}n"}
+  s=${s//$'\r'/"${bs}r"}
+  printf '"%s"' "$(printf '%s' "$s" | LC_ALL=C tr -d '\000-\010\013\014\016-\037\177')"
+}
+
+# progress <state> <label> <detail> appends the running stage's line. It
+# never fails the install: the file reports the work, it is not part of it.
+progress() {
+  [[ -n "$PROGRESS_FILE" && -n "$CURRENT_STAGE_ID" ]] || return 0
+  printf '{"id":%s,"label":%s,"state":%s,"detail":%s,"at":"%s"}\n' \
+    "$(json_str "$CURRENT_STAGE_ID")" "$(json_str "$2")" "$(json_str "$1")" "$(json_str "$3")" "$(date -u +%FT%TZ)" \
+    >>"$PROGRESS_FILE" 2>/dev/null || true
+}
+
+# progress_fail <detail>: the running stage failed. die (in the stage's
+# subshell) and then on_error (in the top-level shell) both say so; the stage
+# gets one line, with die's message when there is one.
+progress_fail() {
+  [[ -n "$PROGRESS_FILE" && -n "$CURRENT_STAGE_ID" ]] || return 0
+  local last
+  last=$(tail -n 1 "$PROGRESS_FILE" 2>/dev/null || true)
+  if [[ "$last" == "{\"id\":$(json_str "$CURRENT_STAGE_ID"),"* && "$last" == *'"state":"fail"'* ]]; then
+    return 0
+  fi
+  progress fail "$CURRENT_STAGE" "$1"
+}
+
+# progress_exit <code> ends the file: the EXIT trap of the top-level shell.
+progress_exit() {
+  [[ -n "$PROGRESS_FILE" ]] && (( BASH_SUBSHELL == 0 )) || return 0
+  printf '{"exit":%d}\n' "$1" >>"$PROGRESS_FILE" 2>/dev/null || true
+}
+
+# progress_start empties the file for this run.
+progress_start() {
+  [[ -n "$PROGRESS_FILE" ]] || return 0
+  (umask 077; : >"$PROGRESS_FILE") 2>/dev/null || die $EXIT_USAGE "Cannot write the progress file $PROGRESS_FILE"
 }
 
 usage() {
@@ -162,7 +244,7 @@ Install:
   --email ADDR           Let's Encrypt account contact (optional)
   --acme-server URL      ACME directory for certificates, or "staging" for Let's Encrypt's
                          staging CA (untrusted certificates, generous rate limits: for tests).
-                         Default: Let's Encrypt production. Give it on every run
+                         Default: Let's Encrypt production
   --config FILE          Pre-seed owner, DNS, Hetzner tokens; skips the setup wizard
   --platform P           auto | cloud | dedicated (default: auto)
   --private-iface IF     Interface for node-to-node and API traffic
@@ -170,6 +252,13 @@ Install:
   --channel C            stable | edge
   --lite                 Smaller footprint for 4 GB servers (no Hubble, short retention)
   --harden-ssh           Disable SSH password login and root password login
+  --k3s-version V        k3s release a new server installs (default: ${K3S_VERSION}); also
+                         with --join and --agent. A running cluster keeps its version:
+                         upgrade it under Settings › Updates
+
+  Re-running converges everything but Kubernetes. --email, --acme-server, --platform,
+  --private-iface, --lite, --harden-ssh, --channel, the mode and --console are
+  remembered in ${STATE_DIR}/install.env for later runs (flags and KWERFT_* win).
 
 Join an existing cluster:
   --join URL --token T   Join the cluster whose console runs at URL
@@ -199,6 +288,8 @@ Maintenance:
 General:
   --dry-run              Print the plan without changing anything
   --yes, -y              Never prompt
+  --progress FILE        Write one JSON line per stage to FILE, then {"exit":<code>}
+                         (the console's upgrades read it)
   --help, -h             Show this help
 
 Every option can also be set as KWERFT_<NAME> in the environment, e.g. KWERFT_DOMAIN.
@@ -235,26 +326,28 @@ parse_args() {
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --domain)         need_arg "$@"; DOMAIN=$2; shift 2 ;;
-      --email)          need_arg "$@"; ACME_EMAIL=$2; shift 2 ;;
-      --acme-server)    need_arg "$@"; ACME_SERVER=$2; shift 2 ;;
+      --email)          need_arg "$@"; ACME_EMAIL=$2; given KWERFT_EMAIL; shift 2 ;;
+      --acme-server)    need_arg "$@"; ACME_SERVER=$2; given KWERFT_ACME_SERVER; shift 2 ;;
       --config)         need_arg "$@"; CONFIG_FILE=$2; shift 2 ;;
-      --platform)       need_arg "$@"; PLATFORM=$2; shift 2 ;;
-      --private-iface)  need_arg "$@"; PRIVATE_IFACE=$2; shift 2 ;;
+      --platform)       need_arg "$@"; PLATFORM=$2; given KWERFT_PLATFORM; shift 2 ;;
+      --private-iface)  need_arg "$@"; PRIVATE_IFACE=$2; given KWERFT_PRIVATE_IFACE; shift 2 ;;
       --version)        need_arg "$@"; KWERFT_VERSION=$2; shift 2 ;;
-      --channel)        need_arg "$@"; CHANNEL=$2; shift 2 ;;
+      --channel)        need_arg "$@"; CHANNEL=$2; given KWERFT_CHANNEL; shift 2 ;;
+      --k3s-version)    need_arg "$@"; K3S_REQUESTED=$2; shift 2 ;;
+      --progress)       need_arg "$@"; PROGRESS_FILE=$2; shift 2 ;;
       --join)           need_arg "$@"; JOIN_URL=$2; MODE="join"; shift 2 ;;
       --token)          need_arg "$@"; JOIN_TOKEN=$2; shift 2 ;;
       --role)           need_arg "$@"; JOIN_ROLE=$2; shift 2 ;;
       --agent)          AGENT=1; shift ;;
-      --console)        need_arg "$@"; CONSOLE_URL=$2; shift 2 ;;
+      --console)        need_arg "$@"; CONSOLE_URL=$2; given KWERFT_CONSOLE; shift 2 ;;
       --cluster-token)  need_arg "$@"; CLUSTER_TOKEN=$2; shift 2 ;;
       --await-cloud-token) AWAIT_CLOUD_TOKEN=1; shift ;;
       --node-label)     need_arg "$@"; NODE_LABELS+=("$2"); shift 2 ;;
       --node-taint)     need_arg "$@"; NODE_TAINTS+=("$2"); shift 2 ;;
       --image)          need_arg "$@"; IMAGE=$2; shift 2 ;;
       --image-archive)  need_arg "$@"; IMAGE_ARCHIVE=$2; shift 2 ;;
-      --lite)           LITE=1; shift ;;
-      --harden-ssh)     HARDEN_SSH=1; shift ;;
+      --lite)           LITE=1; given KWERFT_LITE; shift ;;
+      --harden-ssh)     HARDEN_SSH=1; given KWERFT_HARDEN_SSH; shift ;;
       --reset-firewall) MODE="reset-firewall"; shift ;;
       --uninstall)      MODE="uninstall"; shift ;;
       --dry-run)        DRY_RUN=1; shift ;;
@@ -264,12 +357,16 @@ parse_args() {
     esac
   done
 
+  apply_install_env
   if [[ -n "$JOIN_URL" ]]; then
     (( AGENT )) && die $EXIT_USAGE "--agent and --join exclude each other"
     MODE="join"
   fi
   if (( AGENT )) && [[ "$MODE" == "install" ]]; then
     MODE="agent"
+  fi
+  if [[ "$MODE" == "agent" && -z "$CLUSTER_TOKEN" ]]; then
+    CLUSTER_TOKEN=$(stored_agent_token)   # a re-run: the token this cluster's agent uses
   fi
   if [[ "$MODE" == "agent" ]]; then
     [[ -n "$CONSOLE_URL" && -n "$CLUSTER_TOKEN" ]] || die $EXIT_USAGE "--agent needs --console and --cluster-token (Clusters › Adopt in the console shows the whole command)"
@@ -287,7 +384,17 @@ parse_args() {
   case "$PLATFORM" in auto|cloud|dedicated) ;; *) die $EXIT_USAGE "--platform must be auto, cloud or dedicated" ;; esac
   case "$CHANNEL" in stable|edge) ;; *) die $EXIT_USAGE "--channel must be stable or edge" ;; esac
   case "$JOIN_ROLE" in worker|control-plane) ;; *) die $EXIT_USAGE "--role must be worker or control-plane" ;; esac
-  if [[ "$MODE" == "join" && -z "$JOIN_TOKEN" ]]; then die $EXIT_USAGE "--join needs --token"; fi
+  if [[ "$MODE" == "join" ]] && ! stage_done join; then
+    [[ -n "$JOIN_URL" ]] || die $EXIT_USAGE "This server has not joined its cluster yet: run the join command (--join URL --token T) again"
+    [[ -n "$JOIN_TOKEN" ]] || die $EXIT_USAGE "--join needs --token"
+  fi
+  if [[ -n "$K3S_REQUESTED" ]] && ! valid_k3s_version "$K3S_REQUESTED"; then
+    die $EXIT_USAGE "--k3s-version must be a k3s release like $K3S_VERSION, got '$K3S_REQUESTED'"
+  fi
+  if [[ -n "$PROGRESS_FILE" && ! -d "$(dirname "$PROGRESS_FILE")" ]]; then
+    die $EXIT_USAGE "--progress: the directory of $PROGRESS_FILE does not exist"
+  fi
+  PRIVATE_IFACE_GIVEN=$PRIVATE_IFACE
   local l
   for l in ${NODE_LABELS[@]+"${NODE_LABELS[@]}"}; do
     valid_node_label "$l" || die $EXIT_USAGE "--node-label must look like key=value (a Kubernetes label), got '$l'"
@@ -421,6 +528,109 @@ cluster_of_token() {
   printf '%s' "${rest%%_*}"
 }
 
+# valid_k3s_version: a k3s release, v1.37.1+k3s1 (or a candidate, v1.38.0-rc1+k3s1).
+valid_k3s_version() {
+  [[ "$1" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-rc[0-9]+)?\+k3s[0-9]+$ ]]
+}
+
+# ---------------------------------------------------------------------------
+# Remembered settings: /var/lib/kwerft/install.env (0600), written by every
+# run (remember_settings) and read by the next one (apply_install_env), so a
+# re-run, or the console's upgrade (install.sh --version V --yes --progress
+# F), needs no flags. One KWERFT_<NAME>=<value> per line, named like the
+# environment variables; an empty value is not set. Never sourced.
+#   KWERFT_MODE           install | agent | join
+#   KWERFT_EMAIL          --email (or the --config email)
+#   KWERFT_ACME_SERVER    --acme-server, as a URL
+#   KWERFT_PLATFORM       cloud | dedicated, as detected or given
+#   KWERFT_PRIVATE_IFACE  --private-iface as given; empty when detected
+#   KWERFT_LITE           0 | 1
+#   KWERFT_HARDEN_SSH     0 | 1
+#   KWERFT_CHANNEL        stable | edge
+#   KWERFT_CONSOLE        --console (agent mode only)
+# Not remembered: the console's hostname (ConsoleSettings is the record),
+# tokens (agent mode reads its token back from Secret kwerft-system/kwerft-agent),
+# --config, --version, --k3s-version and the join command.
+# ---------------------------------------------------------------------------
+# given <key> records that a flag set a remembered setting.
+given() { FLAGS_GIVEN+="$1 "; }
+
+# apply_install_env fills in what install.env remembers and neither a flag
+# nor the environment gives, and the mode when no flag chose one.
+apply_install_env() {
+  [[ "$MODE" == install || "$MODE" == join ]] || return 0   # --uninstall, --reset-firewall
+  local line key value stored_mode="" stored_console=""
+  if [[ -r "$INSTALL_ENV_FILE" ]]; then
+    while IFS= read -r line || [[ -n "$line" ]]; do
+      line=${line%$'\r'}
+      [[ "$line" =~ ^KWERFT_[A-Z_]+= ]] || continue
+      key=${line%%=*} value=${line#*=}
+      [[ -n "$value" && "$FLAGS_GIVEN" != *" $key "* && -z "${!key:-}" ]] || continue
+      case "$key" in
+        KWERFT_MODE)          stored_mode=$value ;;
+        KWERFT_EMAIL)
+          # An email in this run's --config wins over the remembered one.
+          if [[ -z "$CONFIG_FILE" || ! -r "$CONFIG_FILE" || -z "$(config_get email)" ]]; then ACME_EMAIL=$value; fi ;;
+        KWERFT_ACME_SERVER)   ACME_SERVER=$value ;;
+        KWERFT_PLATFORM)      PLATFORM=$value ;;
+        KWERFT_PRIVATE_IFACE) PRIVATE_IFACE=$value ;;
+        KWERFT_LITE)          LITE=$(env_bool "$value"); LITE=${LITE:-0} ;;
+        KWERFT_HARDEN_SSH)    HARDEN_SSH=$(env_bool "$value"); HARDEN_SSH=${HARDEN_SSH:-0} ;;
+        KWERFT_CHANNEL)       CHANNEL=$value ;;
+        KWERFT_CONSOLE)       stored_console=$value ;;
+      esac
+    done <"$INSTALL_ENV_FILE"
+  fi
+  # Installed before install.env existed: the stages done tell the mode.
+  [[ -n "$stored_mode" ]] || stored_mode=$(installed_mode)
+  if [[ "$MODE" == install && -z "$JOIN_URL" ]] && (( ! AGENT )); then
+    case "$stored_mode" in
+      agent) AGENT=1 ;;
+      join)  MODE="join" ;;
+    esac
+  fi
+  if (( AGENT )) && [[ -z "$CONSOLE_URL" ]]; then CONSOLE_URL=$stored_console; fi
+  return 0
+}
+
+# installed_mode prints the mode this server was installed in, from its
+# stages, or nothing on a new server.
+installed_mode() {
+  if stage_done kwerft-agent; then echo agent
+  elif stage_done join; then echo join
+  elif stage_done kubernetes; then echo install
+  fi
+}
+
+# stored_agent_token prints the agent token of this cluster (agent mode),
+# from the Secret write_agent_secret keeps; nothing before k3s runs.
+stored_agent_token() {
+  command -v k3s >/dev/null 2>&1 || return 0
+  kc -n kwerft-system get secret kwerft-agent -o jsonpath='{.data.token}' 2>/dev/null | base64 -d 2>/dev/null | tr -d '[:space:]' || true
+}
+
+# install_env prints install.env for this run's settings.
+install_env() {
+  local v
+  printf '# Kwerft installer %s, %s: settings later runs reuse.\n' "$KWERFT_VERSION" "$(date -u +%FT%TZ)"
+  printf '# Flags and KWERFT_* environment variables win over this file.\n'
+  printf 'KWERFT_MODE=%s\n' "$MODE"
+  for v in "KWERFT_EMAIL=$ACME_EMAIL" "KWERFT_ACME_SERVER=$ACME_SERVER" "KWERFT_PLATFORM=$PLATFORM" \
+           "KWERFT_PRIVATE_IFACE=$PRIVATE_IFACE_GIVEN" "KWERFT_LITE=$LITE" "KWERFT_HARDEN_SSH=$HARDEN_SSH" \
+           "KWERFT_CHANNEL=$CHANNEL"; do
+    printf '%s\n' "${v//[$'\n\r']/}"
+  done
+  if [[ "$MODE" == agent ]]; then printf 'KWERFT_CONSOLE=%s\n' "${CONSOLE_URL//[$'\n\r']/}"; fi
+}
+
+# remember_settings writes install.env (0600), replacing it in one step.
+remember_settings() {
+  if (( DRY_RUN )) || [[ ! -w "$(dirname "$INSTALL_ENV_FILE")" ]]; then return 0; fi
+  case "$MODE" in install|agent|join) ;; *) return 0 ;; esac
+  (umask 077; install_env >"$INSTALL_ENV_FILE.kwerft-new")
+  mv -f "$INSTALL_ENV_FILE.kwerft-new" "$INSTALL_ENV_FILE"
+}
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -441,20 +651,66 @@ mark_done()  { mkdir -p "$STATE_DIR/stages"; date -u +%FT%TZ >"$STATE_DIR/stages
 
 # run_stage <id> <label> <function> [force]
 # Stages marked done are skipped unless "force" is given (used for stages that
-# must always converge, such as the Helm releases on upgrade).
+# must always converge, such as the Helm releases on upgrade). Only
+# kubernetes and join run once: k3s is upgraded from the console.
 run_stage() {
   local id=$1 label=$2 fn=$3 force=${4:-}
-  CURRENT_STAGE=$label
+  CURRENT_STAGE=$label CURRENT_STAGE_ID=$id
   if (( DRY_RUN )); then
     printf '%s→%s %-15s %s(would run %s)%s\n' "$C_ACC" "$C_0" "$label" "$C_DIM" "$fn" "$C_0"
+    CURRENT_STAGE_ID=""
     return 0
   fi
-  if [[ -z "$force" ]] && stage_done "$id"; then skip "$label"; return 0; fi
+  if [[ -z "$force" ]] && stage_done "$id"; then
+    skip "$label" "$(skip_detail "$id")"
+    CURRENT_STAGE_ID=""
+    return 0
+  fi
   local detail
   detail=$("$fn")              # a failure here exits via errexit with the stage's code
   mark_done "$id"
   ok "$label" "${detail##*$'\n'}"
+  CURRENT_STAGE_ID=""
 }
+
+# skip_detail <id> prints what a stage that already ran reports instead of
+# "already done": for k3s, its version, and whether it is behind this release.
+skip_detail() {
+  case "$1" in
+    kubernetes|join) k3s_status ;;
+  esac
+}
+
+# k3s_status: "k3s v1.37.1+k3s1 · installed", or that it is older than the pin.
+k3s_status() {
+  local running
+  running=$(k3s --version 2>/dev/null | awk 'NR == 1 {print $3}' || true)
+  [[ -n "$running" ]] || return 0
+  if k3s_older "$running" "$K3S_VERSION"; then
+    echo "k3s $running is older than this release's $K3S_VERSION: upgrade it in Settings › Updates"
+  else
+    echo "k3s $running · installed"
+  fi
+}
+
+# k3s_older <a> <b>: k3s version a is older than b (major, minor, patch, then
+# the k3s build: v1.37.1+k3s1 < v1.37.1+k3s2 < v1.37.2+k3s1). Unknown formats
+# are never older.
+k3s_older() {
+  local re='^v?([0-9]+)\.([0-9]+)\.([0-9]+)(-[^+]*)?(\+k3s([0-9]+))?$' a b i
+  [[ "$1" =~ $re ]] || return 1
+  a=("${BASH_REMATCH[1]}" "${BASH_REMATCH[2]}" "${BASH_REMATCH[3]}" "${BASH_REMATCH[6]:-0}")
+  [[ "$2" =~ $re ]] || return 1
+  b=("${BASH_REMATCH[1]}" "${BASH_REMATCH[2]}" "${BASH_REMATCH[3]}" "${BASH_REMATCH[6]:-0}")
+  for i in 0 1 2 3; do
+    (( 10#${a[i]} < 10#${b[i]} )) && return 0
+    (( 10#${a[i]} > 10#${b[i]} )) && return 1
+  done
+  return 1
+}
+
+# k3s_target: the k3s version a new server installs.
+k3s_target() { echo "${K3S_REQUESTED:-$K3S_VERSION}"; }
 
 confirm() {
   (( ASSUME_YES )) && return 0
@@ -803,13 +1059,14 @@ nodes_initialized() {
 }
 
 stage_kubernetes() {
+  local version; version=$(k3s_target)
   write_k3s_config
   write_registry_mirror >/dev/null   # before k3s first starts: no restart needed
   curl -fsSL https://get.k3s.io \
-    | INSTALL_K3S_VERSION="$K3S_VERSION" INSTALL_K3S_SKIP_ENABLE=false sh -s - server >>"$LOG_FILE" 2>&1 \
+    | INSTALL_K3S_VERSION="$version" INSTALL_K3S_SKIP_ENABLE=false sh -s - server >>"$LOG_FILE" 2>&1 \
     || die $EXIT_K8S "k3s installation failed"
   retry 60 2 kc get --raw /readyz >/dev/null 2>&1 || die $EXIT_K8S "Kubernetes API did not become ready"
-  echo "k3s $K3S_VERSION · server · embedded etcd · secrets encryption on"
+  echo "k3s $version · server · embedded etcd · secrets encryption on"
 }
 
 # ---------------------------------------------------------------------------
@@ -953,6 +1210,67 @@ stage_helm() {
   install -m 0755 "$tmp/linux-${arch}/helm" /usr/local/bin/helm
   rm -rf "$tmp"
   echo "helm $HELM_VERSION"
+}
+
+# ---------------------------------------------------------------------------
+# Stage: upgrades
+# Rancher's system-upgrade-controller (namespace system-upgrade, CRD
+# plans.upgrade.cattle.io) at its pin: the console's Kubernetes upgrades
+# write its Plans, which move k3s node by node, joined nodes included. And
+# the node label kwerft.dev/installer=true on this server, where
+# /var/lib/kwerft lives: the console's upgrade runner is scheduled there.
+# ---------------------------------------------------------------------------
+suc_manifest_url() {
+  echo "https://github.com/rancher/system-upgrade-controller/releases/download/$SYSTEM_UPGRADE_CONTROLLER_VERSION/$1"
+}
+
+stage_upgrades() {
+  kc apply --server-side --force-conflicts -f "$(suc_manifest_url crd.yaml)" >>"$LOG_FILE" 2>&1 \
+    || die $EXIT_PLATFORM "system-upgrade-controller's CRDs failed to install"
+  kc wait --for=condition=Established crd/plans.upgrade.cattle.io --timeout=60s >>"$LOG_FILE" 2>&1 \
+    || die $EXIT_PLATFORM "The CRD plans.upgrade.cattle.io was not established"
+  kc apply --server-side --force-conflicts -f "$(suc_manifest_url system-upgrade-controller.yaml)" >>"$LOG_FILE" 2>&1 \
+    || die $EXIT_PLATFORM "system-upgrade-controller failed to install"
+  local node state="starts with the network"
+  node=$(label_installer_node)
+  # On a first install the node has no network yet (Cilium is next), so its
+  # pod cannot start now; on every later run it must be ready.
+  if node_ready "$node"; then
+    kc -n system-upgrade rollout status deployment/system-upgrade-controller --timeout=5m >>"$LOG_FILE" 2>&1 \
+      || die $EXIT_PLATFORM "system-upgrade-controller did not become ready (kubectl -n system-upgrade get pods)"
+    state="ready"
+  fi
+  echo "system-upgrade-controller $SYSTEM_UPGRADE_CONTROLLER_VERSION ($state) · installer node $node"
+}
+
+node_ready() {
+  [[ "$(kc get node "$1" -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}' 2>/dev/null || true)" == "True" ]]
+}
+
+# installer_node prints this server's node: named after the host (k3s's
+# default), else the node with this server's address.
+installer_node() {
+  local name ip=${PRIVATE_IP:-$PUBLIC_IP}
+  name=$(hostname | tr '[:upper:]' '[:lower:]')
+  if kc get node "$name" >/dev/null 2>&1; then echo "$name"; return 0; fi
+  [[ -n "$ip" ]] || return 0
+  kc get nodes -o jsonpath='{range .items[*]}{.metadata.name}{" "}{.status.addresses[?(@.type=="InternalIP")].address}{"\n"}{end}' 2>/dev/null \
+    | awk -v ip="$ip" '$2 == ip {print $1; exit}' || true
+}
+
+# label_installer_node labels this server's node, and no other, as the
+# installer's; prints its name.
+label_installer_node() {
+  local node other
+  node=$(installer_node)
+  [[ -n "$node" ]] || die $EXIT_K8S "Could not find this server's node to label it $INSTALLER_NODE_LABEL=true"
+  kc label node "$node" "$INSTALLER_NODE_LABEL=true" --overwrite >>"$LOG_FILE" 2>&1 \
+    || die $EXIT_K8S "Could not label node $node $INSTALLER_NODE_LABEL=true"
+  for other in $(kc get nodes -l "$INSTALLER_NODE_LABEL=true" -o jsonpath='{.items[*].metadata.name}' 2>/dev/null || true); do
+    [[ "$other" == "$node" ]] && continue
+    kc label node "$other" "$INSTALLER_NODE_LABEL-" >>"$LOG_FILE" 2>&1 || true
+  done
+  echo "$node"
 }
 
 # ---------------------------------------------------------------------------
@@ -1762,7 +2080,7 @@ print_agent_summary() {
   printf '  Console     %s%s%s\n' "$C_ACC" "$CONSOLE_URL" "$C_0"
   printf '  This cluster (%s) appears under Clusters there once its agent connects, within a minute.\n' "$(cluster_of_token "$CLUSTER_TOKEN")"
   printf '  Log         %s\n\n' "$LOG_FILE"
-  printf '%sDone in %dm %02ds.%s Re-run the same command any time to repair or upgrade.\n' "$C_OK" $((secs / 60)) $((secs % 60)) "$C_0"
+  printf '%sDone in %dm %02ds.%s Re-run it any time to repair; the installer of a newer release upgrades Kwerft (Kubernetes: Settings › Updates).\n' "$C_OK" $((secs / 60)) $((secs % 60)) "$C_0"
 }
 
 # adopt_namespace hands a namespace the chart creates, but that already exists
@@ -1936,7 +2254,7 @@ print_summary() {
     printf '%s!%s %s is a temporary hostname from the public sslip.io service.\n' "$C_WARN" "$C_0" "$DOMAIN"
     printf '  To use your own, point an A record at %s and change it under Settings in the console,\n  or re-run with --domain ops.example.com\n\n' "$PUBLIC_IP"
   fi
-  printf '%sDone in %dm %02ds.%s Re-run the same command any time to repair or upgrade.\n' "$C_OK" $((secs / 60)) $((secs % 60)) "$C_0"
+  printf '%sDone in %dm %02ds.%s Re-run it any time to repair; the installer of a newer release upgrades Kwerft (Kubernetes: Settings › Updates).\n' "$C_OK" $((secs / 60)) $((secs % 60)) "$C_0"
 }
 
 # ---------------------------------------------------------------------------
@@ -1977,9 +2295,10 @@ stage_join() {
     printf 'server: %s\ntoken: %s\n' "$server" "$k3s_token" >>/etc/rancher/k3s/config.yaml
   fi
   write_registry_mirror >/dev/null   # before k3s first starts, as on the first server
-  curl -fsSL https://get.k3s.io | INSTALL_K3S_VERSION="$K3S_VERSION" sh -s - "$kind" >>"$LOG_FILE" 2>&1 \
+  local version; version=$(k3s_target)
+  curl -fsSL https://get.k3s.io | INSTALL_K3S_VERSION="$version" sh -s - "$kind" >>"$LOG_FILE" 2>&1 \
     || die $EXIT_K8S "k3s $kind installation failed"
-  echo "k3s $kind joined $server"
+  echo "k3s $version $kind joined $server"
 }
 
 # ---------------------------------------------------------------------------
@@ -2019,7 +2338,9 @@ do_uninstall() {
 # Main
 # ---------------------------------------------------------------------------
 main() {
+  trap 'progress_exit $?' EXIT
   parse_args "$@"
+  progress_start
   if (( ! DRY_RUN )) && [[ $EUID -eq 0 ]]; then
     mkdir -p "$LOG_DIR" "$STATE_DIR"; chmod 0700 "$STATE_DIR"
     touch "$LOG_FILE"; chmod 0600 "$LOG_FILE"
@@ -2063,7 +2384,8 @@ main() {
   fi
 
   run_stage preflight "Preflight" stage_preflight force
-  run_stage system    "System"    stage_system
+  remember_settings
+  run_stage system    "System"    stage_system force
   run_stage firewall  "Firewall"  stage_firewall force
 
   if [[ "$MODE" == "join" ]]; then
@@ -2075,8 +2397,9 @@ main() {
 
   run_stage kubernetes    "Kubernetes"    stage_kubernetes
   run_stage registry      "Registry mirror" stage_registry_mirror force
-  run_stage helm          "Helm"          stage_helm
-  run_stage network       "Network"       stage_network force
+  run_stage helm          "Helm"          stage_helm force
+  run_stage upgrades      "Upgrades"      stage_upgrades force
+  run_stage network      "Network"       stage_network force
   run_stage hcloud        "Hetzner Cloud" stage_hcloud force
   run_stage ingress       "Ingress & TLS" stage_ingress_tls force
   run_stage observability "Observability" stage_observability force

@@ -436,7 +436,7 @@ pre.mermaid{background:var(--surface);border:1px solid var(--line);border-radius
   Setup token <span class="b">kwft_setup_••••-••••-9DRF</span>  <span class="d">(single use, expires in 24 h)</span>
   Stored at   /etc/kwerft/setup-token  <span class="d">· mode 0600</span>
 
-<span class="g">Done in 3m 41s.</span> <span class="d">Re-run the same command any time to repair or upgrade.</span>
+<span class="g">Done in 3m 41s.</span> <span class="d">Re-run it any time to repair; the installer of a newer release upgrades Kwerft (Kubernetes: Settings › Updates).</span>
 <span class="d">root@fsn1-node-1:~#</span> <span class="b">▍</span></div>
       </div>
 
@@ -1036,7 +1036,7 @@ S3_BUCKET=acme-invoices</textarea><span class="hint">Mark a variable as secret t
           <h2>A Hetzner-aware control panel that makes Kubernetes feel like one server</h2>
           <p>The product has one job: take a freshly rented Hetzner machine to “my containers are running behind HTTPS and I can see what they're doing” in under ten minutes, then grow to multiple nodes and clusters without a re-platform. Five principles shape every decision below.</p>
           <div class="principles">
-            <div><b>One command, zero follow-up</b><span>The installer is idempotent and fully flag-driven. Running it again repairs or upgrades. Cloud-init can call it unattended.</span></div>
+            <div><b>One command, zero follow-up</b><span>The installer is idempotent and fully flag-driven, and remembers its flags. Running it again repairs the install; a newer release's installer upgrades Kwerft and its platform, while Kubernetes is upgraded from the console. Cloud-init can call it unattended.</span></div>
             <div><b>Kubernetes is the database</b><span>Every app, rule and domain is a custom resource. The UI writes those resources; controllers turn them into native objects. GitOps works for free.</span></div>
             <div><b>Fits an 8 GB box</b><span>The platform uses about 2.5 GB of RAM (measured), leaving most of an 8 GB server for real workloads. 4 GB works with <code>--lite</code>.</span></div>
             <div><b>Secure by default</b><span>Projects are isolated, the Kubernetes API is private, secrets are encrypted, every shell session and change is audited.</span></div>
@@ -1151,7 +1151,7 @@ curl -fsSL https://get.kwerft.dev | sudo bash -s -- --config /root/kwerft.yaml -
             <tr><td><code>--uninstall</code></td><td>Remove Kwerft and k3s, keep or delete data on request.</td></tr>
           </tbody></table></div>
           <h3>Stages</h3>
-          <p>Each stage checks whether its work is already done and records completion in <code>/var/lib/kwerft/state</code>. A failed run resumes at the failed stage.</p>
+          <p>Each stage records completion in <code>/var/lib/kwerft/stages</code>, and a failed run resumes where it stopped. Every stage but Kubernetes converges on each run (packages, firewall, Helm, the platform charts, Kwerft), so re-running a newer release's installer upgrades Kwerft and its platform with the flags remembered in <code>/var/lib/kwerft/install.env</code>. k3s keeps the version it was installed with, on every node, until the console upgrades it (Settings › Updates, through system-upgrade-controller, node by node); a re-run says when it is older than the release's pin.</p>
           <ol>
             <li><b>Preflight</b> — detects Hetzner Cloud vs. dedicated, root, Ubuntu 22.04/24.04/26.04, x86_64 or arm64, ≥ 4 GB RAM, ≥ 30 GB disk, ports 80/443 free, outbound HTTPS, clock sync. Fails with a specific message and exit code.</li>
             <li><b>System prep</b> — apt packages, kernel modules and sysctls for Cilium, swap off, chrony, unattended-upgrades, optional SSH hardening (<code>--harden-ssh</code>).</li>

@@ -881,6 +881,14 @@ func (r *NodePoolReconciler) userData(ctx context.Context, run *poolRun, mode, n
 	if roleOf(pool) == kwerftv1.NodeBuilds {
 		j.Taints = []string{TaintBuilds.ToString()}
 	}
+	// The cluster's running k3s, once it reports one: a node joining after a
+	// Kubernetes upgrade installs that, not the installer's pin.
+	var cl kwerftv1.Cluster
+	if err := r.Get(ctx, client.ObjectKey{Name: pool.Spec.Cluster}, &cl); err == nil {
+		j.K3sVersion = k3sVersion(cl.Status.KubernetesVersion)
+	} else if !apierrors.IsNotFound(err) {
+		return "", err
+	}
 	switch mode {
 	case "agent":
 		var sec corev1.Secret
