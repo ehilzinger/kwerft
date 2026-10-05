@@ -265,7 +265,9 @@ func TestUpgradeAll(t *testing.T) {
 		a.Members[0].Fleet != a.Fleet {
 		t.Fatalf("answer %+v", a)
 	}
-	if !slices.ContainsFunc(a.Skipped, func(s fleetSkipJSON) bool { return s.Cluster == "away" && s.Warning && strings.Contains(s.Reason, "not connected") }) {
+	if !slices.ContainsFunc(a.Skipped, func(s fleetSkipJSON) bool {
+		return s.Cluster == "away" && s.Warning && strings.Contains(s.Reason, "not connected")
+	}) {
 		t.Errorf("skipped %+v", a.Skipped)
 	}
 	member := m.edgeUpgrade(t, a.Members[0].Name)
