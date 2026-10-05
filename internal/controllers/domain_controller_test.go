@@ -21,7 +21,7 @@ import (
 func TestListenerName(t *testing.T) {
 	valid := regexp.MustCompile(`^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`)
 	hosts := []string{"api.example.com", "a-b.c.example.com", "a.b-c.example.com",
-		"whoami.46.224.139.73.sslip.io", "a-very-long-subdomain-name-for-testing.apps.example.com"}
+		"whoami.203.0.113.7.sslip.io", "a-very-long-subdomain-name-for-testing.apps.example.com"}
 	seen := map[string]string{}
 	for _, h := range hosts {
 		n := ListenerName(h)

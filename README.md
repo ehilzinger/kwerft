@@ -86,4 +86,11 @@ Run the console locally with live UI reload — `make dev-api` in one terminal,
 
 ## License
 
-To be decided before the public beta. All dependencies are Apache-2.0 or MIT.
+Kwerft is free software under the [GNU Affero General Public License v3.0
+only](LICENSE) (`AGPL-3.0-only`): anyone may run, modify and share it, and
+whoever offers a modified Kwerft to others over a network must publish their
+changes. A commercial license is available on request for companies that
+cannot use the AGPL. All dependencies are Apache-2.0 or MIT.
+
+Contributions need a contributor license agreement, which is being prepared;
+see [CONTRIBUTING.md](CONTRIBUTING.md). "Kwerft" is a trademark of its author.

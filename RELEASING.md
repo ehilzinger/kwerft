@@ -9,11 +9,12 @@ which publishes:
 | SBOM (SPDX) | next to the image in GHCR (`sha256-<digest>.sbom`) and on the GitHub Release |
 | Helm chart, version = appVersion = 0.2.0 | `oci://ghcr.io/ehilzinger/charts/kwerft` |
 | `install.sh` and `join.sh` stamped with 0.2.0, plus `SHA256SUMS` | the GitHub Release here, and the public install repository |
-| GitHub Release with generated notes | this (private) repository |
+| GitHub Release with generated notes | this repository |
 | Signatures (opt-in) | cosign keyless, stored next to the image and chart |
 
-The code stays private. The image, the chart and the install script are
-public, so `curl … | sudo bash` works on any server without credentials.
+The code is public under AGPL-3.0-only (since 2026-10-05; private before).
+The image, the chart and the install script are public too, so
+`curl … | sudo bash` works on any server without credentials.
 
 ## Cut a release
 

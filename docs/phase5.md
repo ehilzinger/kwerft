@@ -1009,7 +1009,7 @@ of the default, to watch:
   `internal/server/dns_clusters_test.go` (two-cluster envtest: Domains list,
   remote settings view, the DNS-01 guard).
 
-**Verified 2026-10-05** on `kwerft-dedi-1`: the hatchure `edge` app got
+**Verified 2026-10-05** on `kwerft-dedi-1`: a pilot project's `edge` app got
 `router-next.apps.kwerft.dev`; the agent cluster's Domain had a listener at
 once, the console's record (Managed, `65.108.43.91`) followed within a
 minute, the HTTP-01 certificate about a minute after that, and the name
@@ -1020,7 +1020,7 @@ answer kept it for its TTL (300 s).
 
 **Trying it on the real setup** (with the user's go; one certificate for
 the new name):
-1. Deploy the console (`make web && make dev-server HOST=root@46.224.139.73`)
+1. Deploy the console (`make web && make dev-server HOST=root@<console server>`)
    and the agent on `kwerft-dedi-1` with the same image (see the
    dedicated-server notes); the installer applies the new CRDs.
 2. `kubectl get consolesettings kwerft -o yaml` on the agent cluster: created
