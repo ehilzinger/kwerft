@@ -6,6 +6,7 @@ import (
 	"os/exec"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -539,8 +540,8 @@ func TestBuildPoolScalesWithBuilds(t *testing.T) {
 }
 
 func TestNewClusterBootstrapsThroughAgentMode(t *testing.T) {
-	e := newPoolEnv(t) // the new cluster is not reachable yet
-	e.f.FakeClusterNetworks(hetzner.NetworkRef{Name: hetzner.NetworkName("np6")})
+	e := newPoolEnv(t) // the new cluster is not reachable yet, and has no network
+	e.f.EnableNetworks()
 	ctx := context.Background()
 	cl := &kwerftv1.Cluster{ObjectMeta: metav1.ObjectMeta{Name: "np6"}, Spec: kwerftv1.ClusterSpec{Provider: kwerftv1.ClusterHetznerCloud,
 		HetznerCloud: &kwerftv1.HetznerClusterSpec{Location: "fsn1", ServerType: "cx23", ControlPlanes: 3}}}
@@ -575,6 +576,15 @@ func TestNewClusterBootstrapsThroughAgentMode(t *testing.T) {
 	if len(all) != 1 || all[0].Labels[hetzner.LabelBootstrap] != "true" || all[0].Labels[hetzner.LabelPool] != cpPool {
 		t.Fatalf("servers = %+v", all)
 	}
+	// Its private network was created with it, as the cluster's.
+	nets := e.f.Networks()
+	if len(nets) != 1 || nets[0].Name != "kwerft-np6" || nets[0].IPRange != ClusterNetworkRange || nets[0].Labels[hetzner.LabelCluster] != "np6" ||
+		nets[0].Labels[DNSLabelManagedBy] != ManagedByKwerft || len(nets[0].Subnets) != 1 || nets[0].Subnets[0].NetworkZone != "eu-central" {
+		t.Fatalf("networks = %+v", nets)
+	}
+	if len(all[0].PrivateNet) != 1 || all[0].PrivateNet[0].Network != nets[0].ID {
+		t.Fatalf("server networks = %+v", all[0].PrivateNet)
+	}
 	ud := e.f.UserData(all[0].ID)
 	if !strings.Contains(ud, "'--agent' '--console' '"+consoleURL+"' '--cluster-token' '"+token+"' '--platform' 'cloud' '--await-cloud-token'") || strings.Contains(ud, "kwft_join_") {
 		t.Fatalf("user data:\n%s", ud)
@@ -582,6 +592,37 @@ func TestNewClusterBootstrapsThroughAgentMode(t *testing.T) {
 	p, _ := e.pass(t, "np6-workers")
 	if _, msg := readyCondition(p); !strings.Contains(msg, JoinSecretName("np6")) {
 		t.Fatalf("workers: %q", msg)
+	}
+}
+
+// TestNodePoolUsesTheInstallersNetwork: a cluster whose network carries
+// neither the label nor the name (made by hand) is found through the
+// network its installer recorded in kube-system/hcloud; no network is
+// created for an existing cluster.
+func TestNodePoolUsesTheInstallersNetwork(t *testing.T) {
+	e := newPoolEnv(t)
+	e.r.Clusters = StaticClients{"np8": k8s}
+	e.f.EnableNetworks()
+	ctx := context.Background()
+	createPool(t, "np8-workers", kwerftv1.NodePoolSpec{Cluster: "np8", ServerType: "cx23", Location: "fsn1", Count: 1})
+	joinMaterial(t, "np8")
+
+	// Without it: waiting, nothing created.
+	p, _ := e.pass(t, "np8-workers")
+	if _, msg := readyCondition(p); !strings.Contains(msg, "private network") || len(e.f.CloudServers()) != 0 || len(e.f.Networks()) != 0 {
+		t.Fatalf("message %q, %d servers, %d networks", msg, len(e.f.CloudServers()), len(e.f.Networks()))
+	}
+	id := e.f.PutNetwork(hetzner.Network{Name: "my-network", IPRange: "10.0.0.0/16"})
+	sec := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Namespace: HCloudSystemNamespace, Name: HCloudSystemSecret},
+		StringData: map[string]string{"token": "t", "network": strconv.FormatInt(id, 10)}}
+	if err := k8s.Create(ctx, sec); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = k8s.Delete(context.Background(), sec) })
+	e.pass(t, "np8-workers")
+	all := e.f.CloudServers()
+	if len(all) != 1 || len(all[0].PrivateNet) != 1 || all[0].PrivateNet[0].Network != id || len(e.f.Networks()) != 1 {
+		t.Fatalf("servers = %+v, networks = %+v", all, e.f.Networks())
 	}
 }
 

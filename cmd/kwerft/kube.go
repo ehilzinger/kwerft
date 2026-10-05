@@ -26,6 +26,7 @@ func setupClusters(mgr ctrl.Manager, hub *clusters.Hub, namespace, consoleDomain
 	remotes := &clusters.Clients{Registry: hub, Scheme: mgr.GetScheme()}
 	return (&controllers.ClusterReconciler{
 		Client: mgr.GetClient(), APIReader: mgr.GetAPIReader(), Tunnel: hub, Remote: remotes.For,
+		HCloud:    controllers.HCloudFromSecret(mgr.GetAPIReader(), namespace),
 		Namespace: namespace, ConsoleDomain: consoleDomain,
 		Local: func(ctx context.Context) clusters.AgentInfo { return clusters.LocalInfo(ctx, cs, "") },
 	}).SetupWithManager(mgr)

@@ -17,6 +17,8 @@ import (
 
 	kwerftv1 "github.com/ehilzinger/kwerft/api/v1alpha1"
 	"github.com/ehilzinger/kwerft/internal/clusters"
+	"github.com/ehilzinger/kwerft/internal/hetzner"
+	"github.com/ehilzinger/kwerft/internal/hetzner/hetznertest"
 )
 
 // TestClusterHandsHetznerCloudToRemote: a connected hetzner-cloud cluster (a
@@ -207,4 +209,37 @@ func TestClusterHandsHetznerCloudToRemote(t *testing.T) {
 		}
 		return nil
 	})
+}
+
+// TestClusterDeletesItsCloudNetwork: deleting a hetzner-cloud cluster
+// deletes the network Kwerft created for it, once nothing is attached, and
+// no other network.
+func TestClusterDeletesItsCloudNetwork(t *testing.T) {
+	f := hetznertest.New(t, "cloud-token")
+	f.EnableNetworks()
+	ours := f.PutNetwork(hetzner.Network{Name: "kwerft-gone", IPRange: ClusterNetworkRange,
+		Labels: map[string]string{hetzner.LabelCluster: "gone", DNSLabelManagedBy: ManagedByKwerft}})
+	handMade := f.PutNetwork(hetzner.Network{Name: "kwerft-other", IPRange: ClusterNetworkRange, Labels: map[string]string{hetzner.LabelCluster: "gone"}})
+	r := &ClusterReconciler{HCloud: func(context.Context) (*hetzner.Client, error) { return f.Client(), nil }}
+	c := &kwerftv1.Cluster{ObjectMeta: metav1.ObjectMeta{Name: "gone"}, Spec: kwerftv1.ClusterSpec{Provider: kwerftv1.ClusterHetznerCloud}}
+
+	// A server still attached: wait.
+	f.AddServer(hetznertest.NewServerSummary(7, "gone-cp-1", "fsn1", "198.51.100.9", "", ours, "10.0.0.3", nil))
+	if wait, err := r.deleteCloudNetwork(context.Background(), c); err != nil || !wait {
+		t.Fatalf("with a server attached: wait %v, %v", wait, err)
+	}
+	f.Lock()
+	delete(f.State, "serverList")
+	f.Unlock()
+	if wait, err := r.deleteCloudNetwork(context.Background(), c); err != nil || wait {
+		t.Fatalf("wait %v, %v", wait, err)
+	}
+	if nets := f.Networks(); len(nets) != 1 || nets[0].ID != handMade {
+		t.Fatalf("networks left: %+v", nets)
+	}
+	// Without a token there is nothing to do.
+	r.HCloud = func(context.Context) (*hetzner.Client, error) { return nil, errNoCloudToken }
+	if wait, err := r.deleteCloudNetwork(context.Background(), c); err != nil || wait {
+		t.Fatalf("no token: wait %v, %v", wait, err)
+	}
 }

@@ -107,6 +107,9 @@ func serveNetworks(s *Server, w http.ResponseWriter, r *http.Request, parts []st
 				if sel := r.URL.Query().Get("label_selector"); sel != "" && !cloudSelectorMatch(n.Labels, sel) {
 					continue
 				}
+				if name := r.URL.Query().Get("name"); name != "" && name != n.Name {
+					continue
+				}
 				out = append(out, s.networkJSON(n))
 			}
 			slices.SortFunc(out, func(a, b hetzner.Network) int { return int(a.ID - b.ID) })

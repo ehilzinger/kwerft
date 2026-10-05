@@ -891,6 +891,16 @@ Closes the gap between W1 (Cloud Firewall, Load Balancer, CSI) and W2/W3
   In agent mode `stage_hcloud` takes the token only from there (a re-run
   adds the driver later). The agent's chart gets `hcloud.proxyNetwork`
   like the console's, so its ingress accepts a Load Balancer.
+- **Cloud Network**: a node pool finds its cluster's network by label
+  (`kwerft.dev/cluster=<name>`), by name (`kwerft-<name>`), or else as the
+  network the cluster's installer recorded in `kube-system/hcloud` (key
+  `network`: so the console's own hand-made network needs no label once the
+  installer ran with a token). A new hetzner-cloud cluster's first server
+  gets a new one: `kwerft-<name>`, `10.0.0.0/16` with a Cloud subnet
+  `10.0.0.0/24` in the location's network zone, labelled as the cluster's
+  and Kwerft's (`kwerft.dev/managed-by=kwerft`). Deleting the Cluster
+  deletes it after its servers (waiting while Hetzner still counts
+  something attached); networks without Kwerft's label are never deleted.
 - **Not covered**: the CCM in remote clusters (install-time only, and the
   token arrives after the first install), and DNS records for a remote
   cluster's Load Balancer (the cluster has no DNS token; point its records

@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -21,6 +22,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	kwerftv1 "github.com/ehilzinger/kwerft/api/v1alpha1"
 	"github.com/ehilzinger/kwerft/internal/builds"
@@ -761,13 +763,14 @@ func (r *NodePoolReconciler) grow(ctx context.Context, run *poolRun, entries *[]
 	if !ok {
 		return terminalf("NoImage", "no Ubuntu LTS image for %s servers", typ.Architecture)
 	}
-	network, err := run.hc.ClusterNetwork(ctx, pool.Spec.Cluster)
-	if errors.Is(err, hetzner.ErrNotFound) {
+	network, err := r.clusterNetwork(ctx, run, mode, cat)
+	if err != nil {
+		return err
+	}
+	if network == nil {
 		run.notes = append(run.notes, fmt.Sprintf("Waiting for the cluster's private network (a Cloud Network labelled %s=%s or named %s).",
 			hetzner.LabelCluster, pool.Spec.Cluster, hetzner.NetworkName(pool.Spec.Cluster)))
 		return nil
-	} else if err != nil {
-		return fmt.Errorf("find the cluster network: %w", err)
 	}
 	keys, err := run.hc.ServerSSHKeys(ctx)
 	if err != nil {
@@ -916,6 +919,63 @@ func nodeLabels(pool *kwerftv1.NodePool) map[string]string {
 }
 
 // placementGroup finds or creates the pool's spread group.
+// The private network of a new hetzner-cloud cluster (ClusterNetworkRange,
+// one Cloud subnet in the location's network zone; pod and service
+// networks are 10.42/16 and 10.43/16).
+const (
+	ClusterNetworkRange = "10.0.0.0/16"
+	clusterSubnetRange  = "10.0.0.0/24"
+)
+
+// clusterNetwork finds the cluster's private network: labelled or named as
+// the cluster's (hetzner.ClusterNetwork), else the one the cluster's
+// installer recorded in kube-system/hcloud (key network: the Cloud Network
+// of its first server's private address, so a hand-made network of the
+// local cluster needs no label). A new hetzner-cloud cluster's first server
+// (mode agent) gets a new one, labelled as the cluster's and Kwerft's; the
+// Cluster's finalizer deletes it. Nil: none yet.
+func (r *NodePoolReconciler) clusterNetwork(ctx context.Context, run *poolRun, mode string, cat *cloudCatalog) (*hetzner.NetworkRef, error) {
+	cluster := run.pool.Spec.Cluster
+	n, err := run.hc.ClusterNetwork(ctx, cluster)
+	switch {
+	case err == nil:
+		return &n, nil
+	case !errors.Is(err, hetzner.ErrNotFound):
+		return nil, fmt.Errorf("find the cluster network: %w", err)
+	}
+	if run.target != nil {
+		var sec corev1.Secret
+		if err := run.target.Get(ctx, client.ObjectKey{Namespace: HCloudSystemNamespace, Name: HCloudSystemSecret}, &sec); err == nil {
+			if id, err := strconv.ParseInt(strings.TrimSpace(string(sec.Data["network"])), 10, 64); err == nil && id > 0 {
+				nw, err := run.hc.GetNetwork(ctx, id)
+				switch {
+				case err == nil:
+					return &hetzner.NetworkRef{ID: nw.ID, Name: nw.Name, IPRange: nw.IPRange}, nil
+				case !errors.Is(err, hetzner.ErrNotFound):
+					return nil, fmt.Errorf("read the cluster network: %w", err)
+				}
+			}
+		}
+	}
+	if mode != "agent" {
+		return nil, nil
+	}
+	i := slices.IndexFunc(cat.locations, func(l hetzner.Location) bool { return l.Name == run.pool.Spec.Location })
+	if i < 0 || cat.locations[i].NetworkZone == "" {
+		return nil, terminalf("UnknownLocation", "Hetzner Cloud has no location %q", run.pool.Spec.Location)
+	}
+	nw, err := run.hc.CreateNetwork(ctx, hetzner.NetworkOpts{
+		Name: hetzner.NetworkName(cluster), IPRange: ClusterNetworkRange,
+		Labels:  map[string]string{hetzner.LabelCluster: cluster, DNSLabelManagedBy: ManagedByKwerft},
+		Subnets: []hetzner.Subnet{{Type: "cloud", IPRange: clusterSubnetRange, NetworkZone: cat.locations[i].NetworkZone}},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("create the cluster network: %w", err)
+	}
+	log.FromContext(ctx).Info("created the cluster network", "cluster", cluster, "network", nw.ID)
+	return &hetzner.NetworkRef{ID: nw.ID, Name: nw.Name, IPRange: nw.IPRange}, nil
+}
+
 func (r *NodePoolReconciler) placementGroup(ctx context.Context, run *poolRun) (*hetzner.PlacementGroup, error) {
 	sel := hetzner.LabelCluster + "=" + run.pool.Spec.Cluster + "," + hetzner.LabelPool + "=" + run.pool.Name
 	groups, err := run.hc.PlacementGroups(ctx, sel)

@@ -3,7 +3,9 @@ package controllers
 import (
 	"cmp"
 	"context"
+	"errors"
 	"fmt"
+	"net/http"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
@@ -28,6 +30,7 @@ import (
 	kwerftv1 "github.com/ehilzinger/kwerft/api/v1alpha1"
 	"github.com/ehilzinger/kwerft/internal/auth"
 	"github.com/ehilzinger/kwerft/internal/clusters"
+	"github.com/ehilzinger/kwerft/internal/hetzner"
 )
 
 // Cluster phases (kwerftv1.ClusterPhase).
@@ -81,6 +84,9 @@ type ClusterReconciler struct {
 	// notification channels and Git connections into remote clusters
 	// (cluster_mirror.go).
 	Remote func(name string) (client.Client, error)
+	// HCloud reaches the Cloud API with the console's token (finalize
+	// deletes a hetzner-cloud cluster's network); nil skips that.
+	HCloud func(context.Context) (*hetzner.Client, error)
 	// Local reports the management cluster's own health; nil leaves the
 	// versions empty.
 	Local func(ctx context.Context) clusters.AgentInfo
@@ -406,6 +412,11 @@ func (r *ClusterReconciler) finalize(ctx context.Context, c *kwerftv1.Cluster) (
 		}
 		return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
 	}
+	if c.Spec.Provider == kwerftv1.ClusterHetznerCloud {
+		if wait, err := r.deleteCloudNetwork(ctx, c); err != nil || wait {
+			return ctrl.Result{RequeueAfter: 10 * time.Second}, err
+		}
+	}
 	for _, name := range []string{clusters.AgentSecretName(c.Name), clusters.JoinSecretName(c.Name)} {
 		s := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: r.namespace()}}
 		if err := client.IgnoreNotFound(r.Delete(ctx, s)); err != nil {
@@ -526,4 +537,33 @@ func (t *tunnelEvents) Start(ctx context.Context) error {
 // that only need a yes or no.
 func ClusterReady(c *kwerftv1.Cluster) bool {
 	return meta.IsStatusConditionTrue(c.Status.Conditions, ConditionReady)
+}
+
+// deleteCloudNetwork deletes the private network Kwerft created for a
+// hetzner-cloud cluster (node pools' clusterNetwork), once its servers are
+// gone; wait while Hetzner still counts something attached.
+func (r *ClusterReconciler) deleteCloudNetwork(ctx context.Context, c *kwerftv1.Cluster) (wait bool, err error) {
+	if r.HCloud == nil {
+		return false, nil
+	}
+	hc, err := r.HCloud(ctx)
+	if errors.Is(err, errNoCloudToken) {
+		log.FromContext(ctx).Info("no Cloud API token: the cluster's network is left in the project", "cluster", c.Name)
+		return false, nil
+	} else if err != nil {
+		return false, err
+	}
+	nets, err := hc.Networks(ctx, hetzner.LabelCluster+"="+c.Name+","+DNSLabelManagedBy+"="+ManagedByKwerft)
+	if err != nil {
+		return false, err
+	}
+	for _, n := range nets {
+		var apiErr *hetzner.APIError
+		if err := hc.DeleteNetwork(ctx, n.ID); errors.As(err, &apiErr) && apiErr.Status == http.StatusConflict {
+			return true, nil
+		} else if err != nil {
+			return false, err
+		}
+	}
+	return false, nil
 }
