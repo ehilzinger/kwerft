@@ -164,6 +164,9 @@ type Config struct {
 	// nodesHook lets tests replace the Hetzner Cloud and Robot endpoints of
 	// the nodes API; see api_nodes.go.
 	nodesHook func(*nodesAPI)
+	// backupsHook lets tests point the bucket check at a fake S3; see
+	// api_backups.go.
+	backupsHook func(*backupsAPI)
 }
 
 // New returns an http.Server ready to ListenAndServe.

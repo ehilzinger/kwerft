@@ -31,6 +31,12 @@ rules:
   - apiGroups: [kwerft.dev]
     resources: ["*"]
     verbs: ["*"]
+  # Backups: Velero's backups, schedules, restores and the location, read
+  # only (the reconcilers write them from BackupPlans and Restores;
+  # internal/server/api_backups.go). PodVolumeBackups tell a backup's size.
+  - apiGroups: [velero.io]
+    resources: [backups, schedules, restores, backupstoragelocations, podvolumebackups]
+    verbs: [get, list, watch]
   # Clusters › Nodes: list nodes; drain, uncordon and remove them through
   # annotations the reconcilers act on (internal/server/api_nodes.go).
   - apiGroups: [""]
@@ -46,6 +52,12 @@ rules:
   - apiGroups: [kwerft.dev]
     resources: ["*"]
     verbs: ["*"]
+  # Backups: Velero's backups, schedules, restores and the location, read
+  # only (the reconcilers write them from BackupPlans and Restores;
+  # internal/server/api_backups.go). PodVolumeBackups tell a backup's size.
+  - apiGroups: [velero.io]
+    resources: [backups, schedules, restores, backupstoragelocations, podvolumebackups]
+    verbs: [get, list, watch]
   # Clusters › Nodes: list nodes; drain, uncordon and remove them through
   # annotations the reconcilers act on (internal/server/api_nodes.go).
   - apiGroups: [""]
@@ -324,6 +336,41 @@ roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: Role
   name: kwerft:hcloud-token
+subjects:
+  - apiGroup: rbac.authorization.k8s.io
+    kind: Group
+    name: kwerft:role:owner
+  - apiGroup: rbac.authorization.k8s.io
+    kind: Group
+    name: kwerft:role:admin
+---
+# Settings › Backups: the bucket's access keys (kwerft-backup-credentials)
+# and the recovery key (kwerft-backup-key), the same way as the DNS token
+# (patch only; the backup target reconciler creates both empty and reads
+# them with Kwerft's own identity). The recovery key is written once and
+# shown once; the key's Secret is never backed up.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: kwerft:backup-secrets
+  namespace: kwerft-system
+  labels: {{- include "kwerft.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: [secrets]
+    resourceNames: [kwerft-backup-credentials, kwerft-backup-key]
+    verbs: [patch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: kwerft:backup-secrets
+  namespace: kwerft-system
+  labels: {{- include "kwerft.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: kwerft:backup-secrets
 subjects:
   - apiGroup: rbac.authorization.k8s.io
     kind: Group

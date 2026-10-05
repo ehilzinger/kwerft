@@ -90,6 +90,42 @@ kwerft_schedule_last_success_timestamp_seconds{namespace="shop",schedule="nightl
 	}
 }
 
+// BackupPlans feed the backup alerts: a paused plan has no interval, so it
+// never counts as missing.
+func TestBackupPlanMetrics(t *testing.T) {
+	created := metav1.NewTime(time.Unix(1690000000, 0))
+	objs := []client.Object{
+		&kwerftv1.BackupPlan{ObjectMeta: metav1.ObjectMeta{Name: "cluster", CreationTimestamp: created},
+			Spec: kwerftv1.BackupPlanSpec{Schedule: "0 3 * * *"},
+			Status: kwerftv1.BackupPlanStatus{LastSuccessfulAt: ts(1700000000),
+				LastBackup: &kwerftv1.BackupRun{Name: "kwerft-cluster-1", Phase: "PartiallyFailed"}}},
+		&kwerftv1.BackupPlan{ObjectMeta: metav1.ObjectMeta{Name: "paused", CreationTimestamp: created},
+			Spec: kwerftv1.BackupPlanSpec{Schedule: "0 */6 * * *", Paused: true}},
+	}
+	c := fake.NewClientBuilder().WithScheme(NewScheme()).WithObjects(objs...).Build()
+	want := `
+# HELP kwerft_backup_plan_created_timestamp_seconds When the BackupPlan was created (the age of a plan without a successful backup).
+# TYPE kwerft_backup_plan_created_timestamp_seconds gauge
+kwerft_backup_plan_created_timestamp_seconds{plan="cluster"} 1.69e+09
+kwerft_backup_plan_created_timestamp_seconds{plan="paused"} 1.69e+09
+# HELP kwerft_backup_plan_interval_seconds Time between two scheduled runs of a BackupPlan that is not paused.
+# TYPE kwerft_backup_plan_interval_seconds gauge
+kwerft_backup_plan_interval_seconds{plan="cluster"} 86400
+# HELP kwerft_backup_plan_last_backup_failed 1 when the BackupPlan's latest backup failed (Failed, PartiallyFailed, FailedValidation), 0 otherwise.
+# TYPE kwerft_backup_plan_last_backup_failed gauge
+kwerft_backup_plan_last_backup_failed{plan="cluster"} 1
+kwerft_backup_plan_last_backup_failed{plan="paused"} 0
+# HELP kwerft_backup_plan_last_success_timestamp_seconds When a backup of the BackupPlan last completed (status.lastSuccessfulAt).
+# TYPE kwerft_backup_plan_last_success_timestamp_seconds gauge
+kwerft_backup_plan_last_success_timestamp_seconds{plan="cluster"} 1.7e+09
+`
+	if err := testutil.CollectAndCompare(&MetricsCollector{Reader: c}, strings.NewReader(want),
+		"kwerft_backup_plan_created_timestamp_seconds", "kwerft_backup_plan_interval_seconds",
+		"kwerft_backup_plan_last_backup_failed", "kwerft_backup_plan_last_success_timestamp_seconds"); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestObserveBuild(t *testing.T) {
 	buildDuration.Reset()
 	running := build("shop", "api-7", "api", "push", 7, kwerftv1.BuildRunning)

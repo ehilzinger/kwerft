@@ -29,6 +29,7 @@ const (
 	KindNode        Kind = "node"        // nodes; platform alerts, no scope
 	KindCertificate Kind = "certificate" // Domain and console certificates
 	KindSchedule    Kind = "schedule"    // Schedules: namespace, schedule
+	KindBackup      Kind = "backup"      // BackupPlans: plan; platform alerts, no scope
 	KindCustom      Kind = "custom"      // spec.expr; no scope
 )
 
@@ -65,7 +66,9 @@ type Info struct {
 }
 
 // Scoped reports whether rules of this condition accept a scope.
-func (i Info) Scoped() bool { return i.Kind != KindNode && i.Kind != KindCustom }
+func (i Info) Scoped() bool {
+	return i.Kind != KindNode && i.Kind != KindCustom && i.Kind != KindBackup
+}
 
 const day = 24 * time.Hour
 
@@ -92,6 +95,8 @@ var Catalog = []Info{
 		Threshold: &Threshold{Default: 5, Unit: UnitPercent, Min: 1, Max: 100}, HasWindow: true, DefaultWindow: 5 * time.Minute, DefaultFor: 5 * time.Minute},
 	{Condition: kwerftv1.AlertHTTPLatency, Label: "HTTP latency", Kind: KindApp, Severity: "warning",
 		Threshold: &Threshold{Default: 1000, Unit: UnitMillis, Min: 1, Max: 600000}, HasWindow: true, DefaultWindow: 5 * time.Minute, DefaultFor: 10 * time.Minute},
+	{Condition: kwerftv1.AlertBackupFailing, Label: "Backup failing", Kind: KindBackup, Severity: "critical"},
+	{Condition: kwerftv1.AlertBackupMissing, Label: "Backup missing", Kind: KindBackup, Severity: "critical", HasWindow: true},
 	{Condition: kwerftv1.AlertCustom, Label: "Custom expression", Kind: KindCustom, Severity: "warning"},
 }
 
@@ -335,6 +340,20 @@ func Expr(spec *kwerftv1.AlertRuleSpec) string {
 	case kwerftv1.AlertHTTPLatency:
 		lat := overWindow(selector("kwerft:http_latency_p95_seconds:5m", nil, scopeBranches(s, "app")), e.Window)
 		return "max by (namespace, app) (" + lat + ") * 1000 > " + itoa(e.Threshold)
+	case kwerftv1.AlertBackupFailing:
+		// Kwerft's metrics carry the plan; "max by" drops the scrape's
+		// target labels (namespace kwerft-system), so these stay platform
+		// alerts.
+		return "max by (plan) (kwerft_backup_plan_last_backup_failed) == 1"
+	case kwerftv1.AlertBackupMissing:
+		// Since the last success, or since the plan was made; paused plans
+		// have no interval and never fire.
+		age := "(time() - max by (plan) (kwerft_backup_plan_last_success_timestamp_seconds or kwerft_backup_plan_created_timestamp_seconds))"
+		interval := "max by (plan) (kwerft_backup_plan_interval_seconds)"
+		if e.Window > 0 {
+			return age + " > " + itoa(int64(e.Window/time.Second)) + " and on (plan) " + interval
+		}
+		return age + " > on (plan) 2 * " + interval
 	case kwerftv1.AlertCustom:
 		return strings.TrimSpace(spec.Expr)
 	}
@@ -513,6 +532,16 @@ func annotations(e Effective, rule string) (summary, description string) {
 	case kwerftv1.AlertHTTPErrorRate:
 		return `{{ $labels.namespace }}/{{ $labels.app }} answers {{ printf "%.1f" $value }} % of requests with 5xx`,
 			`More than ` + t + ` % of requests failed with a server error over ` + Humanize(e.Window) + `.`
+	case kwerftv1.AlertBackupFailing:
+		return `The latest backup of plan {{ $labels.plan }} failed`,
+			`Velero could not complete the plan's latest backup. Settings › Backups shows whether the bucket is reachable; the backup's log says what failed.`
+	case kwerftv1.AlertBackupMissing:
+		d := `twice its interval`
+		if e.Window > 0 {
+			d = Humanize(e.Window)
+		}
+		return `No backup of plan {{ $labels.plan }} for {{ $value | humanizeDuration }}`,
+			`The plan has not completed a backup within ` + d + `. Check that Velero runs and the bucket is reachable (Settings › Backups).`
 	case kwerftv1.AlertHTTPLatency:
 		return `{{ $labels.namespace }}/{{ $labels.app }} is slow: p95 {{ printf "%.0f" $value }} ms`,
 			`95 % of requests took less than {{ printf "%.0f" $value }} ms over ` + Humanize(e.Window) + `, above the ` + t + ` ms set.`
@@ -541,6 +570,8 @@ func consoleURL(e Effective, host string) string {
 		return `{{ if $labels.domain }}` + base + `/network{{ else }}` + base + `/settings{{ end }}`
 	case KindNode:
 		return base + "/monitoring/metrics"
+	case KindBackup:
+		return base + "/backups"
 	}
 	return `{{ if and $labels.namespace $labels.app }}` + base + `/apps/{{ $labels.namespace }}/{{ $labels.app }}?tab=logs{{ else }}` + base + `/monitoring{{ end }}`
 }

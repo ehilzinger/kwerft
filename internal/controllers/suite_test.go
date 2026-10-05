@@ -79,6 +79,11 @@ func TestMain(m *testing.M) {
 		fmt.Println("build infrastructure:", err)
 		os.Exit(1)
 	}
+	// Backups: Velero's namespace (install.sh in real clusters).
+	if err := k8s.Create(context.Background(), &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: VeleroNamespace}}); err != nil {
+		fmt.Println("create velero namespace:", err)
+		os.Exit(1)
+	}
 	// Alerting: the observability namespace and the stack's VMAlertmanager
 	// (install.sh in real clusters).
 	if err := setupObservability(context.Background()); err != nil {
@@ -124,6 +129,10 @@ func TestMain(m *testing.M) {
 	must((&AlertRuleReconciler{Client: mgr.GetClient(), ConsoleDomain: testConsoleDomain}).SetupWithManager(mgr))
 	must((&NotificationChannelReconciler{Client: mgr.GetClient(), APIReader: mgr.GetAPIReader(), Now: channelClock.Now}).SetupWithManager(mgr))
 	must((&FirewallReconciler{Client: mgr.GetClient(), APIReader: mgr.GetAPIReader(), PrivateNetwork: testPrivateNetwork}).SetupWithManager(mgr))
+	// Backups (backup_test.go): the tests play Velero.
+	must((&BackupTargetReconciler{Client: mgr.GetClient(), APIReader: mgr.GetAPIReader(), ConsoleDomain: testConsoleDomain}).SetupWithManager(mgr))
+	must((&BackupPlanReconciler{Client: mgr.GetClient()}).SetupWithManager(mgr))
+	must((&RestoreReconciler{Client: mgr.GetClient()}).SetupWithManager(mgr))
 	// Clusters (cluster_controller_test.go): agents come and go through a fake tunnel.
 	must((&ClusterReconciler{Client: mgr.GetClient(), APIReader: mgr.GetAPIReader(), Tunnel: testTunnel, Remote: testTunnel.remote,
 		Namespace: GatewayNamespace, ConsoleDomain: testConsoleDomain, Resync: 500 * time.Millisecond,

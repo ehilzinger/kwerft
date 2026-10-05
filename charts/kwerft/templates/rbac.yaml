@@ -68,6 +68,17 @@ rules:
   - apiGroups: [operator.victoriametrics.com]
     resources: [vmalertmanagers]
     verbs: [get, list, watch]
+  # Backups (namespace velero): the BackupStorageLocation, Schedules from
+  # BackupPlans, Backups for "Back up now", Restores, and DownloadRequests
+  # for a backup's contents (a restore under a new name copies the
+  # project's spec from there). The credentials Secrets there and the k3s
+  # etcd snapshot S3 Secret in kube-system are covered by the core rule.
+  - apiGroups: [velero.io]
+    resources: [backupstoragelocations, schedules, backups, restores, downloadrequests]
+    verbs: [get, list, watch, create, update, patch, delete]
+  - apiGroups: [velero.io]
+    resources: [podvolumebackups]
+    verbs: [get, list, watch]
   - apiGroups: [cilium.io]
     resources: [ciliumnetworkpolicies, ciliumclusterwidenetworkpolicies]
     verbs: [get, list, watch, create, update, patch, delete]

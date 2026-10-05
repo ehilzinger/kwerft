@@ -15,6 +15,31 @@ import (
 
 func ptr[T any](v T) *T { return &v }
 
+// Backup alerts are platform alerts on Kwerft's plan metrics: no
+// namespace survives the aggregation, and paused plans (no interval) never
+// count as missing.
+func TestBackupExpressions(t *testing.T) {
+	failing := Expr(&kwerftv1.AlertRuleSpec{Condition: kwerftv1.AlertBackupFailing})
+	if failing != "max by (plan) (kwerft_backup_plan_last_backup_failed) == 1" {
+		t.Errorf("failing: %s", failing)
+	}
+	missing := Expr(&kwerftv1.AlertRuleSpec{Condition: kwerftv1.AlertBackupMissing})
+	if !strings.Contains(missing, "> on (plan) 2 * max by (plan) (kwerft_backup_plan_interval_seconds)") ||
+		!strings.Contains(missing, "kwerft_backup_plan_last_success_timestamp_seconds or kwerft_backup_plan_created_timestamp_seconds") {
+		t.Errorf("missing: %s", missing)
+	}
+	windowed := Expr(&kwerftv1.AlertRuleSpec{Condition: kwerftv1.AlertBackupMissing, Window: Duration(3 * day)})
+	if !strings.Contains(windowed, "> 259200 and on (plan) max by (plan) (kwerft_backup_plan_interval_seconds)") {
+		t.Errorf("windowed: %s", windowed)
+	}
+	if ferr := Validate(&kwerftv1.AlertRuleSpec{Condition: kwerftv1.AlertBackupFailing, Scope: kwerftv1.AlertScope{Projects: []string{"shop"}}}); ferr == nil || ferr.Field != "scope" {
+		t.Errorf("a backup rule took a scope: %v", ferr)
+	}
+	if got := Describe(&kwerftv1.AlertRuleSpec{Condition: kwerftv1.AlertBackupMissing}); got != "A backup plan has not completed a backup within twice its interval" {
+		t.Errorf("describe: %s", got)
+	}
+}
+
 // vmalertFuncs stands in for vmalert's template functions, enough to parse
 // and execute the annotations Kwerft renders.
 var vmalertFuncs = template.FuncMap{
@@ -70,7 +95,8 @@ func TestEveryConditionRendersValidMetricsQL(t *testing.T) {
 				t.Errorf("%s labels = %v", info.Condition, out.Labels)
 			}
 			labels := map[string]string{"namespace": "shop", "app": "web", "pod": "web-1", "container": "web", "node": "n1",
-				"persistentvolumeclaim": "data", "schedule": "nightly", "hostname": "shop.example.com", "domain": "shop", "mountpoint": "/"}
+				"persistentvolumeclaim": "data", "schedule": "nightly", "hostname": "shop.example.com", "domain": "shop", "mountpoint": "/",
+				"plan": "cluster"}
 			for k, v := range out.Annotations {
 				if got := expand(t, v, labels); got == "" || strings.Contains(got, "<no value>") {
 					t.Errorf("%s annotation %s expands to %q", info.Condition, k, got)
@@ -252,7 +278,7 @@ func TestDefaultRulesAreValid(t *testing.T) {
 			t.Errorf("%s notifies before an owner adds a channel", d.Name)
 		}
 	}
-	if !seen["crash-looping"] || len(seen) != 9 {
+	if !seen["crash-looping"] || !seen["backup-missing"] || len(seen) != 11 {
 		t.Errorf("defaults = %v", seen)
 	}
 }

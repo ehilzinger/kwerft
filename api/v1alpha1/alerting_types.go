@@ -5,7 +5,7 @@ import (
 )
 
 // AlertCondition is a condition Kwerft knows how to measure and explain.
-// +kubebuilder:validation:Enum=CrashLooping;Restarts;MemoryHigh;CPUHigh;VolumeFillingUp;NodeMemoryPressure;NodeDiskPressure;CertificateExpiring;ScheduleFailing;BuildFailing;HTTPErrorRate;HTTPLatency;Custom
+// +kubebuilder:validation:Enum=CrashLooping;Restarts;MemoryHigh;CPUHigh;VolumeFillingUp;NodeMemoryPressure;NodeDiskPressure;CertificateExpiring;ScheduleFailing;BuildFailing;HTTPErrorRate;HTTPLatency;BackupFailing;BackupMissing;Custom
 type AlertCondition string
 
 const (
@@ -33,6 +33,12 @@ const (
 	AlertHTTPErrorRate AlertCondition = "HTTPErrorRate"
 	// HTTPLatency: p95 latency above threshold milliseconds over window.
 	AlertHTTPLatency AlertCondition = "HTTPLatency"
+	// BackupFailing: a BackupPlan's latest backup failed (Failed or
+	// PartiallyFailed) and no backup of it succeeded since.
+	AlertBackupFailing AlertCondition = "BackupFailing"
+	// BackupMissing: a BackupPlan that is not paused has had no successful
+	// backup within twice its interval (or window, when set).
+	AlertBackupMissing AlertCondition = "BackupMissing"
 	// Custom: spec.expr, a MetricsQL expression; owners and admins only.
 	AlertCustom AlertCondition = "Custom"
 )

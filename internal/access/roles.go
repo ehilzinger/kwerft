@@ -100,6 +100,10 @@ const (
 	// AlertRules is enforced by Kubernetes, but the console also checks it
 	// for Custom rules (owners and admins only).
 	AlertRules = "alert-rules"
+	// Backups: the backup target, plans, "Back up now" and restores
+	// (owners and admins; the console asks for the role first, Kubernetes
+	// decides on the kwerft.dev objects).
+	Backups = "backups"
 )
 
 // Matrix is the source of truth, in the order the Access page shows it.
@@ -208,6 +212,19 @@ var Matrix = []Permission{
 			{Group: "kwerft.dev", Resource: "notificationchannels", Verb: "create"},
 			{Group: "kwerft.dev", Resource: "notificationchannels", Verb: "update"},
 			{Group: "kwerft.dev", Resource: "notificationchannels", Verb: "delete"},
+		},
+	},
+	{
+		// The target's access keys and the recovery key are write-only like
+		// the DNS token: patch on their Secrets, never get. Velero's backups
+		// and restores are read only; the reconcilers write them.
+		ID: Backups, Label: "Configure backups, back up and restore projects", Enforced: ByKubernetes,
+		Grants: map[string]Grant{Owner: yes, Admin: yes, Developer: no, Viewer: no},
+		Kube: []Check{
+			{Group: "kwerft.dev", Resource: "backupplans", Verb: "create"},
+			{Group: "kwerft.dev", Resource: "backupplans", Verb: "patch"},
+			{Group: "kwerft.dev", Resource: "restores", Verb: "create"},
+			{Group: "velero.io", Resource: "backups", Verb: "list"},
 		},
 	},
 	{

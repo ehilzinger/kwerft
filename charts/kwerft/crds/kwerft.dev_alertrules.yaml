@@ -84,6 +84,8 @@ spec:
                 - BuildFailing
                 - HTTPErrorRate
                 - HTTPLatency
+                - BackupFailing
+                - BackupMissing
                 - Custom
                 type: string
               disabled:
