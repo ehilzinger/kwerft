@@ -19,8 +19,9 @@ import (
 	"time"
 )
 
-// A small S3 client: just enough to check that a bucket can hold backups
-// (list, write and delete one object), signed with AWS Signature Version 4.
+// A small S3 client: enough to check that a bucket can hold backups (list,
+// write and delete one object) and, in objects.go, to upload, list, read
+// and delete etcd snapshots; signed with AWS Signature Version 4.
 // Path-style URLs (https://<endpoint>/<bucket>/<key>), as Velero is
 // configured (s3ForcePathStyle): Hetzner Object Storage endpoints look like
 // https://fsn1.your-objectstorage.com.
@@ -186,9 +187,30 @@ func prefixDir(p string) string {
 }
 
 func (c *Client) do(ctx context.Context, t Target, cr Credentials, method, key string, q url.Values, h http.Header, body []byte, into any) error {
+	resp, err := c.send(ctx, t, cr, method, key, q, h, body)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if b, ok := into.(*[]byte); ok {
+		*b = raw
+		return nil
+	}
+	if into != nil {
+		if err := xml.Unmarshal(raw, into); err != nil {
+			return fmt.Errorf("unexpected answer from the storage: %w", err)
+		}
+	}
+	return nil
+}
+
+// send signs and sends one request. A 2xx answer is returned for the
+// caller to read and close; anything else is an *Error.
+func (c *Client) send(ctx context.Context, t Target, cr Credentials, method, key string, q url.Values, h http.Header, body []byte) (*http.Response, error) {
 	u, err := url.Parse(strings.TrimRight(t.Endpoint, "/"))
 	if err != nil || u.Host == "" {
-		return fmt.Errorf("invalid endpoint %q", t.Endpoint)
+		return nil, fmt.Errorf("invalid endpoint %q", t.Endpoint)
 	}
 	u.Path = "/" + t.Bucket
 	if key != "" {
@@ -198,7 +220,7 @@ func (c *Client) do(ctx context.Context, t Target, cr Credentials, method, key s
 	u.RawQuery = canonicalQuery(q)
 	req, err := http.NewRequestWithContext(ctx, method, u.String(), bytes.NewReader(body))
 	if err != nil {
-		return err
+		return nil, err
 	}
 	req.ContentLength = int64(len(body))
 	if body != nil {
@@ -210,31 +232,22 @@ func (c *Client) do(ctx context.Context, t Target, cr Credentials, method, key s
 	Sign(req, body, cr, RegionFor(t), c.now())
 	resp, err := c.http().Do(req)
 	if err != nil {
-		return err
+		return nil, err
+	}
+	if resp.StatusCode/100 == 2 {
+		return resp, nil
 	}
 	defer resp.Body.Close()
 	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
-	if resp.StatusCode/100 != 2 {
-		e := &Error{Status: resp.StatusCode}
-		var x struct {
-			Code    string `xml:"Code"`
-			Message string `xml:"Message"`
-		}
-		if xml.Unmarshal(raw, &x) == nil {
-			e.Code, e.Message = x.Code, x.Message
-		}
-		return e
+	e := &Error{Status: resp.StatusCode}
+	var x struct {
+		Code    string `xml:"Code"`
+		Message string `xml:"Message"`
 	}
-	if b, ok := into.(*[]byte); ok {
-		*b = raw
-		return nil
+	if xml.Unmarshal(raw, &x) == nil {
+		e.Code, e.Message = x.Code, x.Message
 	}
-	if into != nil {
-		if err := xml.Unmarshal(raw, into); err != nil {
-			return fmt.Errorf("unexpected answer from the storage: %w", err)
-		}
-	}
-	return nil
+	return nil, e
 }
 
 var locationRE = regexp.MustCompile(`^([a-z]{2,4}[0-9]{1,2})\.`)

@@ -158,15 +158,18 @@ type BackupSettings struct {
 	// +kubebuilder:validation:MaxLength=200
 	// +optional
 	Prefix string `json:"prefix,omitempty"`
-	// EtcdSnapshots: k3s's own snapshots of the cluster state, kept locally
-	// and copied to the same bucket (folder <prefix>/etcd); nil means every
-	// 6 hours, 28 kept. The installer applies a changed schedule on its next
-	// run (k3s reads it only when it starts).
+	// EtcdSnapshots: k3s's own snapshots of the cluster state, which k3s
+	// keeps locally (every 6 hours, 28 kept, unless set here). Set, Kwerft's
+	// node agent also uploads them to the same bucket (folder
+	// <prefix>/etcd/<node>), encrypted with the SSE-C key derived from the
+	// recovery key, and keeps the same number there; nil keeps them local
+	// only. The installer applies a changed schedule on its next run (k3s
+	// reads it only when it starts).
 	// +optional
 	EtcdSnapshots *EtcdSnapshotSettings `json:"etcdSnapshots,omitempty"`
 }
 
-// EtcdSnapshotSettings schedules k3s etcd snapshots to the bucket.
+// EtcdSnapshotSettings schedules k3s etcd snapshots and sends them to the bucket.
 type EtcdSnapshotSettings struct {
 	// Schedule in cron syntax (default every 6 hours).
 	// +optional
@@ -575,4 +578,35 @@ type BackupsStatus struct {
 	LastSuccessfulAt *metav1.Time `json:"lastSuccessfulAt,omitempty"`
 	// +optional
 	CheckedAt *metav1.Time `json:"checkedAt,omitempty"`
+	// EtcdSnapshots: per control-plane node, the last etcd snapshot the
+	// node agent uploaded to the bucket (encrypted with the key derived
+	// from the recovery key), as the agents report it. Empty while etcd
+	// snapshots do not go to the bucket.
+	// +optional
+	EtcdSnapshots []EtcdSnapshotUpload `json:"etcdSnapshots,omitempty"`
+}
+
+// EtcdSnapshotUpload is one node's etcd snapshot uploads.
+type EtcdSnapshotUpload struct {
+	// Node is the control-plane node whose local snapshots these are
+	// (folder <prefix>/etcd/<node> in the bucket).
+	// +optional
+	Node string `json:"node,omitempty"`
+	// Name of the newest snapshot in the bucket, e.g.
+	// etcd-snapshot-server-1-1759665600.zip.
+	// +optional
+	Name string `json:"name,omitempty"`
+	// UploadedAt is when the agent last finished an upload.
+	// +optional
+	UploadedAt *metav1.Time `json:"uploadedAt,omitempty"`
+	// CheckedAt is when the agent last compared its snapshots with the
+	// bucket.
+	// +optional
+	CheckedAt *metav1.Time `json:"checkedAt,omitempty"`
+	// Stored is how many of this node's snapshots the bucket holds.
+	// +optional
+	Stored int32 `json:"stored,omitempty"`
+	// Message says what went wrong; empty when the last pass succeeded.
+	// +optional
+	Message string `json:"message,omitempty"`
 }

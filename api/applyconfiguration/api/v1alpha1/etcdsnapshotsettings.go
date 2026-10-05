@@ -5,7 +5,7 @@ package v1alpha1
 // EtcdSnapshotSettingsApplyConfiguration represents a declarative configuration of the EtcdSnapshotSettings type for use
 // with apply.
 //
-// EtcdSnapshotSettings schedules k3s etcd snapshots to the bucket.
+// EtcdSnapshotSettings schedules k3s etcd snapshots and sends them to the bucket.
 type EtcdSnapshotSettingsApplyConfiguration struct {
 	// Schedule in cron syntax (default every 6 hours).
 	Schedule *string `json:"schedule,omitempty"`

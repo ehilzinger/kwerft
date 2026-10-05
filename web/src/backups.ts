@@ -4,10 +4,24 @@
 // admins only; the server enforces it.
 
 import { request } from "./api";
+import { ago } from "./workloads";
 
 export type TargetState = "NotConfigured" | "Pending" | "Ready" | "Error";
 
 export type EtcdSnapshots = { enabled: boolean; schedule?: string; retention?: number };
+
+/** One etcd node's uploads of k3s's snapshots, as its node agent reports them. */
+export type EtcdUpload = {
+  node: string;
+  /** The newest snapshot in the bucket. */
+  name?: string;
+  uploadedAt?: string;
+  checkedAt?: string;
+  /** How many of the node's snapshots the bucket holds. */
+  stored: number;
+  /** What went wrong in the agent's last pass. */
+  message?: string;
+};
 
 export type BackupTarget = {
   configured: boolean;
@@ -25,6 +39,8 @@ export type BackupTarget = {
   message?: string;
   checkedAt?: string;
   lastSuccessfulAt?: string;
+  /** Per etcd node; empty until the agents report (or while etcd snapshots stay local). */
+  etcdUploads?: EtcdUpload[];
 };
 
 export type TargetInput = {
@@ -175,6 +191,26 @@ export function targetPill(t: Pick<BackupTarget, "state" | "configured">): Pill 
   return { pill: "off", label: t.configured ? "Incomplete" : "Not set up" };
 }
 
+/** One node's etcd snapshot uploads as a pill. */
+export function etcdUploadPill(u: EtcdUpload): Pill {
+  if (u.message) return { pill: "bad", label: "Failing" };
+  if (!u.name) return { pill: "off", label: "None yet" };
+  return { pill: "ok", label: "Uploaded" };
+}
+
+/** What a node's uploads amount to, in one line. */
+export function describeEtcdUpload(u: EtcdUpload, now = Date.now()): string {
+  if (u.message) return u.message;
+  if (!u.name) return "No snapshot in the bucket yet: the agent uploads each one k3s takes.";
+  const kept = `${u.stored} snapshot${u.stored === 1 ? "" : "s"} in the bucket`;
+  return u.uploadedAt ? `${u.name}, uploaded ${ago(u.uploadedAt, now)} · ${kept}` : `${u.name} · ${kept}`;
+}
+
+/** The command that fetches a node's newest snapshot back from the bucket, decrypted. */
+export function etcdFetchCommand(node?: string): string {
+  return `kwerft etcd-snapshot fetch --config kwerft.yaml${node ? ` --node ${node}` : ""} --name latest`;
+}
+
 /** A Velero backup's phase as a pill. */
 export function backupPill(phase: BackupPhase): Pill {
   switch (phase) {
@@ -231,11 +267,12 @@ export function recoveryKeyFile(key: string, host: string, at: Date): string {
     `Console: ${host}`,
     `Created: ${at.toISOString()}`,
     "",
-    "Backups of this console cannot be read without this key: everything Velero",
-    "writes to the bucket is encrypted with it (volume data with Kopia, all",
-    "other objects with a key derived from it, SSE-C). Keep it somewhere safe",
-    "outside this server (a password manager). To rebuild the console on a new",
-    "server, give this file to install.sh --restore as backups.recoveryKeyFile.",
+    "Backups of this console cannot be read without this key: everything Kwerft",
+    "and Velero write to the bucket is encrypted with it (volume data with Kopia,",
+    "all other objects and the etcd snapshots with a key derived from it, SSE-C).",
+    "Keep it somewhere safe outside this server (a password manager). To rebuild",
+    "the console on a new server, give this file to install.sh --restore as",
+    "backups.recoveryKeyFile; kwerft etcd-snapshot fetch reads it the same way.",
     "",
   ].join("\n");
 }

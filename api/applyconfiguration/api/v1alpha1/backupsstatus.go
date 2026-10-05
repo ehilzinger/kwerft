@@ -19,6 +19,11 @@ type BackupsStatusApplyConfiguration struct {
 	RecoveryKeyCreatedAt *v1.Time `json:"recoveryKeyCreatedAt,omitempty"`
 	LastSuccessfulAt     *v1.Time `json:"lastSuccessfulAt,omitempty"`
 	CheckedAt            *v1.Time `json:"checkedAt,omitempty"`
+	// EtcdSnapshots: per control-plane node, the last etcd snapshot the
+	// node agent uploaded to the bucket (encrypted with the key derived
+	// from the recovery key), as the agents report it. Empty while etcd
+	// snapshots do not go to the bucket.
+	EtcdSnapshots []EtcdSnapshotUploadApplyConfiguration `json:"etcdSnapshots,omitempty"`
 }
 
 // BackupsStatusApplyConfiguration constructs a declarative configuration of the BackupsStatus type for use with
@@ -64,5 +69,18 @@ func (b *BackupsStatusApplyConfiguration) WithLastSuccessfulAt(value v1.Time) *B
 // If called multiple times, the CheckedAt field is set to the value of the last call.
 func (b *BackupsStatusApplyConfiguration) WithCheckedAt(value v1.Time) *BackupsStatusApplyConfiguration {
 	b.CheckedAt = &value
+	return b
+}
+
+// WithEtcdSnapshots adds the given value to the EtcdSnapshots field in the declarative configuration
+// and returns the receiver, so that objects can be build by chaining "With" function invocations.
+// If called multiple times, values provided by each call will be appended to the EtcdSnapshots field.
+func (b *BackupsStatusApplyConfiguration) WithEtcdSnapshots(values ...*EtcdSnapshotUploadApplyConfiguration) *BackupsStatusApplyConfiguration {
+	for i := range values {
+		if values[i] == nil {
+			panic("nil value passed to WithEtcdSnapshots")
+		}
+		b.EtcdSnapshots = append(b.EtcdSnapshots, *values[i])
+	}
 	return b
 }

@@ -95,11 +95,23 @@ type backupTargetJSON struct {
 	Message          string     `json:"message,omitempty"`
 	CheckedAt        *time.Time `json:"checkedAt,omitempty"`
 	LastSuccessfulAt *time.Time `json:"lastSuccessfulAt,omitempty"`
+	// EtcdUploads: per etcd node, the newest snapshot in the bucket, as
+	// the node agents report it (status.backups.etcdSnapshots).
+	EtcdUploads []etcdUploadJSON `json:"etcdUploads"`
+}
+
+type etcdUploadJSON struct {
+	Node       string     `json:"node"`
+	Name       string     `json:"name,omitempty"`
+	UploadedAt *time.Time `json:"uploadedAt,omitempty"`
+	CheckedAt  *time.Time `json:"checkedAt,omitempty"`
+	Stored     int32      `json:"stored"`
+	Message    string     `json:"message,omitempty"`
 }
 
 func (b *backupsAPI) targetView(cs *kwerftv1.ConsoleSettings) backupTargetJSON {
 	out := backupTargetJSON{DefaultPrefix: b.consoleDomain(), State: "NotConfigured",
-		EtcdSnapshots: etcdSnapshotsJSON{Enabled: true}}
+		EtcdSnapshots: etcdSnapshotsJSON{Enabled: true}, EtcdUploads: []etcdUploadJSON{}}
 	if cs == nil {
 		return out
 	}
@@ -122,6 +134,10 @@ func (b *backupsAPI) targetView(cs *kwerftv1.ConsoleSettings) backupTargetJSON {
 		out.Message = st.Message
 		out.CheckedAt = timePtr(st.CheckedAt)
 		out.LastSuccessfulAt = timePtr(st.LastSuccessfulAt)
+		for _, e := range st.EtcdSnapshots {
+			out.EtcdUploads = append(out.EtcdUploads, etcdUploadJSON{Node: e.Node, Name: e.Name, UploadedAt: timePtr(e.UploadedAt),
+				CheckedAt: timePtr(e.CheckedAt), Stored: e.Stored, Message: e.Message})
+		}
 		if out.RecoveryKeyCreatedAt == nil {
 			out.RecoveryKeyCreatedAt = timePtr(st.RecoveryKeyCreatedAt)
 		}

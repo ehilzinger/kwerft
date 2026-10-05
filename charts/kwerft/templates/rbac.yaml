@@ -71,8 +71,10 @@ rules:
   # Backups (namespace velero): the BackupStorageLocation, Schedules from
   # BackupPlans, Backups for "Back up now", Restores, and DownloadRequests
   # for a backup's contents (a restore under a new name copies the
-  # project's spec from there). The credentials Secrets there and the k3s
-  # etcd snapshot S3 Secret in kube-system are covered by the core rule.
+  # project's spec from there). The credentials Secrets there, the etcd
+  # snapshot agents' configuration and status in kwerft-system, and the
+  # removal of k3s's old S3 Secret in kube-system are covered by the core
+  # rule.
   - apiGroups: [velero.io]
     resources: [backupstoragelocations, schedules, backups, restores, downloadrequests]
     verbs: [get, list, watch, create, update, patch, delete]

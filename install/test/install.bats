@@ -1926,16 +1926,42 @@ etcd_env() {
   }
 }
 
-@test "etcd_snapshot_config: local and S3 snapshots from the console's Secret only" {
+@test "etcd_snapshot_config: local snapshots only, never k3s's unencrypted S3 upload" {
   etcd_env
   run etcd_snapshot_config "0 */6 * * *" 28
   [ "$status" -eq 0 ]
   [[ "$output" == *'etcd-snapshot-schedule-cron: "0 */6 * * *"'* ]]
   [[ "$output" == *"etcd-snapshot-retention: 28"* ]]
-  [[ "$output" == *"etcd-s3: true"* ]]
-  [[ "$output" == *"etcd-s3-config-secret: kwerft-etcd-s3"* ]]
-  # Any other etcd-s3-* option would make k3s ignore the Secret.
-  [ "$(printf '%s\n' "$output" | grep -c '^etcd-s3')" -eq 2 ]
+  [[ "$output" == *"etcd-snapshot-compress: true"* ]]
+  # Kwerft's etcd snapshot agent uploads them, encrypted; k3s cannot.
+  ! printf '%s\n' "$output" | grep -q '^etcd-s3'
+}
+
+@test "ensure_etcd_snapshots: a drop-in with k3s's S3 upload is rewritten, k3s restarted" {
+  etcd_env
+  mkdir -p "$(dirname "$K3S_ETCD_CONFIG_FILE")"
+  # As install.sh wrote it before Kwerft uploaded the snapshots itself.
+  cat >"$K3S_ETCD_CONFIG_FILE" <<'EOF'
+# Managed by Kwerft installer (etcd snapshots).
+# k3s reads this file when it starts; the installer restarts k3s when it changes.
+etcd-snapshot-schedule-cron: "0 */6 * * *"
+etcd-snapshot-retention: 28
+etcd-snapshot-compress: true
+etcd-s3: true
+etcd-s3-config-secret: kwerft-etcd-s3
+EOF
+  run ensure_etcd_snapshots
+  [ "$status" -eq 0 ]
+  [ "$output" = "etcd snapshots (0 */6 * * *, 28 kept) · k3s restarted" ]
+  grep -qx "restart k3s" "$SYSTEMCTL_LOG"
+  absent 'etcd-s3' "$K3S_ETCD_CONFIG_FILE"
+  grep -qx 'etcd-snapshot-compress: true' "$K3S_ETCD_CONFIG_FILE"
+  [ "$(stat -c %a "$K3S_ETCD_CONFIG_FILE" 2>/dev/null || stat -f %Lp "$K3S_ETCD_CONFIG_FILE")" = "600" ]
+  # The next run leaves it alone.
+  : >"$SYSTEMCTL_LOG"
+  run ensure_etcd_snapshots
+  [ "$output" = "etcd snapshots (0 */6 * * *, 28 kept)" ]
+  [ ! -s "$SYSTEMCTL_LOG" ]
 }
 
 @test "ensure_etcd_snapshots: defaults, restart only when the drop-in changes" {

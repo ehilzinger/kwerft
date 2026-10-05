@@ -1,0 +1,115 @@
+{{- if and .Values.backups.etcdAgent.enabled (eq .Values.mode "console") }}
+# The etcd snapshot agent (docs/phase6.md › As built (B4)): the node agent
+# (`kwerft node-agent`) without its firewall part, on etcd nodes only. k3s
+# keeps its snapshots locally (install.sh's drop-in has no etcd-s3: k3s's
+# own upload cannot encrypt); this uploads each new one to the backup bucket,
+# <prefix>/etcd/<node>/, encrypted with the SSE-C key derived from the
+# recovery key, and keeps the retention there. A DaemonSet of its own, not a
+# part of the firewall agent on every node: only pods on etcd nodes carry a
+# token that can read the bucket's keys, and it needs neither the host's
+# network nor capabilities.
+#
+# It reads k3s's db directory (snapshots/ in it) read-only, as root (the
+# files are root's, 0600), and may get exactly the Secret kwerft-etcd-backup
+# the console writes (bucket, access keys, SSE-C key; no Secret: snapshots
+# stay local) and patch its node's key in kwerft-etcd-backup-status.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: kwerft-etcd-snapshots
+  namespace: {{ .Release.Namespace }}
+  labels: {{- include "kwerft.labels" . | nindent 4 }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: kwerft-etcd-snapshots
+  namespace: {{ .Release.Namespace }}
+  labels: {{- include "kwerft.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: [secrets]
+    resourceNames: [kwerft-etcd-backup]
+    verbs: [get]
+  - apiGroups: [""]
+    resources: [configmaps]
+    resourceNames: [kwerft-etcd-backup-status]
+    verbs: [get, patch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: kwerft-etcd-snapshots
+  namespace: {{ .Release.Namespace }}
+  labels: {{- include "kwerft.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: kwerft-etcd-snapshots
+subjects:
+  - kind: ServiceAccount
+    name: kwerft-etcd-snapshots
+    namespace: {{ .Release.Namespace }}
+---
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: kwerft-etcd-snapshots
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "kwerft.labels" . | nindent 4 }}
+    app.kubernetes.io/component: etcd-snapshots
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: kwerft-etcd-snapshots
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  updateStrategy:
+    type: RollingUpdate
+    rollingUpdate: { maxUnavailable: 1 }
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: kwerft-etcd-snapshots
+        app.kubernetes.io/instance: {{ .Release.Name }}
+        app.kubernetes.io/component: etcd-snapshots
+    spec:
+      serviceAccountName: kwerft-etcd-snapshots
+      # k3s labels the servers that run embedded etcd.
+      nodeSelector:
+        node-role.kubernetes.io/etcd: "true"
+      # Control-plane taints (and CriticalAddonsOnly) included.
+      tolerations:
+        - operator: Exists
+      # An upload cut short resumes with the next pod (multipart).
+      terminationGracePeriodSeconds: 10
+      containers:
+        - name: agent
+          image: {{ include "kwerft.image" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args: [node-agent, --firewall=false, --etcd-snapshot-dir=/k3s-db/snapshots]
+          env:
+            - name: NODE_NAME
+              valueFrom: { fieldRef: { fieldPath: spec.nodeName } }
+            - name: POD_NAMESPACE
+              valueFrom: { fieldRef: { fieldPath: metadata.namespace } }
+          resources: {{- toYaml .Values.backups.etcdAgent.resources | nindent 12 }}
+          securityContext:
+            # Root to read root's 0600 files; no capabilities at all.
+            runAsUser: 0
+            runAsNonRoot: false
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+            seccompProfile: { type: RuntimeDefault }
+          volumeMounts:
+            - name: k3s-db
+              mountPath: /k3s-db
+              readOnly: true
+      volumes:
+        # Exists on every etcd node (etcd's data is in it); k3s creates
+        # snapshots/ in it with the first snapshot.
+        - name: k3s-db
+          hostPath: { path: /var/lib/rancher/k3s/server/db, type: Directory }
+{{- end }}

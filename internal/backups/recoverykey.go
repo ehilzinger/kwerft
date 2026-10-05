@@ -1,7 +1,8 @@
 // Package backups holds what the console's backup code shares and that
 // needs no Kubernetes: the recovery key's format, a small S3 client (SigV4)
-// for the connection check, and a reader for the contents of a Velero
-// backup (the tarball of its objects). docs/phase6.md › Backups.
+// for the connection check and the etcd snapshot uploads (etcd.go), and a
+// reader for the contents of a Velero backup (the tarball of its objects).
+// docs/phase6.md › Backups.
 package backups
 
 import (
@@ -77,4 +78,18 @@ func group(raw string) string {
 		parts = append(parts, raw[i:min(i+recoveryKeyGroups, len(raw))])
 	}
 	return strings.Join(parts, "-")
+}
+
+// RecoveryKeyFromFile reads a recovery key file as install.sh --restore
+// does (recovery_key): the file Settings › Backups offers for download has
+// the key on a line of its own between lines that say what it is for; a
+// file of just the key may split it over lines. The first line that is a
+// key wins, else the whole text.
+func RecoveryKeyFromFile(text string) (string, error) {
+	for line := range strings.Lines(text) {
+		if k, err := NormalizeRecoveryKey(line); err == nil {
+			return k, nil
+		}
+	}
+	return NormalizeRecoveryKey(text)
 }

@@ -35,6 +35,12 @@ import (
 // the image has none, so nft runs from the host's /usr, mounted read-only
 // under --host-root, in a chroot there (CAP_SYS_CHROOT). Its Kubernetes
 // access is two ConfigMaps (read the desired rules, patch its status).
+//
+// With --etcd-snapshot-dir it also uploads k3s's etcd snapshots from that
+// directory to the backup bucket, encrypted (etcdagent.go). The chart runs
+// that part alone (--firewall=false) as a second DaemonSet on etcd nodes
+// only, with neither host network nor capabilities, and only its service
+// account may read the bucket's keys.
 func runNodeAgent(args []string) int {
 	fs := flag.NewFlagSet("node-agent", flag.ExitOnError)
 	node := fs.String("node", os.Getenv("NODE_NAME"), "this node's name (the DaemonSet sets NODE_NAME)")
@@ -42,6 +48,8 @@ func runNodeAgent(args []string) int {
 	hostRoot := fs.String("host-root", "/host", "directory with the host's /usr (and /etc/ld.so.cache); nft runs chrooted there. \"/\" runs nft directly")
 	stateDir := fs.String("state-dir", "/var/lib/kwerft/firewall", "host directory for the agent's state (and the paused marker of install.sh --reset-firewall)")
 	poll := fs.Duration("poll", 2*time.Second, "how often to read the desired rules")
+	withFirewall := fs.Bool("firewall", true, "apply the node's firewall rules")
+	etcdDir := fs.String("etcd-snapshot-dir", "", "k3s's etcd snapshot directory (/var/lib/rancher/k3s/server/db/snapshots): upload its snapshots to the backup bucket, encrypted; empty: no uploads")
 	_ = fs.Parse(args)
 
 	log := slog.New(slog.NewJSONHandler(os.Stdout, nil)).With("node", *node)
@@ -49,13 +57,19 @@ func runNodeAgent(args []string) int {
 		log.Error("--node (or NODE_NAME) is required")
 		return 2
 	}
-	if err := os.MkdirAll(*stateDir, 0o700); err != nil {
-		log.Error("cannot create the state directory", "dir", *stateDir, "err", err)
-		return 1
+	if !*withFirewall && *etcdDir == "" {
+		log.Error("nothing to do: --firewall=false without --etcd-snapshot-dir")
+		return 2
 	}
-	if err := prepareChroot(*hostRoot); err != nil {
-		log.Error("cannot prepare the chroot for the host's nft", "err", err)
-		return 1
+	if *withFirewall {
+		if err := os.MkdirAll(*stateDir, 0o700); err != nil {
+			log.Error("cannot create the state directory", "dir", *stateDir, "err", err)
+			return 1
+		}
+		if err := prepareChroot(*hostRoot); err != nil {
+			log.Error("cannot prepare the chroot for the host's nft", "err", err)
+			return 1
+		}
 	}
 	cfg, err := ctrl.GetConfig()
 	if err != nil {
@@ -71,6 +85,17 @@ func runNodeAgent(args []string) int {
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
+
+	if *etcdDir != "" {
+		etcd := newEtcdAgent(c, *namespace, *node, *etcdDir, log)
+		if !*withFirewall {
+			log.Info("kwerft node agent starting", "version", version.Version, "firewall", false)
+			etcd.run(ctx)
+			log.Info("kwerft node agent stopped")
+			return 0
+		}
+		go etcd.run(ctx)
+	}
 
 	na := &nodeAgent{
 		c: c, namespace: *namespace, node: *node, log: log,
