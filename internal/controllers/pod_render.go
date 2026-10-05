@@ -150,11 +150,16 @@ func (p *podShape) template() *corev1ac.PodTemplateSpecApplyConfiguration {
 		if v.Volume == "" {
 			continue
 		}
+		// Read-only only in the container (above): a read-only claim makes
+		// the CSI driver mount the device read-only, and the Hetzner Cloud
+		// driver mounts the device itself for every pod, so once one pod on
+		// a node has it read-only, a pod mounting it read-write there fails
+		// with EBUSY. The container's read-only bind mount leaves the
+		// device's filesystem read-write.
 		spec.WithVolumes(corev1ac.Volume().
 			WithName(volumeName(i)).
 			WithPersistentVolumeClaim(corev1ac.PersistentVolumeClaimVolumeSource().
-				WithClaimName(volumeClaimName(v.Volume)).
-				WithReadOnly(v.ReadOnly)))
+				WithClaimName(volumeClaimName(v.Volume))))
 		key := LabelVolumePrefix + v.Volume
 		labels[key] = "true"
 		// Preferred, not required: a required term would leave a pod that
