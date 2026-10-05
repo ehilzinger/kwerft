@@ -161,6 +161,19 @@ firewall:
       requests: { cpu: 5m, memory: 16Mi }
       limits: { memory: 64Mi }
 
+# Backups (docs/phase6.md). k3s keeps its etcd snapshots on the etcd nodes; the
+# etcd snapshot agent (templates/etcd-snapshots.yaml: `kwerft node-agent
+# --firewall=false`, a DaemonSet on etcd nodes only, console mode only) uploads
+# them to the backup bucket, encrypted with the key derived from the recovery
+# key, while Settings › Backups sends etcd snapshots there. One part (16 MiB)
+# of a snapshot is in memory at a time.
+backups:
+  etcdAgent:
+    enabled: true
+    resources:
+      requests: { cpu: 5m, memory: 32Mi }
+      limits: { memory: 128Mi }
+
 # Hetzner Cloud (Settings › Hetzner Cloud API). The token itself is never a
 # value: Settings or install.sh --config hcloud.tokenFile store it in the
 # Secret kwerft-hcloud-token. Set by install.sh.

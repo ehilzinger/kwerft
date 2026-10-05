@@ -21,8 +21,8 @@ import (
 //   - ConsoleSettings.spec.backups and the write-only Secrets
 //     kwerft-backup-credentials and kwerft-backup-key → the
 //     BackupStorageLocation "kwerft", its credentials and the Kopia
-//     repository password (backup_target.go), plus the k3s etcd snapshot
-//     S3 Secret;
+//     repository password (backup_target.go), plus the etcd snapshot
+//     agents' upload configuration (kwerft-system/kwerft-etcd-backup);
 //   - BackupPlan → Schedule kwerft-<plan>; "Back up now" → a Backup from it
 //     (backup_plan.go);
 //   - Restore → a Velero Restore of one project (backup_restore.go).
@@ -62,7 +62,9 @@ const (
 	BackupEncryptionSecret    = "kwerft-bsl-encryption"
 	BackupEncryptionSecretKey = "sse-c-key"
 	// EtcdS3Secret is k3s's etcd snapshot S3 configuration
-	// (--etcd-s3-config-secret, which install.sh sets), in kube-system.
+	// (--etcd-s3-config-secret) that earlier versions wrote, in
+	// kube-system: k3s uploaded without encryption. Kwerft's is removed;
+	// the node agent uploads the snapshots now (backups.EtcdSecret).
 	EtcdS3Secret    = "kwerft-etcd-s3"
 	etcdS3Namespace = "kube-system"
 	etcdS3Type      = "etcd.k3s.cattle.io/s3-config-secret"

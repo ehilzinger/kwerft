@@ -80,6 +80,8 @@ func ForKind(kind schema.GroupVersionKind) interface{} {
 		return &apiv1alpha1.EmailSettingsApplyConfiguration{}
 	case v1alpha1.SchemeGroupVersion.WithKind("EtcdSnapshotSettings"):
 		return &apiv1alpha1.EtcdSnapshotSettingsApplyConfiguration{}
+	case v1alpha1.SchemeGroupVersion.WithKind("EtcdSnapshotUpload"):
+		return &apiv1alpha1.EtcdSnapshotUploadApplyConfiguration{}
 	case v1alpha1.SchemeGroupVersion.WithKind("FirewallRule"):
 		return &apiv1alpha1.FirewallRuleApplyConfiguration{}
 	case v1alpha1.SchemeGroupVersion.WithKind("FirewallRuleSpec"):

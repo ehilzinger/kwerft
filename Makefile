@@ -82,6 +82,16 @@ helm-lint: ## Lint and render the Helm chart
 	helm template kwerft charts/kwerft --set console.domain=ops.example.com | grep -qx '        pre.hook.backup.velero.io/container: kwerft'
 	helm template kwerft charts/kwerft --set console.domain=ops.example.com | grep -qx '        pre.hook.backup.velero.io/on-error: Fail'
 	! helm template kwerft charts/kwerft --set mode=agent --set agent.consoleURL=https://ops.example.com | grep -q 'pre.hook.backup.velero.io'
+	@# etcd snapshot uploads (docs/phase6.md › As built (B4)): a DaemonSet on etcd nodes only, no
+	@# capabilities, get on exactly its Secret; agent clusters have none (the console writes no Secret there).
+	helm template kwerft charts/kwerft --set console.domain=ops.example.com --show-only templates/etcd-snapshots.yaml \
+		| grep -qF -- 'args: [node-agent, --firewall=false, --etcd-snapshot-dir=/k3s-db/snapshots]'
+	helm template kwerft charts/kwerft --set console.domain=ops.example.com --show-only templates/etcd-snapshots.yaml \
+		| grep -qx '        node-role.kubernetes.io/etcd: "true"'
+	helm template kwerft charts/kwerft --set console.domain=ops.example.com --show-only templates/etcd-snapshots.yaml \
+		| grep -A1 -x '    resources: \[secrets\]' | grep -qx '    resourceNames: \[kwerft-etcd-backup\]'
+	! helm template kwerft charts/kwerft --set console.domain=ops.example.com --show-only templates/etcd-snapshots.yaml | grep -qE 'hostNetwork|NET_ADMIN|add:'
+	! helm template kwerft charts/kwerft --set mode=agent --set agent.consoleURL=https://ops.example.com | grep -q 'kwerft-etcd-snapshots'
 	@# With the VictoriaMetrics operator's CRDs, as install.sh installs them (metrics-*.yaml).
 	helm template kwerft charts/kwerft --set console.domain=ops.example.com --api-versions operator.victoriametrics.com/v1beta1 | grep -q 'kind: VMRule'
 

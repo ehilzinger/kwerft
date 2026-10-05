@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
-  backupPill, bytes, describeRestore, groupKey, recoveryKeyFile, recoveryKeyFileName, recoveryKeyProblem, restorePill, retentionLabel,
-  suggestedTarget, targetPill,
+  backupPill, bytes, describeEtcdUpload, describeRestore, etcdFetchCommand, etcdUploadPill, groupKey, recoveryKeyFile, recoveryKeyFileName,
+  recoveryKeyProblem, restorePill, retentionLabel, suggestedTarget, targetPill,
 } from "./backups";
 import { conditions, describeCondition } from "./alerts";
 
@@ -51,6 +51,29 @@ describe("presentation", () => {
     expect(targetPill({ state: "NotConfigured", configured: false }).label).toBe("Not set up");
     expect(targetPill({ state: "NotConfigured", configured: true }).label).toBe("Incomplete");
     expect(targetPill({ state: "Error", configured: true }).pill).toBe("bad");
+  });
+});
+
+describe("etcd snapshot uploads", () => {
+  const now = Date.parse("2026-10-05T14:00:00Z");
+  it("say per node what is in the bucket", () => {
+    const ok = { node: "server-1", name: "etcd-snapshot-server-1-1759665600.zip", uploadedAt: "2026-10-05T12:00:00Z", stored: 4 };
+    expect(etcdUploadPill(ok)).toEqual({ pill: "ok", label: "Uploaded" });
+    expect(describeEtcdUpload(ok, now)).toBe("etcd-snapshot-server-1-1759665600.zip, uploaded 2 h ago · 4 snapshots in the bucket");
+    expect(describeEtcdUpload({ ...ok, stored: 1, uploadedAt: undefined }, now)).toBe("etcd-snapshot-server-1-1759665600.zip · 1 snapshot in the bucket");
+    const failing = { node: "server-2", stored: 0, message: "cannot list the bucket: AccessDenied" };
+    expect(etcdUploadPill(failing).pill).toBe("bad");
+    expect(describeEtcdUpload(failing, now)).toBe("cannot list the bucket: AccessDenied");
+    expect(etcdUploadPill({ node: "server-3", stored: 0 }).label).toBe("None yet");
+  });
+
+  it("are read back with kwerft etcd-snapshot", () => {
+    expect(etcdFetchCommand()).toBe("kwerft etcd-snapshot fetch --config kwerft.yaml --name latest");
+    expect(etcdFetchCommand("server-2")).toBe("kwerft etcd-snapshot fetch --config kwerft.yaml --node server-2 --name latest");
+  });
+
+  it("are encrypted with the recovery key, as the key file says", () => {
+    expect(recoveryKeyFile(key, "ops.example.com", new Date())).toContain("etcd snapshots");
   });
 });
 

@@ -20,3 +20,13 @@
   user-select: all; overflow-wrap: anywhere;
 }
 .recovery-key span { white-space: nowrap; }
+
+/* Settings › Backups: the etcd snapshot agents' uploads, one line per node. */
+.etcd-uploads { display: flex; flex-direction: column; gap: 8px; }
+.etcd-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; font-size: 13px; }
+.etcd-list li { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; min-width: 0; }
+.etcd-list li > span:last-child { overflow-wrap: anywhere; min-width: 0; }
+.etcd-uploads pre { margin: 0; padding: 10px 12px; border-radius: 8px; background: var(--sunk); border: 1px solid var(--line); font-size: 12.5px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.etcd-uploads details summary { cursor: pointer; font-size: 13px; color: var(--muted); }
+.etcd-uploads details .stack { margin-top: 8px; }
+.etcd-list .problem { color: var(--bad); }

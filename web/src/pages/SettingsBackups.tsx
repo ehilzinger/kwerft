@@ -7,8 +7,8 @@ import { Field } from "../components/Field";
 import { Icon } from "../components/Icon";
 import { ago } from "../workloads";
 import {
-  backupKeys, backupsApi, groupKey, recoveryKeyFile, recoveryKeyFileName, recoveryKeyProblem, targetPill,
-  type BackupTarget, type BucketCheck, type TargetInput,
+  backupKeys, backupsApi, describeEtcdUpload, etcdFetchCommand, etcdUploadPill, groupKey, recoveryKeyFile, recoveryKeyFileName,
+  recoveryKeyProblem, targetPill, type BackupTarget, type BucketCheck, type EtcdUpload, type TargetInput,
 } from "../backups";
 import "../styles/backups.css";
 
@@ -16,8 +16,9 @@ const unreachable = "The console could not be reached. Check your connection and
 
 // Settings › Backups: the S3 bucket backups go to (Hetzner Object Storage),
 // its access keys (write-only), the recovery key (made on the first save and
-// shown exactly once), and k3s's etcd snapshots to the same bucket. Owners
-// and admins only.
+// shown exactly once), and k3s's etcd snapshots to the same bucket (uploaded
+// by Kwerft's agent on each etcd node, encrypted; their state per node and
+// how to read one back for a restore). Owners and admins only.
 export function BackupsCard() {
   // Above the form, so nothing that re-renders the form can lose it.
   const [newKey, setNewKey] = useState<string>();
@@ -170,7 +171,10 @@ function TargetForm({ t, onKey }: { t: BackupTarget; onKey: (key: string) => voi
             <input type="checkbox" checked={etcd} onChange={(e) => setEtcd(e.target.checked)} />
             <span>
               <b>Send k3s&apos;s etcd snapshots to the bucket too</b>
-              <small>The cluster state as k3s snapshots it, to {usedPrefix}/etcd. Local snapshots go on either way.</small>
+              <small>
+                The cluster state as k3s snapshots it, to {usedPrefix}/etcd/&lt;node&gt;, encrypted with a key derived from the recovery key.
+                Local snapshots go on either way.
+              </small>
             </span>
           </label>
         </div>
@@ -183,6 +187,8 @@ function TargetForm({ t, onKey }: { t: BackupTarget; onKey: (key: string) => voi
           </div>
         )}
 
+        {t.configured && t.etcdSnapshots.enabled && <EtcdUploads uploads={t.etcdUploads ?? []} />}
+
         {check && <CheckResult check={check} />}
         {saved && <p className="ok-text" role="status">{saved}</p>}
         {error && !error.field && <p className="form-error" role="alert">{error.message}</p>}
@@ -194,6 +200,48 @@ function TargetForm({ t, onKey }: { t: BackupTarget; onKey: (key: string) => voi
         </div>
       </form>
     </>
+  );
+}
+
+// The etcd snapshot agents' uploads, per node, and how to read a snapshot
+// back for k3s --cluster-reset.
+function EtcdUploads({ uploads }: { uploads: EtcdUpload[] }) {
+  const node = uploads.length > 1 ? uploads[0].node : undefined;
+  return (
+    <div className="etcd-uploads">
+      {uploads.length === 0 ? (
+        <p className="dim note">No etcd snapshot uploaded yet. The agent on each etcd node uploads every snapshot k3s takes within a few minutes.</p>
+      ) : (
+        <ul className="etcd-list" aria-label="etcd snapshot uploads">
+          {uploads.map((u) => {
+            const pill = etcdUploadPill(u);
+            return (
+              <li key={u.node}>
+                <span className={`pill ${pill.pill}`}>{pill.label}</span>
+                <span className="mono">{u.node}</span>
+                <span className={u.message ? "problem" : "dim"}>{describeEtcdUpload(u)}</span>
+              </li>
+            );
+          })}
+        </ul>
+      )}
+      <details className="yaml">
+        <summary>Restoring the cluster state from an etcd snapshot</summary>
+        <div className="stack tight note">
+          <p className="dim">
+            Only Kwerft reads the snapshots back: <code>kwerft etcd-snapshot fetch</code> decrypts one with the recovery key, using the same
+            {" "}<code>backups:</code> block and key files as <code>install.sh --restore</code> (the image ghcr.io/ehilzinger/kwerft holds the binary;
+            {" "}<code>kwerft etcd-snapshot list</code> shows what is there). Then, on the server, with k3s stopped and the old server&apos;s token:
+          </p>
+          <pre className="mono">{`${etcdFetchCommand(node)}
+k3s server --cluster-reset --cluster-reset-restore-path=<file> --token=<old token>`}</pre>
+          <p className="dim">
+            The token is in <code>/var/lib/rancher/k3s/server/token</code> of the old server and in every Cluster backup
+            {" "}(<code>kwerft-system/cluster-local-join</code>): without it k3s cannot read the snapshot&apos;s certificates and secrets.
+          </p>
+        </div>
+      </details>
+    </div>
   );
 }
 

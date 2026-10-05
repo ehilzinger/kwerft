@@ -4,8 +4,8 @@ import (
 	"cmp"
 	"context"
 	"encoding/json"
-	"net/url"
-	"strconv"
+	"math"
+	"slices"
 	"strings"
 	"time"
 
@@ -15,11 +15,13 @@ import (
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/fields"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	corev1ac "k8s.io/client-go/applyconfigurations/core/v1"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
+	"sigs.k8s.io/controller-runtime/pkg/cache"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
@@ -38,9 +40,14 @@ import (
 // Kopia repository password velero-repo-credentials, the SSE-C key
 // kwerft-bsl-encryption (derived from the recovery key: everything Velero
 // writes to the bucket is encrypted) and the default
-// BackupStorageLocation "kwerft" (prefix <prefix>/velero); with etcd
-// snapshots on, also k3s's S3 configuration kube-system/kwerft-etcd-s3
-// (folder <prefix>/etcd). status.backups reports the location's state.
+// BackupStorageLocation "kwerft" (prefix <prefix>/velero). With etcd
+// snapshots on (spec.backups.etcdSnapshots set) it also keeps the node
+// agent's upload configuration kwerft-system/kwerft-etcd-backup (bucket,
+// keys and the same SSE-C key): the agent on every etcd node uploads k3s's
+// local snapshots to <prefix>/etcd/<node>, encrypted, since k3s's own S3
+// upload cannot encrypt. status.backups reports the location's state and
+// the agents' uploads (kwerft-system/kwerft-etcd-backup-status). k3s's own
+// S3 Secret kube-system/kwerft-etcd-s3 of earlier versions is removed.
 //
 // The reconciler also creates the two write-only Secrets empty, so owners
 // and admins can fill them with "patch" alone (roles.yaml); the recovery
@@ -136,7 +143,13 @@ func (r *BackupTargetReconciler) Reconcile(ctx context.Context, _ ctrl.Request) 
 	case key == "":
 		st.State, st.Message = "NotConfigured", "The recovery key is missing. Save the target again under Settings › Backups to create one, or enter the key of earlier backups."
 	}
+	if err := r.removeK3sEtcdS3(ctx); err != nil {
+		return ctrl.Result{}, err
+	}
 	if st.State != "" {
+		if err := r.removeEtcdUploads(ctx); err != nil {
+			return ctrl.Result{}, err
+		}
 		return ctrl.Result{RequeueAfter: backupTargetResync}, r.report(ctx, &s, st)
 	}
 	password, err := backups.RepositoryPassword(key)
@@ -146,6 +159,9 @@ func (r *BackupTargetReconciler) Reconcile(ctx context.Context, _ ctrl.Request) 
 	}
 	if err != nil {
 		st.State, st.Message = "Error", "The stored recovery key is not one Kwerft made (52 letters and digits). Enter the key of earlier backups under Settings › Backups."
+		if err := r.removeEtcdUploads(ctx); err != nil {
+			return ctrl.Result{}, err
+		}
 		return ctrl.Result{RequeueAfter: backupTargetResync}, r.report(ctx, &s, st)
 	}
 	prefix := BackupPrefix(b, ConsoleHost(ctx, r.Client, r.ConsoleDomain))
@@ -153,7 +169,12 @@ func (r *BackupTargetReconciler) Reconcile(ctx context.Context, _ ctrl.Request) 
 	if err != nil {
 		return ctrl.Result{}, err
 	}
-	if err := r.applyEtcd(ctx, b, prefix, access, secret); err != nil {
+	if b.EtcdSnapshots == nil {
+		err = r.removeEtcdUploads(ctx)
+	} else {
+		err = r.applyEtcdUploads(ctx, b, prefix, access, secret, sseKey, st)
+	}
+	if err != nil {
 		return ctrl.Result{}, err
 	}
 	return ctrl.Result{RequeueAfter: after}, r.report(ctx, &s, st)
@@ -322,47 +343,112 @@ func (r *BackupTargetReconciler) applyVelero(ctx context.Context, b *kwerftv1.Ba
 	}
 }
 
-// applyEtcd keeps k3s's etcd snapshot S3 configuration: with a bucket set,
-// etcd snapshots always go there too (spec.backups.etcdSnapshots nil means
-// the installer's defaults, every 6 hours and 28 kept).
-func (r *BackupTargetReconciler) applyEtcd(ctx context.Context, b *kwerftv1.BackupSettings, prefix, access, secret string) error {
-	return apply(ctx, r.Client, corev1ac.Secret(EtcdS3Secret, etcdS3Namespace).
-		WithLabels(map[string]string{LabelManagedBy: ManagedByKwerft}).
-		WithType(etcdS3Type).
-		WithData(EtcdS3Config(b, prefix, access, secret)))
+// EtcdUploadConfig is the node agent's upload configuration: the target,
+// the keys and the SSE-C key Velero's objects use, and the retention
+// (spec.backups.etcdSnapshots, else 28).
+func EtcdUploadConfig(b *kwerftv1.BackupSettings, prefix, access, secret string, sseKey []byte) backups.EtcdUploadConfig {
+	return backups.EtcdUploadConfig{
+		Target:      backups.Target{Endpoint: strings.TrimRight(b.Endpoint, "/"), Region: b.Region, Bucket: b.Bucket, Prefix: prefix},
+		Credentials: backups.Credentials{AccessKey: access, SecretKey: secret},
+		SSEKey:      sseKey,
+		Retention:   int(cmp.Or(retention(b.EtcdSnapshots), backups.DefaultEtcdRetention)),
+	}
 }
 
-// EtcdS3Config is the k3s etcd S3 configuration Secret's data: its keys
-// are the --etcd-s3-* flags.
-func EtcdS3Config(b *kwerftv1.BackupSettings, prefix, access, secret string) map[string][]byte {
-	host := strings.TrimRight(strings.TrimPrefix(b.Endpoint, "https://"), "/")
-	if u, err := url.Parse(b.Endpoint); err == nil && u.Host != "" {
-		host = u.Host
+// applyEtcdUploads keeps the node agent's upload configuration (kept out
+// of backups: it holds the access keys and the SSE-C key), creates the
+// agents' status ConfigMap they patch, and reports what they did.
+func (r *BackupTargetReconciler) applyEtcdUploads(ctx context.Context, b *kwerftv1.BackupSettings, prefix, access, secret string,
+	sseKey []byte, st *kwerftv1.BackupsStatus) error {
+	labels := map[string]string{LabelManagedBy: ManagedByKwerft, labelVeleroExclude: "true"}
+	if err := apply(ctx, r.Client, corev1ac.Secret(backups.EtcdSecret, GatewayNamespace).
+		WithLabels(labels).
+		WithType(corev1.SecretTypeOpaque).
+		WithData(EtcdUploadConfig(b, prefix, access, secret, sseKey).Data())); err != nil {
+		return err
 	}
-	out := map[string]string{
-		"etcd-s3-endpoint":        host,
-		"etcd-s3-access-key":      access,
-		"etcd-s3-secret-key":      secret,
-		"etcd-s3-bucket":          b.Bucket,
-		"etcd-s3-folder":          prefix + "/etcd",
-		"etcd-s3-region":          backups.RegionFor(backups.Target{Endpoint: b.Endpoint, Region: b.Region}),
-		"etcd-s3-insecure":        "false",
-		"etcd-s3-skip-ssl-verify": "false",
-		"etcd-s3-timeout":         "5m",
-		// The installer's schedule keeps this many; without it k3s prunes
-		// the bucket by its local retention.
-		"etcd-s3-retention": strconv.Itoa(int(cmp.Or(retention(b.EtcdSnapshots), DefaultEtcdRetention))),
+	var cm corev1.ConfigMap
+	err := r.reader().Get(ctx, client.ObjectKey{Namespace: GatewayNamespace, Name: backups.EtcdStatusConfigMap}, &cm)
+	if apierrors.IsNotFound(err) {
+		cm = corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Namespace: GatewayNamespace, Name: backups.EtcdStatusConfigMap, Labels: labels}}
+		if err := r.Create(ctx, &cm); err != nil && !apierrors.IsAlreadyExists(err) {
+			return err
+		}
+		return nil
 	}
-	data := make(map[string][]byte, len(out))
-	for k, v := range out {
-		data[k] = []byte(v)
+	if err != nil {
+		return err
 	}
-	return data
+	st.EtcdSnapshots, err = r.etcdReports(ctx, cm.Data)
+	return err
 }
 
-// DefaultEtcdRetention is how many etcd snapshots are kept when the
-// settings name no number (install.sh's default).
-const DefaultEtcdRetention = 28
+// etcdReports reads the agents' reports, for nodes that still exist,
+// sorted by node.
+func (r *BackupTargetReconciler) etcdReports(ctx context.Context, data map[string]string) ([]kwerftv1.EtcdSnapshotUpload, error) {
+	if len(data) == 0 {
+		return nil, nil
+	}
+	var nodes corev1.NodeList
+	if err := r.List(ctx, &nodes); err != nil {
+		return nil, err
+	}
+	exists := make(map[string]bool, len(nodes.Items))
+	for _, n := range nodes.Items {
+		exists[n.Name] = true
+	}
+	var out []kwerftv1.EtcdSnapshotUpload
+	for node, raw := range data {
+		if !exists[node] {
+			continue
+		}
+		var rep backups.EtcdNodeReport
+		if err := json.Unmarshal([]byte(raw), &rep); err != nil {
+			continue
+		}
+		u := kwerftv1.EtcdSnapshotUpload{Node: node, Name: rep.Name, Stored: int32(min(rep.Stored, math.MaxInt32)), Message: rep.Message}
+		if rep.UploadedAt != nil {
+			u.UploadedAt = &metav1.Time{Time: rep.UploadedAt.Truncate(time.Second)}
+		}
+		if !rep.CheckedAt.IsZero() {
+			u.CheckedAt = &metav1.Time{Time: rep.CheckedAt.Truncate(time.Second)}
+		}
+		out = append(out, u)
+	}
+	slices.SortFunc(out, func(a, b kwerftv1.EtcdSnapshotUpload) int { return strings.Compare(a.Node, b.Node) })
+	return out, nil
+}
+
+// removeEtcdUploads deletes the upload configuration (Kwerft's only), so
+// the agents stop: snapshots stay local.
+func (r *BackupTargetReconciler) removeEtcdUploads(ctx context.Context) error {
+	return r.deleteManaged(ctx, &corev1.Secret{}, GatewayNamespace, backups.EtcdSecret)
+}
+
+// removeK3sEtcdS3 deletes k3s's own S3 configuration of earlier versions
+// (kube-system/kwerft-etcd-s3, when Kwerft made it): k3s uploaded without
+// encryption. The installer no longer names it in the k3s config.
+func (r *BackupTargetReconciler) removeK3sEtcdS3(ctx context.Context) error {
+	return r.deleteManaged(ctx, &corev1.Secret{}, etcdS3Namespace, EtcdS3Secret)
+}
+
+func (r *BackupTargetReconciler) deleteManaged(ctx context.Context, obj client.Object, namespace, name string) error {
+	err := r.reader().Get(ctx, client.ObjectKey{Namespace: namespace, Name: name}, obj)
+	if apierrors.IsNotFound(err) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if obj.GetLabels()[LabelManagedBy] != ManagedByKwerft {
+		return nil
+	}
+	if err := r.Delete(ctx, obj, client.Preconditions{UID: ptrTo(obj.GetUID())}); err != nil && !apierrors.IsNotFound(err) && !apierrors.IsConflict(err) {
+		return err
+	}
+	log.FromContext(ctx).Info("removed", "namespace", namespace, "name", name)
+	return nil
+}
 
 func retention(e *kwerftv1.EtcdSnapshotSettings) int32 {
 	if e == nil {
@@ -419,6 +505,23 @@ func (r *BackupTargetReconciler) SetupWithManager(mgr ctrl.Manager) error {
 					e.ObjectNew.(*kwerftv1.BackupPlan).Status.LastSuccessfulAt)
 			},
 		}))
+	// The node agents' etcd snapshot uploads: an informer of its own for
+	// exactly their status ConfigMap, so the manager does not cache every
+	// ConfigMap.
+	reports, err := cache.New(mgr.GetConfig(), cache.Options{
+		Scheme: mgr.GetScheme(), Mapper: mgr.GetRESTMapper(), HTTPClient: mgr.GetHTTPClient(),
+		ByObject: map[client.Object]cache.ByObject{&corev1.ConfigMap{}: {
+			Namespaces: map[string]cache.Config{GatewayNamespace: {}},
+			Field:      fields.OneTermEqualSelector("metadata.name", backups.EtcdStatusConfigMap),
+		}},
+	})
+	if err != nil {
+		return err
+	}
+	if err := mgr.Add(reports); err != nil {
+		return err
+	}
+	b = b.WatchesRawSource(source.Kind(reports, client.Object(&corev1.ConfigMap{}), all))
 	// Velero's verdict on the bucket, where Velero is installed (otherwise
 	// the reconciler polls).
 	if veleroInstalled(mgr, VeleroBSLGVK) {

@@ -51,13 +51,13 @@ database, shared by upgrades and backups).
     encrypted with (B3)
   - BackupStorageLocation `kwerft` (default), prefix `<prefix>/velero`
   - and reports `status.backups` (Ready when the BSL is Available).
-- **etcd snapshots** (B1): k3s's own, to the same bucket, folder
-  `<prefix>/etcd`, every 6 hours, 28 kept unless `spec.backups.etcdSnapshots`
-  says otherwise. The installer writes `etcd-s3: true`,
-  `etcd-s3-config-secret: kwerft-etcd-s3`, the schedule and retention into
-  the k3s config; the console keeps Secret `kube-system/kwerft-etcd-s3` from
-  Settings. B1 verifies how k3s behaves while that Secret is missing (local
-  snapshots must go on) and when the schedule changes (a re-run applies it).
+- **etcd snapshots** (B1, B4): k3s's own, kept locally, every 6 hours, 28
+  kept unless `spec.backups.etcdSnapshots` says otherwise (the installer
+  writes schedule and retention into the k3s config). k3s's own S3 upload
+  cannot encrypt, so Kwerft's etcd snapshot agent on every etcd node uploads
+  them to the same bucket, `<prefix>/etcd/<node>/`, encrypted with the SSE-C
+  key Velero's objects use, while `spec.backups.etcdSnapshots` is set; `kwerft
+  etcd-snapshot fetch` reads one back for a restore (As built (B4)).
 - **BackupPlan** (B2) → Velero Schedule `kwerft-<plan>`, labelled
   `kwerft.dev/backup-plan=<plan>`, every Backup it makes carries the label
   and `kwerft.dev/backup-scope`. Saving the target for the first time creates
@@ -350,7 +350,8 @@ agent clusters get neither Velero nor the etcd drop-in):
 
 **What the console (B2) must write** (names fixed by the installer and
 `--restore`):
-- `kube-system/kwerft-etcd-s3` (Opaque, or type
+- ~~`kube-system/kwerft-etcd-s3`~~ (superseded by B4: k3s no longer uploads;
+  the drop-in has no `etcd-s3` options and the console removes its Secret) (Opaque, or type
   `etcd.k3s.cattle.io/s3-config-secret`): `etcd-s3-endpoint` = host[:port]
   **without** `https://` (k3s hands it to minio; TLS is the default),
   `etcd-s3-region`, `etcd-s3-bucket`, `etcd-s3-folder` = `<prefix>/etcd`,
@@ -787,7 +788,9 @@ Independent of the Kopia password (a different function of the same key);
   it (a Velero restore, or the backup tarball fetched with the derived key:
   `aws s3api get-object --sse-customer-algorithm AES256 --sse-customer-key
   <base64 key> …`).
-- **Recommendation (not built, coordinator's call):** the plan's
+- **Built in B4** (the user's decision, 2026-10-05: Kwerft uploads them
+  itself, with the same SSE-C key). Was: **Recommendation (not built,
+  coordinator's call):** the plan's
   requirement — secret values encrypted before SecretSets ship — holds for
   the snapshots too. To also hide plain objects: either make the upload
   opt-in (Settings › Backups says what it holds; today the console writes
@@ -837,3 +840,229 @@ Independent of the Kopia password (a different function of the same key);
 - Rotating the key means re-encrypting every object (SSE-C has no rekey,
   and Hetzner cannot copy SSE-C objects): part of the recovery key
   rotation follow-up.
+
+## As built (B4): encrypted etcd snapshots
+
+The user's decision (2026-10-05): k3s's S3 upload leaves the cluster state
+readable to anyone with bucket access (its minio `PutObject` has no SSE
+option, B3), so **k3s keeps etcd snapshots locally only, and Kwerft uploads
+each new snapshot itself, encrypted with the same SSE-C key as Velero's
+objects** (`backups.SSECustomerKey`, B3's HKDF of the recovery key). The
+recovery key stays the only secret a restore needs.
+
+### Installer
+
+- The drop-in `/etc/rancher/k3s/config.yaml.d/50-kwerft-etcd-snapshots.yaml`
+  keeps `etcd-snapshot-schedule-cron`, `etcd-snapshot-retention` and
+  `etcd-snapshot-compress: true`, and no longer has `etcd-s3` or
+  `etcd-s3-config-secret` (`ETCD_S3_SECRET` is gone). A server installed with
+  the old drop-in gets the new one on its next run: the file differs, so the
+  stage rewrites it (0600) and restarts k3s, as for any change; the run after
+  that changes nothing. No exit code changed.
+
+### The uploader
+
+- **Where:** `kwerft node-agent --firewall=false
+  --etcd-snapshot-dir=/k3s-db/snapshots` (`cmd/kwerft/etcdagent.go`; the
+  logic in `internal/backups/etcd.go`), chart
+  `templates/etcd-snapshots.yaml`: DaemonSet `kwerft-etcd-snapshots`,
+  console mode only (`backups.etcdAgent.enabled`, default on; requests
+  5m/32Mi, limit 128Mi), `nodeSelector: node-role.kubernetes.io/etcd:
+  "true"` (k3s's label for embedded-etcd servers, so every control-plane
+  node of Kwerft's clusters), all taints tolerated. It mounts
+  `/var/lib/rancher/k3s/server/db` read-only (type `Directory`: it exists on
+  every etcd node, so `helm --wait` never waits for a missing path, and
+  nothing is created on other nodes) and runs as root (k3s's files are
+  root's, 0600) with every capability dropped, no host network, read-only
+  root file system.
+- **Why a second DaemonSet of the same command, not the firewall agent's
+  pod:** the firewall agent runs on every node, build pools included, as
+  root with `NET_ADMIN` on the host network. Giving its service account the
+  bucket's keys would put a token that reads them on every node where
+  untrusted builds run. The etcd part only exists where etcd runs, needs
+  neither capabilities nor host network, and has its own service account.
+  `node-agent` runs either part or both (`--firewall`, default true).
+- **RBAC** (Role `kwerft-etcd-snapshots` in `kwerft-system`): `get` on
+  exactly the Secret `kwerft-etcd-backup`, `get`/`patch` on exactly the
+  ConfigMap `kwerft-etcd-backup-status`. Nothing else.
+- **A pass** (`EtcdUploader.Sync`): lists the node's finished local
+  snapshots (regular, not hidden, no `.part`/`.tmp`, unchanged for a
+  minute, and not a name whose `.zip` is beside it: k3s compresses in
+  place) and the node's folder `<prefix>/etcd/<node>/` in the bucket (all
+  pages); keeps per **kind** the newest `retention` of both together —
+  kinds as k3s counts them: the name without `-<node>-<unix time>[.zip]`
+  (`etcd-snapshot` scheduled, `on-demand`, …), except that every
+  `pre-<upgrade>` snapshot an Upgrade takes counts as one kind `pre-`, or
+  each would be kept forever; uploads the kept ones the bucket lacks, newest
+  first (local ones beyond the retention are never uploaded just to be
+  deleted), deletes bucket copies beyond it (also of snapshots the node no
+  longer has), and aborts unfinished multipart uploads of snapshots it does
+  not want. Errors of one snapshot do not stop the others.
+- **Uploads:** up to 16 MiB in one `PUT`, larger ones as a multipart upload
+  of 16 MiB parts (one part in memory at a time), every request with the
+  three SSE-C headers (CreateMultipartUpload, each UploadPart and
+  CompleteMultipartUpload), SigV4 over the part's SHA-256. **Restart
+  resume:** before starting a multipart upload the agent looks for an
+  unfinished one of the same key (`ListMultipartUploads`, `ListParts`) and
+  sends only the parts that are missing or of another size; a resumed upload
+  the store refuses (4xx, e.g. another key after the recovery key changed) is
+  aborted, so the next pass starts afresh. A store that cannot list uploads
+  gets a fresh upload. Nothing is kept on the node: the bucket is the state.
+- **When:** every minute the agent reads the Secret and the directory; a
+  pass runs when either changed, an hour went by (retention, anything
+  missing), or 5 minutes after a failed pass. The HTTP client allows 10
+  minutes a request (a part over a slow link). No Secret: nothing happens
+  (snapshots stay local).
+- **Keys are never logged:** logs name snapshots, sizes and S3 error codes;
+  the report carries the error text (S3 code and message, never a key); the
+  test checks the log and the report for the secret key and the SSE-C key.
+
+### The console
+
+- `BackupTargetReconciler` (`backup_target.go`) writes, while a complete
+  target exists **and `spec.backups.etcdSnapshots` is set** (Settings ›
+  Backups "Send k3s's etcd snapshots to the bucket too"), the Secret
+  `kwerft-system/kwerft-etcd-backup` (Opaque; labels managed-by and
+  `velero.io/exclude-from-backup=true`, so neither the keys nor the derived
+  key land in the backup they unlock): `endpoint` (https://…), `region`,
+  `bucket`, `prefix` (the backup prefix; the agent appends
+  `etcd/<node>/`), `accessKey`, `secretKey`, `sseCustomerKey` (the 32 raw
+  bytes), `retention` (the setting or 28) — `backups.EtcdUploadConfig`. It
+  deletes Kwerft's Secret when etcd snapshots are off, the target is
+  incomplete, or the recovery key is invalid; it creates the ConfigMap
+  `kwerft-etcd-backup-status` (same labels) for the agents' reports.
+- **Behaviour change:** B2 wrote k3s's Secret whenever a target existed,
+  also with `etcdSnapshots` nil (B3 noted the clash with the type and the
+  UI). Uploads now follow the setting, as the field's comment, the API
+  (`etcdSnapshots.enabled`) and the checkbox say; a new target has it on by
+  default (the API's default view).
+- **Removal of k3s's Secret:** every pass deletes
+  `kube-system/kwerft-etcd-s3` when it carries
+  `app.kubernetes.io/managed-by=kwerft` (UID precondition); anyone else's is
+  left alone. k3s, with the new drop-in, no longer reads it anyway.
+- **Status:** `status.backups.etcdSnapshots[]` (new, optional fields only:
+  `node`, `name` — the newest snapshot in the bucket, `uploadedAt` — when it
+  got there, `checkedAt`, `stored`, `message`), from the ConfigMap's
+  per-node JSON (`backups.EtcdNodeReport`), for nodes that still exist,
+  sorted by node; empty while uploads are off. The reconciler watches
+  exactly that ConfigMap through an informer of its own (like the firewall's
+  status). `GET /api/v1/settings/backups` returns them as `etcdUploads`.
+- **Settings › Backups:** under the etcd checkbox, per node a pill
+  (Uploaded / Failing / None yet) and one line (snapshot, "uploaded 2 h
+  ago · 28 snapshots in the bucket", or the agent's error), and a
+  collapsible "Restoring the cluster state from an etcd snapshot" with the
+  commands below. The recovery key file and the checkbox say etcd snapshots
+  are encrypted with it too.
+
+### Restoring from an etcd snapshot
+
+`kwerft etcd-snapshot list|fetch` (`cmd/kwerft/etcdsnapshot.go`) reads the
+same `backups:` block and key files as `install.sh --restore` (endpoint,
+region optional, bucket, prefix — else the config's `domain` —,
+`accessKeyFile`, `secretKeyFile`, `recoveryKeyFile`; the downloaded key
+file with its prose lines works, `backups.RecoveryKeyFromFile`), derives the
+SSE-C key and sends the headers itself:
+
+```bash
+kwerft etcd-snapshot list  --config kwerft.yaml                  # NODE SNAPSHOT SIZE TAKEN, newest first
+kwerft etcd-snapshot fetch --config kwerft.yaml [--node N] [--name S|latest] [--out FILE]
+```
+
+`--node` may be left out when the bucket holds one node's folder; `--name`
+defaults to the newest; `--out` to the snapshot's name in the current
+directory. The file is written 0600 through a temporary name, never over an
+existing file. Exit codes: 0, 1 (the bucket refused, the key does not
+decrypt — "is it the key of the console that uploaded it?" —, not found), 2
+(usage, unreadable config or key files; errors name files, never contents).
+
+The image is distroless; the binary is `/usr/local/bin/kwerft` in
+`ghcr.io/ehilzinger/kwerft:<version>`. With Docker or Podman anywhere:
+
+```bash
+docker run --rm --user 0 -v /root:/root -w /root ghcr.io/ehilzinger/kwerft:<version> \
+  etcd-snapshot fetch --config kwerft.yaml        # writes /root/<snapshot>.zip
+```
+
+(or `docker create` + `docker cp …:/usr/local/bin/kwerft .` to have the
+static binary). Then, on the server to restore (a broken one, or a new one
+with k3s of the same version installed and stopped):
+
+```bash
+systemctl stop k3s
+k3s server --cluster-reset --cluster-reset-restore-path=/root/<snapshot>.zip \
+  --token=<the old server's token>
+systemctl start k3s
+```
+
+k3s reads the `.zip` as it is. The token is in
+`/var/lib/rancher/k3s/server/token` of the old server and in the Secret
+`kwerft-system/cluster-local-join` of every Cluster backup (B3: k3s's
+bootstrap data, with the CAs and the secrets-encryption key, is encrypted
+with it). On a cluster with more etcd nodes, restore on one and join the
+others again (k3s's documented procedure). This restores the cluster
+state only; volume data and the console's database come from Velero
+(`install.sh --restore`).
+
+### Tests
+
+- Go `internal/backups`: `fakes3` (a bucket that checks every SigV4
+  signature against its secret key, pages listings, keeps multipart uploads,
+  enforces 5 MiB parts and SSE-C as Hetzner does: an object written with a
+  key is read only with that key, a part with another key than its upload's
+  is refused); `TestEtcdUploaderEncryptsEverySnapshot` (one PUT and a 3-part
+  upload, both stored with the derived key, unreadable without it, a
+  snapshot being compressed and hidden files skipped until settled),
+  `…Retention` (per kind, never upload-to-delete, other nodes untouched, a
+  lowered retention), `…Resumes` (a failed part 3 of 4, then a new agent
+  sends parts 3 and 4 only, one multipart upload), `…AbortsStaleUploads`
+  (a pruned snapshot's and another key's), `TestKeepCountsUpgradeSnapshots…`,
+  config round trip (no key in errors), name parsing, listing pages and a
+  wrong signature.
+- `cmd/kwerft`: `TestEtcdAgent` (fake Kubernetes client and bucket: nothing
+  without the Secret, upload and report, no pass without a reason, the
+  hourly pass, a wrong secret key reported and retried after 5 minutes,
+  neither key in the log or the report, stop when the Secret goes);
+  `TestEtcdSnapshotFetch` (list order, latest and by name, 0600, never over
+  a file, another recovery key → "cannot decrypt" and nothing left, a bad
+  key file not echoed, a path as a name refused, usage exits).
+- envtest `TestBackupTarget`: the Secret's contents (the SSE-C key equals
+  `SSECustomerKey`), its labels, Kwerft's `kube-system/kwerft-etcd-s3`
+  removed and someone else's kept, the ConfigMap created, reports of an
+  existing and a removed node → `status.backups.etcdSnapshots`, retention
+  from the settings, Secret and status gone when etcd snapshots are off.
+  Server: `etcdUploads` in `GET /settings/backups`; no role may get, list
+  or patch `kwerft-etcd-backup`.
+- bats: the drop-in has no `etcd-s3` line; an old drop-in with `etcd-s3` is
+  rewritten (0600) with a k3s restart, and the next run changes nothing.
+- `make helm-lint`: the DaemonSet's args and nodeSelector, the Role's
+  single Secret, no host network or added capabilities, none in agent mode.
+- web `backups.test.ts`: pills, the per-node line, the fetch command, the
+  key file's wording. Looked at in the browser (desktop dark, mobile light)
+  against the homepage's mock API with three nodes (uploaded, failing, none
+  yet).
+
+### Open points
+
+- **Not tried against real Hetzner Object Storage** (no real buckets in
+  this work): multipart with SSE-C (Hetzner is Ceph-based; whether it takes
+  the SSE-C headers on CompleteMultipartUpload, which the AWS SDK sends too,
+  is unverified), `ListMultipartUploads`/`ListParts` (a 400/501 falls back
+  to a fresh upload). On the test project: turn etcd snapshots on, `k3s
+  etcd-snapshot save`, wait a minute or two, Settings shows the upload;
+  `aws s3api head-object` without the key fails, `kwerft etcd-snapshot fetch`
+  works; a snapshot over 16 MiB (or a smaller part size in a test build)
+  for multipart; delete the pod mid-upload and watch it resume; then a
+  `--cluster-reset-restore-path` restore on a throwaway server.
+- Every etcd node uploads its own snapshots: three control-plane nodes
+  keep three copies of the same cluster state (one would do for a restore).
+  Simple and independent of which node is up; uploading from one node only
+  is a possible follow-up.
+- Objects k3s uploaded before this change (`<prefix>/etcd/<snapshot>`,
+  unencrypted, plus k3s's `.metadata/`) are neither read nor deleted: a test
+  bucket that had them should have them removed by hand.
+- `pre-<upgrade>` snapshots are never pruned **locally** (each is its own
+  prefix to k3s, and the upgrade runner does not delete them); the bucket
+  keeps the newest `retention` of them. Pruning them on the node belongs to
+  the upgrades work.
+- The agent counts on k3s's default snapshot directory; a custom
+  `etcd-snapshot-dir` in a hand-written k3s config is not followed.

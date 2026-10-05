@@ -331,6 +331,34 @@ func TestBackupTargetIsCheckedAndWriteOnly(t *testing.T) {
 			}
 		}
 	}
+	// The etcd snapshot agents' configuration (the keys and the SSE-C
+	// key) is the controller's and the agents' only.
+	for _, role := range []string{"owner", "admin", "developer", "viewer"} {
+		for _, verb := range []string{"get", "list", "patch"} {
+			if canName(t, role, controllers.GatewayNamespace, verb, "", "secrets", "", backups.EtcdSecret) {
+				t.Errorf("%s may %s %s", role, verb, backups.EtcdSecret)
+			}
+		}
+	}
+
+	// The agents' uploads, as the reconciler reports them.
+	var cur kwerftv1.ConsoleSettings
+	if err := cluster.admin.Get(context.Background(), client.ObjectKey{Name: kwerftv1.ConsoleSettingsName}, &cur); err != nil {
+		t.Fatal(err)
+	}
+	at := metav1.NewTime(time.Date(2026, 10, 5, 12, 0, 0, 0, time.UTC))
+	cur.Status.Backups = &kwerftv1.BackupsStatus{State: "Ready", EtcdSnapshots: []kwerftv1.EtcdSnapshotUpload{
+		{Node: "server-1", Name: "etcd-snapshot-server-1-1759665600.zip", UploadedAt: &at, CheckedAt: &at, Stored: 3},
+		{Node: "server-2", CheckedAt: &at, Message: "upload of x: AccessDenied"},
+	}}
+	if err := cluster.admin.Status().Update(context.Background(), &cur); err != nil {
+		t.Fatal(err)
+	}
+	if code := c.owner.do(t, "GET", "/api/v1/settings/backups", nil, &view); code != http.StatusOK || len(view.EtcdUploads) != 2 ||
+		view.EtcdUploads[0].Name != "etcd-snapshot-server-1-1759665600.zip" || view.EtcdUploads[0].UploadedAt == nil || view.EtcdUploads[0].Stored != 3 ||
+		view.EtcdUploads[1].Message != "upload of x: AccessDenied" {
+		t.Errorf("etcd uploads: %d %+v", code, view.EtcdUploads)
+	}
 }
 
 // A console restored by hand: the prefix holds backups, and only their

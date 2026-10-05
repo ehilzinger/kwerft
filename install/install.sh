@@ -98,7 +98,6 @@ INSTALL_ENV_FILE="$STATE_DIR/install.env" # settings later runs reuse (remember_
 readonly INSTALLER_NODE_LABEL="kwerft.dev/installer"   # the node this script runs on, where $STATE_DIR is
 K3S_ETCD_CONFIG_FILE="/etc/rancher/k3s/config.yaml.d/50-kwerft-etcd-snapshots.yaml"  # likewise
 readonly ETCD_MARKER="# Managed by Kwerft installer (etcd snapshots)."
-readonly ETCD_S3_SECRET="kwerft-etcd-s3"  # kube-system; the console keeps it from Settings › Backups
 readonly ETCD_SNAPSHOT_SCHEDULE_DEFAULT="0 */6 * * *"
 readonly ETCD_SNAPSHOT_RETENTION_DEFAULT=28
 readonly VELERO_NS="velero"
@@ -2024,7 +2023,8 @@ EOF
 
 # ---------------------------------------------------------------------------
 # Stage: backups (docs/phase6.md)
-# k3s's own etcd snapshots, locally and to the backup bucket, and Velero for
+# k3s's own etcd snapshots, kept locally (Kwerft's etcd snapshot agent
+# uploads them to the backup bucket, encrypted), and Velero for
 # backups of projects and of the console itself: file-system volume backups
 # with Kopia (encrypted with the recovery key), S3-compatible storage through
 # the AWS plugin, which has the storage encrypt every other object (the
@@ -2043,22 +2043,22 @@ stage_backups() {
   echo "Velero $VELERO_VERSION · volume backups with Kopia · $etcd"
 }
 
-# etcd_snapshot_config <schedule> <retention> prints the k3s config drop-in.
-# k3s reads Secret kube-system/kwerft-etcd-s3 (etcd-s3-config-secret) at
-# every snapshot, not when it starts: while the Secret is missing (no backup
-# target in Settings yet) k3s logs a warning and goes on taking and pruning
-# local snapshots; once the console writes it, the next snapshot goes to the
-# bucket as well, without a restart. No other etcd-s3-* option may be set,
-# or k3s ignores the Secret. The schedule is read when k3s starts.
+# etcd_snapshot_config <schedule> <retention> prints the k3s config drop-in:
+# local snapshots only. k3s's own S3 upload (etcd-s3) cannot encrypt (its
+# PutObject has no SSE option), so Kwerft's etcd snapshot agent (chart:
+# templates/etcd-snapshots.yaml) uploads the local snapshots itself, with
+# the SSE-C key derived from the recovery key, while Settings › Backups
+# sends etcd snapshots to the bucket. Drop-ins of earlier versions named
+# etcd-s3 and its config Secret: a run rewrites them (and restarts k3s).
+# The schedule is read when k3s starts.
 etcd_snapshot_config() {
   cat <<EOF
 $ETCD_MARKER
 # k3s reads this file when it starts; the installer restarts k3s when it changes.
+# Local snapshots only: Kwerft uploads them to the backup bucket, encrypted.
 etcd-snapshot-schedule-cron: "$1"
 etcd-snapshot-retention: $2
 etcd-snapshot-compress: true
-etcd-s3: true
-etcd-s3-config-secret: $ETCD_S3_SECRET
 EOF
 }
 

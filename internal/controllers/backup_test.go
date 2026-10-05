@@ -16,6 +16,7 @@ import (
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -61,10 +62,26 @@ func secretData(t *testing.T, namespace, name string) (map[string][]byte, *corev
 func TestBackupTarget(t *testing.T) {
 	requireEnvtest(t)
 	ctx := context.Background()
+	// k3s's own S3 configuration of an earlier version: k3s uploaded
+	// without encryption. Kwerft's goes; anyone else's stays.
+	legacy := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Namespace: etcdS3Namespace, Name: EtcdS3Secret,
+		Labels: map[string]string{LabelManagedBy: ManagedByKwerft}}, Type: etcdS3Type,
+		Data: map[string][]byte{"etcd-s3-bucket": []byte("acme-kwerft")}}
+	if err := k8s.Create(ctx, legacy); err != nil {
+		t.Fatal(err)
+	}
+	// An etcd node whose agent reports below.
+	node := &corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "etcd-1"}}
+	if err := k8s.Create(ctx, node); err != nil {
+		t.Fatal(err)
+	}
 	s := useSettings(t, kwerftv1.ConsoleSettingsSpec{Backups: &kwerftv1.BackupSettings{
 		Endpoint: "https://fsn1.your-objectstorage.com", Bucket: "acme-kwerft", Prefix: "ops.example.com",
 		EtcdSnapshots: &kwerftv1.EtcdSnapshotSettings{}}})
 	t.Cleanup(func() {
+		_ = k8s.Delete(ctx, node)
+		_ = k8s.Delete(ctx, &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Namespace: etcdS3Namespace, Name: EtcdS3Secret}})
+		_ = k8s.Delete(ctx, &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Namespace: GatewayNamespace, Name: backups.EtcdStatusConfigMap}})
 		for _, name := range []string{BackupCredentialsSecret, BackupKeySecret} {
 			_, sec, err := secretData(t, GatewayNamespace, name)
 			if err == nil {
@@ -158,15 +175,52 @@ func TestBackupTarget(t *testing.T) {
 	if def, _, _ := unstructured.NestedBool(bsl.Object, "spec", "default"); !def {
 		t.Error("the location is not the default")
 	}
-	data, sec, err := secretData(t, etcdS3Namespace, EtcdS3Secret)
+	// The node agents' upload configuration: the same bucket and SSE-C
+	// key, never backed up.
+	data, sec, err := secretData(t, GatewayNamespace, backups.EtcdSecret)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if string(sec.Type) != etcdS3Type || string(data["etcd-s3-folder"]) != "ops.example.com/etcd" || string(data["etcd-s3-endpoint"]) != "fsn1.your-objectstorage.com" ||
-		string(data["etcd-s3-bucket"]) != "acme-kwerft" || string(data["etcd-s3-access-key"]) != "AKIAKWERFT" || string(data["etcd-s3-region"]) != "fsn1" ||
-		string(data["etcd-s3-retention"]) != "28" {
-		t.Errorf("etcd S3 secret %s %v", sec.Type, data)
+	cfg, err := backups.ParseEtcdUploadConfig(data)
+	sseKey, _ := backups.SSECustomerKey(key)
+	if err != nil || cfg.Target.Endpoint != "https://fsn1.your-objectstorage.com" || cfg.Target.Region != "fsn1" || cfg.Target.Bucket != "acme-kwerft" ||
+		cfg.Target.Prefix != "ops.example.com" || cfg.Credentials.AccessKey != "AKIAKWERFT" || cfg.Credentials.SecretKey != "s3cr3t" ||
+		!bytes.Equal(cfg.SSEKey, sseKey) || cfg.Retention != 28 {
+		t.Errorf("etcd upload configuration %+v %v", cfg, err)
 	}
+	if sec.Labels[labelVeleroExclude] != "true" || sec.Labels[LabelManagedBy] != ManagedByKwerft {
+		t.Errorf("etcd upload configuration labels %v", sec.Labels)
+	}
+	// k3s's unencrypted upload is gone.
+	eventually(t, func() error {
+		if _, _, err := secretData(t, etcdS3Namespace, EtcdS3Secret); !apierrors.IsNotFound(err) {
+			return fmt.Errorf("kube-system/%s: %v", EtcdS3Secret, err)
+		}
+		return nil
+	})
+	// The agents' reports: nodes that are gone are left out.
+	var reports corev1.ConfigMap
+	eventually(t, func() error {
+		return k8s.Get(ctx, client.ObjectKey{Namespace: GatewayNamespace, Name: backups.EtcdStatusConfigMap}, &reports)
+	})
+	uploaded := time.Date(2026, 10, 5, 12, 0, 3, 0, time.UTC)
+	rep, _ := json.Marshal(backups.EtcdNodeReport{Name: "etcd-snapshot-etcd-1-1759665600.zip", UploadedAt: &uploaded, CheckedAt: uploaded, Stored: 4})
+	gone, _ := json.Marshal(backups.EtcdNodeReport{Name: "x", CheckedAt: uploaded})
+	reports.Data = map[string]string{"etcd-1": string(rep), "removed-node": string(gone)}
+	if err := k8s.Update(ctx, &reports); err != nil {
+		t.Fatal(err)
+	}
+	waitForBackups(t, func(st *kwerftv1.BackupsStatus) error {
+		if len(st.EtcdSnapshots) != 1 {
+			return fmt.Errorf("etcd snapshots %+v", st.EtcdSnapshots)
+		}
+		e := st.EtcdSnapshots[0]
+		if e.Node != "etcd-1" || e.Name != "etcd-snapshot-etcd-1-1759665600.zip" || e.UploadedAt == nil || !e.UploadedAt.Time.Equal(uploaded) ||
+			e.Stored != 4 || e.Message != "" {
+			return fmt.Errorf("etcd snapshot %+v", e)
+		}
+		return nil
+	})
 	waitForBackups(t, func(st *kwerftv1.BackupsStatus) error {
 		if st.State != "Pending" || st.RecoveryKeyCreatedAt == nil || !st.RecoveryKeyCreatedAt.Time.Equal(keyAt) {
 			return fmt.Errorf("state %s, key %v", st.State, st.RecoveryKeyCreatedAt)
@@ -190,8 +244,34 @@ func TestBackupTarget(t *testing.T) {
 		return nil
 	})
 
-	// Without etcd snapshot settings the snapshots still go to the bucket,
-	// with the installer's retention.
+	// Retention from the settings.
+	eventually(t, func() error {
+		var cur kwerftv1.ConsoleSettings
+		if err := k8s.Get(ctx, client.ObjectKeyFromObject(s), &cur); err != nil {
+			return err
+		}
+		cur.Spec.Backups.EtcdSnapshots = &kwerftv1.EtcdSnapshotSettings{Retention: 7}
+		return k8s.Update(ctx, &cur)
+	})
+	eventually(t, func() error {
+		data, _, err := secretData(t, GatewayNamespace, backups.EtcdSecret)
+		if err != nil {
+			return err
+		}
+		if cfg, err := backups.ParseEtcdUploadConfig(data); err != nil || cfg.Retention != 7 {
+			return fmt.Errorf("retention %d %v", cfg.Retention, err)
+		}
+		return nil
+	})
+
+	// Someone else's Secret of k3s's old name is not touched.
+	foreign := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Namespace: etcdS3Namespace, Name: EtcdS3Secret}, Type: etcdS3Type}
+	if err := k8s.Create(ctx, foreign); err != nil {
+		t.Fatal(err)
+	}
+
+	// Without etcd snapshot settings the snapshots stay local: the agents'
+	// configuration goes, and with it their reports.
 	eventually(t, func() error {
 		var cur kwerftv1.ConsoleSettings
 		if err := k8s.Get(ctx, client.ObjectKeyFromObject(s), &cur); err != nil {
@@ -201,15 +281,20 @@ func TestBackupTarget(t *testing.T) {
 		return k8s.Update(ctx, &cur)
 	})
 	eventually(t, func() error {
-		data, _, err := secretData(t, etcdS3Namespace, EtcdS3Secret)
-		if err != nil {
-			return err
-		}
-		if string(data["etcd-s3-retention"]) != "28" || string(data["etcd-s3-bucket"]) != "acme-kwerft" {
-			return fmt.Errorf("etcd S3 secret %v", data)
+		if _, _, err := secretData(t, GatewayNamespace, backups.EtcdSecret); !apierrors.IsNotFound(err) {
+			return fmt.Errorf("upload configuration still there: %v", err)
 		}
 		return nil
 	})
+	waitForBackups(t, func(st *kwerftv1.BackupsStatus) error {
+		if len(st.EtcdSnapshots) != 0 {
+			return fmt.Errorf("etcd snapshots %+v", st.EtcdSnapshots)
+		}
+		return nil
+	})
+	if _, _, err := secretData(t, etcdS3Namespace, EtcdS3Secret); err != nil {
+		t.Errorf("someone else's kube-system/%s: %v", EtcdS3Secret, err)
+	}
 }
 
 // After install.sh --restore the recovery key is only Velero's repository

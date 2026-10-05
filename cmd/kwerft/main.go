@@ -1,7 +1,8 @@
 // Command kwerft runs the Kwerft console: REST/WebSocket API, the reconcilers
 // for kwerft.dev resources, and the embedded web UI — one binary. `kwerft
 // agent` runs the reconcilers in a remote cluster with a tunnel to the
-// console instead (agent.go); `kwerft node-agent` is the firewall DaemonSet.
+// console instead (agent.go); `kwerft node-agent` is the firewall and etcd
+// snapshot DaemonSets.
 package main
 
 import (
@@ -51,6 +52,11 @@ func main() {
 	// `kwerft db-snapshot` is Velero's pre-backup hook on the console pod (dbsnapshot.go).
 	if len(os.Args) > 1 && os.Args[1] == "db-snapshot" {
 		os.Exit(runDBSnapshot(os.Args[2:]))
+	}
+	// `kwerft etcd-snapshot list|fetch` reads uploaded etcd snapshots back
+	// from the backup bucket, decrypted (etcdsnapshot.go).
+	if len(os.Args) > 1 && os.Args[1] == "etcd-snapshot" {
+		os.Exit(runEtcdSnapshot(os.Args[2:]))
 	}
 	// `kwerft upgrade-runner` is an Upgrade's runner pod (upgraderunner.go).
 	if len(os.Args) > 1 && os.Args[1] == "upgrade-runner" {
