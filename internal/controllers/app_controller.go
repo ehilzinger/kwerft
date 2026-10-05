@@ -37,8 +37,9 @@ type AppReconciler struct {
 	// Registry tags the images of Git apps' revisions so the registry's
 	// retention keeps them; nil leaves the registry alone.
 	Registry *RegistryKeeper
-	// APIReader looks up the Secrets an App mounts while its replicas are
-	// not ready, to say which one is missing; nil skips that.
+	// APIReader reads the Secrets an App's env references (the secrets
+	// hash, SecretMissing) and looks up the ones it mounts while its
+	// replicas are not ready, to say which one is missing; nil skips both.
 	APIReader client.Reader
 }
 
@@ -113,7 +114,18 @@ func (r *AppReconciler) reconcile(ctx context.Context, app *kwerftv1.App) (*read
 		return &readiness{metav1.ConditionFalse, "VolumeNotFound", "Waiting for Volume " + strings.Join(missing, ", ")}, nil
 	}
 
+	hash, missingRefs, err := secretRefs(ctx, r.APIReader, app.Namespace, app.Spec.Env)
+	if err != nil {
+		return nil, err
+	}
+	if len(missingRefs) > 0 {
+		// Pods would sit in CreateContainerConfigError; the running
+		// replicas keep running until the value is there.
+		return &readiness{metav1.ConditionFalse, "SecretMissing", secretRefsMissing(missingRefs)}, nil
+	}
+
 	rd := newAppRender(app, image, project)
+	rd.secretsHash = hash
 
 	// Workload: exactly one of Deployment or StatefulSet.
 	deploy := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: app.Name, Namespace: app.Namespace}}
@@ -420,6 +432,23 @@ func (r *AppReconciler) appsMountingVolume(ctx context.Context, vol client.Objec
 	return reqs
 }
 
+// appsUsingSecret enqueues the Apps whose env or mounts name a Secret.
+func (r *AppReconciler) appsUsingSecret(ctx context.Context, sec client.Object) []reconcile.Request {
+	var apps kwerftv1.AppList
+	if err := r.List(ctx, &apps, client.InNamespace(sec.GetNamespace())); err != nil {
+		return nil
+	}
+	var reqs []reconcile.Request
+	for _, a := range apps.Items {
+		uses := slices.ContainsFunc(envSecretRefs(a.Spec.Env), func(ref *corev1.SecretKeySelector) bool { return ref.Name == sec.GetName() }) ||
+			slices.ContainsFunc(a.Spec.Volumes, func(v kwerftv1.AppVolume) bool { return v.Secret == sec.GetName() })
+		if uses {
+			reqs = append(reqs, reconcile.Request{NamespacedName: client.ObjectKeyFromObject(&a)})
+		}
+	}
+	return reqs
+}
+
 // reconcilePolicy applies the App's CiliumNetworkPolicy, then removes the
 // Kubernetes NetworkPolicy of the same name that Kwerft wrote before Phase 4
 // (in that order, so the App is never without one).
@@ -477,6 +506,9 @@ func (r *AppReconciler) SetupWithManager(mgr ctrl.Manager) error {
 			builder.WithPredicates(predicate.GenerationChangedPredicate{})).
 		// Owned or hand-made: a Domain's claim decides whether routes attach.
 		Watches(&kwerftv1.Domain{}, handler.EnqueueRequestsFromMapFunc(r.appsForDomain)).
+		// A Secret an App's env reads changed: roll it (secrets hash), or it
+		// is no longer missing. Metadata only: values never sit in the cache.
+		Watches(&corev1.Secret{}, handler.EnqueueRequestsFromMapFunc(r.appsUsingSecret), builder.OnlyMetadata).
 		Named("app").
 		Complete(r)
 }

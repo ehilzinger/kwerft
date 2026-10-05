@@ -45,6 +45,9 @@ type appRender struct {
 	owner    *metav1ac.OwnerReferenceApplyConfiguration
 	selector map[string]string
 	labels   map[string]string
+	// secretsHash covers the values of the Secret keys the env references
+	// (AnnotationSecretsHash); "" when it references none.
+	secretsHash string
 }
 
 func newAppRender(app *kwerftv1.App, image, project string) *appRender {
@@ -116,6 +119,13 @@ func (a *appRender) pod() *podShape {
 	// A new value rolls the workload out (a Task's onSuccess.restart).
 	if at := a.app.Annotations[kwerftv1.AnnotationRestartedAt]; at != "" {
 		p.annotations = map[string]string{kwerftv1.AnnotationRestartedAt: at}
+	}
+	// So does a new secret value (no new revision: the spec is unchanged).
+	if a.secretsHash != "" {
+		if p.annotations == nil {
+			p.annotations = map[string]string{}
+		}
+		p.annotations[AnnotationSecretsHash] = a.secretsHash
 	}
 	return p
 }

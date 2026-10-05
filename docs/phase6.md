@@ -140,6 +140,107 @@ As designed in `docs/plan.md` › Secrets (`SecretSet`). Additions:
   password, audited), `POST …/{set}/copy` (to another project). Values are
   never in a response except reveal.
 
+### As built (S1)
+
+**Reconciler** (`internal/controllers/secretset_controller.go`, shared
+helpers in `secretset.go`):
+- Creates the Secret `<set>` in the project namespace, empty, labelled
+  `kwerft.dev/secret-set=<set>` and controlled by the set (deleted with it).
+  A Secret of that name it did not create is never touched: Ready False,
+  reason `Conflict`. A leftover of an earlier set of the same name (same
+  label, owner kind SecretSet, other UID) is deleted and recreated.
+- `spec.generate`: missing keys get 32 random bytes, base64url without
+  padding (43 characters, URL-safe). Existing values are never replaced.
+- `spec.derived`: `${KEY}` templates over the set's keys (other derived keys
+  too), re-rendered whenever an input changes; written only when all inputs
+  exist (Ready False `DerivedPending`, "URL waits for PASSWORD"). Writes are
+  guarded by the Secret's resourceVersion.
+- Per-key record: annotation `key.secret-set.kwerft.dev/<KEY>` on the
+  Secret (keys that are not a valid annotation name are hashed: `x.<hex>`),
+  JSON `{"at":…,"by":"<email>","source":"Set|Generated|Derived"}`. The API
+  writes it with the value; the reconciler for generate/derived (`by` empty).
+- Status: `keys` (name, updatedAt, updatedBy, source), `usedBy` (`App/x`,
+  `Schedule/x`, unfinished `Task/x` not started by a Schedule; env
+  `secretKeyRef` or `AppVolume.secret`; a Task/Schedule `fromApp` an App
+  that uses it), `missing` (`App/x: KEY`), Ready (`Ready`, `MissingKeys`,
+  `DerivedPending`, `Conflict`, `NotInProject`).
+- Per namespace: Role `kwerft:secret-sets` (patch) and
+  `kwerft:secret-sets-read` (get), `resourceNames` = exactly the Secrets a
+  live set controls (no rules without sets). Bindings: patch → owner and
+  admin groups + the project's developers (`ProjectBindings`: Team → the
+  developer group, Members → the listed developers); get → owner and admin.
+- Watches Secrets **metadata only** (labelled ones), Apps, Schedules, Tasks
+  and Projects. Secrets are read with the APIReader, never cached.
+
+**App reconciler:** `kwerft.dev/secrets-hash` (sha256 over the env's
+`secretKeyRef` values, sorted, first 32 hex) on the pod template; a value
+change rolls the workload, no revision. A non-optional reference to a
+missing Secret or key → Ready False `SecretMissing` ("Waiting for secret
+values: payments has no key STRIPE_KEY. …") and the workload is not
+re-applied (running replicas stay). Watches Secret metadata. Mounted
+Secrets (`AppVolume.secret`) are not hashed (the kubelet updates the
+files). Tasks read values at their next run; no Task-side check.
+
+**RBAC:** `kwerft:project-developer` gains create/update/patch/delete on
+`secretsets`; viewers read them (key names) through `kwerft.dev/*`. Access
+matrix rows `secret-sets` (Kubernetes), `reveal-secrets` and
+`copy-secret-sets` (console, owners and admins).
+
+**API** (`internal/server/api_secrets.go`, all impersonated; `{project}` routes
+reach the project's cluster through the Registry):
+
+| Route | Body → answer |
+|---|---|
+| `GET /api/v1/projects/{p}/secret-sets` | → `[set]` |
+| `POST …/secret-sets` | `{name, description?, generate?: [KEY], derived?: [{key, template}], app?}` → 201 `set`. With `app`, the set is owned by that App (deleted with it) and `name` defaults to `<app>-env`. 422 with `field` (`name`, `generate[i]`, `derived[i].key/.template`) |
+| `GET/PATCH/DELETE …/secret-sets/{set}` | PATCH `{description?, generate?, derived?, resourceVersion?}` → `set` |
+| `PUT …/{set}/keys/{key}` | `{value}` or `{generate: true}` → `{name, updatedAt, updatedBy, source}`. 409 for a derived key or a set in Conflict. A missing set `<app>-env` of an existing App is created on the fly (owned by the App) |
+| `DELETE …/{set}/keys/{key}` | → 204; 409 for generated and derived keys |
+| `POST …/{set}/keys/{key}/reveal` | `{password}` (or a TOTP code) → `{key, value}`; owners and admins, never API tokens; audited `secret.reveal` |
+| `POST …/{set}/copy` | `{project, name?}` → 201 `set` in the target; owners and admins |
+
+`set` = `{name, project, description?, app?, generate, derived, keys:
+[{name, updatedAt?, updatedBy?, source?}], usedBy, missing, phase:
+ready|pending|missing|failed, reason?, message?, created, resourceVersion}`.
+
+Values are written with a JSON merge patch on the Secret **through the
+metadata endpoint** (`PartialObjectMetadata`): the API server answers with
+metadata only, so no value ever reaches the console on a write. A set
+younger than 30 s is retried for up to 10 s while its Secret or Role is not
+there yet (a viewer is refused at once: SelfSubjectAccessReview). Audit
+actions: `secret_set.create/update/delete/copy`, `secret.set` (detail
+`generated`), `secret.delete`, `secret.reveal`, `*.denied`; targets
+`project/set[/KEY]`, never values.
+
+**For C1 (templates, Compose import):** create the set first with
+`POST …/secret-sets {name, generate, derived}` (or `app` for an App's own
+set), then Apps referencing `secretKeyRef {name: set, key}`; generated and
+derived keys appear within a reconcile, Apps wait in `SecretMissing` until
+then. Compose env values that look secret: create the App, then `PUT
+…/secret-sets/<app>-env/keys/<KEY> {value}` per value (creates `<app>-env`
+owned by the App) and reference `{name: "<app>-env", key}`. In Go, the
+helpers `controllers.AppEnvSet`, `controllers.GenerateSecretValue`,
+`controllers.KeyAnnotation`/`KeyRecord` are exported.
+
+**UI:** Secrets page (`/secrets?project=&set=`, nav item after Jobs): sets
+with keys, missing keys, used by and last update; per key Replace, Generate,
+Remove, Reveal (owners and admins, password dialog); add key; new/edit
+(description, generate, derived)/copy/delete set; a banner for a change in
+the last 10 minutes. App settings › Environment: a Source per variable
+(plain, "Secret · this app" written to `<app>-env` before the App is saved
+and removed once unreferenced, or a key of a shared set); the deploy wizard
+has "Secret variables" written to `<app>-env` after the App is created.
+
+**Tests:** envtest `secretset_controller_test.go` (Secret ownership,
+generate/derived and following inputs, Conflict, Roles and bindings for Team
+and Members, usedBy/missing, App `SecretMissing` and rollout hash without a
+revision); `internal/server/secrets_test.go` (write-only for every role, the
+audit log, viewers refused, reveal rules incl. tokens, generated/derived,
+Conflict also at the RBAC level, the env toggle's `<app>-env`, copy); the
+isolation suite (no endpoint answers with a value for any role, another
+project's sets and key names are 403, members patch but never get the
+Secret, owners and admins get it only by name); `web/src/secrets.test.ts`.
+
 ## Compose import and templates (C1)
 
 - **Compose:** `POST /api/v1/projects/{p}/import/compose` with the file and

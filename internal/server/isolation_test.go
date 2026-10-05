@@ -64,6 +64,13 @@ type isolationEnv struct {
 	build, task       string // names of a Build and a Task in iso-b
 }
 
+// Secret values the suite plants: no endpoint but reveal may ever answer
+// with them.
+const (
+	isoValueA = "iso-a-value-0f9e8d"
+	isoValueB = "iso-b-value-7c6b5a"
+)
+
 // signIn adds a console account and signs it in.
 func (c *console) signIn(t *testing.T, email, role string) *session {
 	t.Helper()
@@ -149,6 +156,18 @@ func newIsolationEnv(t *testing.T) *isolationEnv {
 		t.Fatal(err)
 	}
 	runningPod(t, isoB, "web", "web-b-1")
+	// A secret set with a value in iso-b (the owner's) and in iso-a (dana's).
+	for _, s := range []struct {
+		who            *session
+		project, value string
+	}{{e.owner, isoB, isoValueB}, {e.dana, isoA, isoValueA}} {
+		if code := s.who.do(t, "POST", "/api/v1/projects/"+s.project+"/secret-sets", map[string]any{"name": "vault"}, nil); code != http.StatusCreated {
+			t.Fatalf("create a secret set in %s: %d", s.project, code)
+		}
+		if code := s.who.do(t, "PUT", "/api/v1/projects/"+s.project+"/secret-sets/vault/keys/API_KEY", map[string]any{"value": s.value}, nil); code != http.StatusOK {
+			t.Fatalf("set a value in %s: %d", s.project, code)
+		}
+	}
 
 	// And an app in each project dana reaches, made by dana herself.
 	for _, p := range []string{isoA, isoTeam} {
@@ -233,7 +252,7 @@ func TestProjectIsolation(t *testing.T) {
 				{"", "events", ""}, {"events.k8s.io", "events", ""}, {"metrics.k8s.io", "pods", ""},
 				{"kwerft.dev", "apps", ""}, {"kwerft.dev", "tasks", ""}, {"kwerft.dev", "schedules", ""},
 				{"kwerft.dev", "builds", ""}, {"kwerft.dev", "domains", ""}, {"kwerft.dev", "volumes", ""},
-				{"kwerft.dev", "trafficrules", ""},
+				{"kwerft.dev", "trafficrules", ""}, {"kwerft.dev", "secretsets", ""},
 			} {
 				out = append(out, kcheck{verb + " " + strings.TrimSuffix(r.res+"/"+r.sub, "/"), verb, r.group, r.res, r.sub, isoB})
 			}
@@ -246,6 +265,8 @@ func TestProjectIsolation(t *testing.T) {
 			kcheck{"start a build", "create", "kwerft.dev", "builds", "", isoB},
 			kcheck{"run a task", "create", "kwerft.dev", "tasks", "", isoB},
 			kcheck{"write a traffic rule", "create", "kwerft.dev", "trafficrules", "", isoB},
+			kcheck{"create a secret set", "create", "kwerft.dev", "secretsets", "", isoB},
+			kcheck{"set a secret value", "patch", "", "secrets", "", isoB},
 			kcheck{"add themselves to a project", "update", "kwerft.dev", "projects", "", ""},
 			kcheck{"patch a project's members", "patch", "kwerft.dev", "projects", "", ""},
 		)
@@ -300,6 +321,29 @@ func TestProjectIsolation(t *testing.T) {
 				if review(t, u, authorizationv1.ResourceAttributes{Namespace: ns, Verb: "get", Resource: "secrets"}) {
 					t.Errorf("%s may read Secrets in %s", u.name, ns)
 				}
+				// Only the secret sets' Secrets, by name: reveal, after the
+				// password, through the console.
+				if ns != isoTeam && !review(t, u, authorizationv1.ResourceAttributes{Namespace: ns, Verb: "get", Resource: "secrets", Name: "vault"}) {
+					t.Errorf("%s cannot reveal a secret set's value in %s", u.name, ns)
+				}
+			}
+		}
+	})
+	t.Run("members write secret values in their projects but never read them", func(t *testing.T) {
+		dev, viewer := e.members()[0], e.members()[1]
+		for _, tc := range []struct {
+			u    isoUser
+			verb string
+			want bool
+		}{{dev, "patch", true}, {dev, "get", false}, {viewer, "patch", false}, {viewer, "get", false}} {
+			got := review(t, tc.u, authorizationv1.ResourceAttributes{Namespace: isoA, Verb: tc.verb, Resource: "secrets", Name: "vault"})
+			if got != tc.want {
+				t.Errorf("%s may %s the secret set's Secret in iso-a: %v, want %v", tc.u.name, tc.verb, got, tc.want)
+			}
+		}
+		for _, verb := range []string{"list", "watch"} {
+			if review(t, dev, authorizationv1.ResourceAttributes{Namespace: isoA, Verb: verb, Resource: "secrets"}) {
+				t.Errorf("%s may %s Secrets in iso-a", dev.name, verb)
 			}
 		}
 	})
@@ -331,6 +375,8 @@ func TestProjectIsolation(t *testing.T) {
 					return cs.CoreV1().Pods(isoB).GetLogs("web-b-1", &corev1.PodLogOptions{}).Do(ctx).Error()
 				}},
 				{"read a Secret", func() error { _, err := cs.CoreV1().Secrets(isoB).Get(ctx, "db", metav1.GetOptions{}); return err }},
+				{"read a secret set's Secret", func() error { _, err := cs.CoreV1().Secrets(isoB).Get(ctx, "vault", metav1.GetOptions{}); return err }},
+				{"list secret sets", func() error { return c.List(ctx, &kwerftv1.SecretSetList{}, client.InNamespace(isoB)) }},
 				{"list events", func() error { _, err := cs.CoreV1().Events(isoB).List(ctx, metav1.ListOptions{}); return err }},
 				{"list apps", func() error { return c.List(ctx, &kwerftv1.AppList{}, client.InNamespace(isoB)) }},
 				{"list apps everywhere", func() error { return c.List(ctx, &kwerftv1.AppList{}) }},
@@ -422,6 +468,15 @@ func TestProjectIsolation(t *testing.T) {
 		{"POST", b + "/tasks"},
 		{"POST", b + "/apps/web/restart"},
 		{"DELETE", b + "/volumes/data"},
+		{"GET", b + "/secret-sets"},
+		{"GET", b + "/secret-sets/vault"},
+		{"POST", b + "/secret-sets"},
+		{"PATCH", b + "/secret-sets/vault"},
+		{"DELETE", b + "/secret-sets/vault"},
+		{"PUT", b + "/secret-sets/vault/keys/API_KEY"},
+		{"DELETE", b + "/secret-sets/vault/keys/API_KEY"},
+		{"POST", b + "/secret-sets/vault/keys/API_KEY/reveal"},
+		{"POST", b + "/secret-sets/vault/copy"},
 	}
 	t.Run("console refuses members another project's objects, logs and builds", func(t *testing.T) {
 		for _, u := range e.members() {
@@ -432,6 +487,16 @@ func TestProjectIsolation(t *testing.T) {
 					body = imageApp("intruder", "nginx:1.27")
 				case strings.HasSuffix(req.path, "/tasks"):
 					body = imageTaskBody("busybox:1.37")
+				case strings.HasSuffix(req.path, "/secret-sets"):
+					body = map[string]any{"name": "intruder"}
+				case strings.HasSuffix(req.path, "/copy"):
+					body = map[string]any{"project": isoA}
+				case strings.HasSuffix(req.path, "/reveal"):
+					body = map[string]any{"password": "a long test password"}
+				case req.method == "PUT":
+					body = map[string]any{"value": "overwritten"}
+				case req.method == "PATCH":
+					body = map[string]any{"description": "mine now"}
 				}
 				var out apiError
 				if code := impatient(u.s).do(t, req.method, req.path, body, &out); code != http.StatusForbidden {
@@ -444,6 +509,36 @@ func TestProjectIsolation(t *testing.T) {
 			if code := u.s.do(t, "GET", "/api/v1/recordings", nil, nil); code != http.StatusForbidden {
 				t.Errorf("%s: shell recordings: %d, want 403", u.name, code)
 			}
+		}
+	})
+	t.Run("no role reads a secret value through the API, and another project's key names stay hidden", func(t *testing.T) {
+		everyone := append(e.members(), e.platform()...)
+		for _, u := range everyone {
+			for _, p := range []string{isoA, isoB, isoTeam} {
+				for _, path := range []string{"/api/v1/projects/" + p + "/secret-sets", "/api/v1/projects/" + p + "/secret-sets/vault",
+					"/api/v1/apps?project=" + p, "/api/v1/projects/" + p + "/apps/web"} {
+					code, body := u.s.text(t, "GET", path, nil)
+					if strings.Contains(body, isoValueA) || strings.Contains(body, isoValueB) {
+						t.Errorf("%s: GET %s answers with a secret value", u.name, path)
+					}
+					if p == isoB && !slices.Contains([]string{store.RoleOwner, store.RoleAdmin}, u.role) && strings.Contains(path, "secret-sets") &&
+						(code != http.StatusForbidden || strings.Contains(body, "API_KEY")) {
+						t.Errorf("%s: GET %s: %d %s, want 403 without key names", u.name, path, code, body)
+					}
+				}
+			}
+		}
+		// Members see their project's key names, not values.
+		for _, u := range e.members() {
+			code, body := u.s.text(t, "GET", "/api/v1/projects/"+isoA+"/secret-sets", nil)
+			if code != http.StatusOK || !strings.Contains(body, "API_KEY") {
+				t.Errorf("%s: iso-a's secret sets: %d %s", u.name, code, body)
+			}
+		}
+		// The value is still the owner's: nothing above overwrote it.
+		var sec corev1.Secret
+		if err := cluster.admin.Get(context.Background(), client.ObjectKey{Namespace: isoB, Name: "vault"}, &sec); err != nil || string(sec.Data["API_KEY"]) != isoValueB {
+			t.Errorf("iso-b's value changed (err=%v)", err)
 		}
 	})
 	t.Run("members cannot add themselves to a project", func(t *testing.T) {

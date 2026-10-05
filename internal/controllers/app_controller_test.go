@@ -31,6 +31,22 @@ func projectNamespace(t *testing.T, name string) {
 
 func createApp(t *testing.T, ns, name string, spec kwerftv1.AppSpec) *kwerftv1.App {
 	t.Helper()
+	// A Secret the env references that does not exist yet is made with the
+	// keys referenced, so the App does not wait (SecretMissing). Existing
+	// Secrets are left as they are.
+	want := map[string]map[string]string{}
+	for _, ref := range envSecretRefs(spec.Env) {
+		if want[ref.Name] == nil {
+			want[ref.Name] = map[string]string{}
+		}
+		want[ref.Name][ref.Key] = "test"
+	}
+	for secret, data := range want {
+		err := k8s.Create(context.Background(), &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: secret}, StringData: data})
+		if err != nil && !apierrors.IsAlreadyExists(err) {
+			t.Fatal(err)
+		}
+	}
 	app := &kwerftv1.App{ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: name}, Spec: spec}
 	if err := k8s.Create(context.Background(), app); err != nil {
 		t.Fatal(err)

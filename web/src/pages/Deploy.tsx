@@ -8,6 +8,7 @@ import { Icon } from "../components/Icon";
 import { VolumeMounts, checkMounts, volumesOf, type Mount } from "../components/VolumeMounts";
 import { HOST_RE, NAME_RE, abilities, sizes, toYAML, workloads, type AppSpec, type GitSource, type Size } from "../workloads";
 import { LOCAL, useClusters } from "../clusters";
+import { appEnvSet, secretsApi } from "../secrets";
 import { settingsApi, underWildcard } from "../settings";
 import {
   branchProblem, buildsApi, gitApi, normalizeRepository, notOffered, repoPathProblem, repositoryProblem, shortSha, suggestConnection,
@@ -46,6 +47,8 @@ type Form = {
   hcPath: string;
   hcPort: string;
   env: string;
+  /** KEY=value lines stored write-only in the App's own secret set. */
+  secretEnv: string;
   port: string;
   exposure: "cluster" | "public";
   domain: string;
@@ -89,7 +92,10 @@ function specOf(f: Form): AppSpec {
       : { image: { ref: f.image.trim(), ...(f.pullSecret.trim() ? { pullSecret: f.pullSecret.trim() } : {}) } },
     replicas: Number(f.replicas),
     size: f.size,
-    env: parseEnv(f.env).vars,
+    env: [
+      ...parseEnv(f.env).vars,
+      ...parseEnv(f.secretEnv).vars.map((v) => ({ name: v.name, valueFrom: { secretKeyRef: { name: appEnvSet(f.name), key: v.name } } })),
+    ],
     ports: f.port.trim() ? [{ container: port, ...(f.exposure === "public" && f.domain.trim() ? { public: f.domain.trim().toLowerCase() } : {}) }] : [],
     allowFrom: f.allowFrom.split(/[\s,]+/).filter(Boolean),
     egress: f.egress,
@@ -121,6 +127,10 @@ function check(f: Form): Problem | undefined {
   if (env.bad) return { step: "runtime", field: "env", message: `Line ${env.bad} is not KEY=value.` };
   const badName = env.vars.findIndex((v) => !/^[-._a-zA-Z][-._a-zA-Z0-9]*$/.test(v.name));
   if (badName >= 0) return { step: "runtime", field: "env", message: `"${env.vars[badName]!.name}" is not a valid variable name.` };
+  const secret = parseEnv(f.secretEnv);
+  if (secret.bad) return { step: "runtime", field: "secretEnv", message: `Line ${secret.bad} is not KEY=value.` };
+  const badSecret = secret.vars.find((v) => !/^[-._a-zA-Z][-._a-zA-Z0-9]*$/.test(v.name) || !v.value || env.vars.some((e) => e.name === v.name));
+  if (badSecret) return { step: "runtime", field: "secretEnv", message: !badSecret.value ? `${badSecret.name} has no value.` : env.vars.some((e) => e.name === badSecret.name) ? `${badSecret.name} is also a plain variable.` : `"${badSecret.name}" is not a valid variable name.` };
   const validPort = (s: string) => Number.isInteger(Number(s)) && Number(s) >= 1 && Number(s) <= 65535;
   if (f.hc !== "none" && f.hcPort.trim() && !validPort(f.hcPort)) return { step: "runtime", field: "hcPort", message: "A port is a number from 1 to 65535." };
   const mount = checkMounts(f.mounts);
@@ -169,7 +179,7 @@ export function Deploy() {
     name: "", project: search.project ?? "", source: "image", image: "", pullSecret: "",
     repo: "", branch: "", connection: "", builder: "dockerfile", dockerfile: "Dockerfile", path: "/", autoDeploy: true,
     size: "small", replicas: "1",
-    hc: "none", hcPath: "/healthz", hcPort: "", env: "", port: "", exposure: "cluster", domain: "", allowFrom: "", egress: "https", mounts: [],
+    hc: "none", hcPath: "/healthz", hcPort: "", env: "", secretEnv: "", port: "", exposure: "cluster", domain: "", allowFrom: "", egress: "https", mounts: [],
   });
   const set = <K extends keyof Form>(k: K, v: Form[K]) => {
     setF((prev) => ({ ...prev, [k]: v }));
@@ -212,7 +222,16 @@ export function Deploy() {
   const form = { ...f, project, domain, connection };
 
   const deploy = useMutation({
-    mutationFn: () => workloads.createApp(project, f.name, specOf(form)),
+    mutationFn: async () => {
+      const app = await workloads.createApp(project, f.name, specOf(form));
+      // Secret values go into the App's own set (created with the first
+      // key, owned by the App); the App waits for them (SecretMissing).
+      // One that fails shows there and on the Secrets page.
+      for (const v of parseEnv(f.secretEnv).vars) {
+        await secretsApi.setKey(project, appEnvSet(f.name), v.name, v.value).catch(() => undefined);
+      }
+      return app;
+    },
     onSuccess: async (app) => {
       queryClient.setQueryData(["app", app.metadata.namespace, app.metadata.name], app);
       await queryClient.invalidateQueries({ queryKey: ["apps"] });
@@ -369,7 +388,14 @@ export function Deploy() {
                 <textarea id="d-env" className="input mono" rows={4} value={f.env} onChange={(e) => set("env", e.target.value)} placeholder={"PDF_TIMEOUT=30s\nS3_BUCKET=acme-invoices"}
                   spellCheck={false} aria-invalid={!!err("env")} aria-describedby="d-env-note" />
                 {err("env") ? <span id="d-env-note" className="field-error" role="alert">{err("env")}</span>
-                  : <span id="d-env-note" className="hint">Stored in the App resource, readable by everyone with access. Secrets as encrypted references come later.</span>}
+                  : <span id="d-env-note" className="hint">Stored in the App resource, readable by everyone with access. Put passwords and tokens under secret variables.</span>}
+              </div>
+              <div className="field full">
+                <label htmlFor="d-secret-env">Secret variables (KEY=value, one per line)</label>
+                <textarea id="d-secret-env" className="input mono" rows={2} value={f.secretEnv} onChange={(e) => set("secretEnv", e.target.value)} placeholder="SESSION_SECRET=…"
+                  spellCheck={false} autoComplete="off" aria-invalid={!!err("secretEnv")} aria-describedby="d-secret-env-note" />
+                {err("secretEnv") ? <span id="d-secret-env-note" className="field-error" role="alert">{err("secretEnv")}</span>
+                  : <span id="d-secret-env-note" className="hint">Write-only: kept in the app's own secret set ({appEnvSet(f.name || "app")}), never shown again. Keys of shared sets are picked in the app's settings.</span>}
               </div>
               <div className="field full">
                 <label>Shared volumes and secrets</label>
@@ -428,6 +454,9 @@ export function Deploy() {
               <div className="list">
                 {spec.source.git && <div className="li"><span className="tag">Build</span><span className="dim">the head of {spec.source.git.branch} with {spec.source.git.builder === "railpack" ? "Railpack" : spec.source.git.dockerfile}; the app starts when it succeeds</span></div>}
                 <div className="li"><span className="tag">Deployment</span><span className="dim">{spec.replicas} replica{spec.replicas === 1 ? "" : "s"}, rolling update</span></div>
+                {parseEnv(f.secretEnv).vars.length > 0 && (
+                  <div className="li"><span className="tag">SecretSet</span><span className="dim">{appEnvSet(f.name)} with {parseEnv(f.secretEnv).vars.map((v) => v.name).join(", ")}, write-only, deleted with the app</span></div>
+                )}
                 {spec.ports!.length > 0 && <div className="li"><span className="tag">Service</span><span className="dim">ClusterIP :{spec.ports![0]!.container}</span></div>}
                 {spec.ports![0]?.public && <div className="li"><span className="tag">HTTPRoute</span><span className="dim">{spec.ports![0].public}, HTTPS with redirect</span></div>}
                 {spec.ports![0]?.public && <div className="li"><span className="tag">Domain</span><span className="dim">Gateway listener and certificate</span></div>}
@@ -437,7 +466,7 @@ export function Deploy() {
           </div>
         )}
 
-        {problem && !["name", "project", "image", "repo", "branch", "connection", "dockerfile", "path", "replicas", "env", "hcPort", "port", "domain"].includes(problem.field ?? "") && !problem.field?.startsWith("mounts[") && (
+        {problem && !["name", "project", "image", "repo", "branch", "connection", "dockerfile", "path", "replicas", "env", "secretEnv", "hcPort", "port", "domain"].includes(problem.field ?? "") && !problem.field?.startsWith("mounts[") && (
           <div className="banner bad" role="alert"><Icon name="alert" /><span>{problem.message}</span></div>
         )}
 

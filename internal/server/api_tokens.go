@@ -183,6 +183,9 @@ func (a *api) tokenMayUse(w http.ResponseWriter, r *http.Request, p *principal) 
 	if strings.HasSuffix(path, "/shell") {
 		return deny("shell", "Shells need a browser session (they are recorded). Use the console.")
 	}
+	if strings.HasSuffix(path, "/reveal") {
+		return deny("reveal", "API tokens never reveal secret values. Use the console.")
+	}
 	if p.token.Projects == nil {
 		return true
 	}

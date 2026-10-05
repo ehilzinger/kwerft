@@ -21,6 +21,7 @@ import { Jobs } from "./pages/Jobs";
 import { NewSchedule, ScheduleDetail } from "./pages/ScheduleForm";
 import { TaskDetail } from "./pages/TaskDetail";
 import { Volumes } from "./pages/Volumes";
+import { Secrets } from "./pages/Secrets";
 import { Network } from "./pages/Network";
 import { AccessRecordings, recordingsSearch } from "./pages/AccessRecordings";
 import { AccessAudit, AccessMembers, AccessRoles } from "./pages/Access";
@@ -118,6 +119,13 @@ const routeTree = root.addChildren([
     }),
     createRoute({ getParentRoute: () => authed, path: "/jobs/$project/schedules/$name", component: ScheduleDetail }),
     createRoute({ getParentRoute: () => authed, path: "/jobs/$project/tasks/$name", component: TaskDetail }),
+    // Secrets (Phase 6): a project's secret sets; ?set= selects one.
+    createRoute({
+      getParentRoute: () => authed, path: "/secrets", component: Secrets,
+      validateSearch: (s: Record<string, unknown>): { project?: string; set?: string } => ({
+        ...projectSearch(s), ...(typeof s.set === "string" && s.set ? { set: s.set } : {}),
+      }),
+    }),
     createRoute({ getParentRoute: () => authed, path: "/network", component: Network }),
     // Access › Shell recordings (owners and admins); /access itself is Members.
     createRoute({ getParentRoute: () => authed, path: "/access/recordings", component: AccessRecordings, validateSearch: recordingsSearch }),

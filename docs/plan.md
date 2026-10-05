@@ -409,7 +409,7 @@ before the beta or move them into a phase.
 - `VolumeFillingUp` never fires on local-path volumes (no kubelet volume stats).
 - Hubble counts restart with the console and are per replica; the Traefik router-name format the HTTP metrics depend on is Traefik 3.7's.
 - zot-minimal has no metrics endpoint.
-- "Patch-only" Secrets are readable from a patch response at the API level; only the kubeconfig proxy closes that gap.
+- "Patch-only" Secrets are readable from a patch response at the API level; only the kubeconfig proxy closes that gap. Secret sets (Phase 6) patch through the metadata endpoint, so the console never receives the values; a client with direct API access still could.
 
 ## Kwerft for Mac (Phase 7)
 
