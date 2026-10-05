@@ -38,7 +38,7 @@ setup() {
 @test "--dry-run lists every install stage in order" {
   run "$SCRIPT" --dry-run --platform cloud --domain ops.example.com
   [ "$status" -eq 0 ]
-  expected="Preflight System Firewall Kubernetes Registry Helm Upgrades Network Hetzner Ingress Observability Kwerft Handoff"
+  expected="Preflight System Firewall Kubernetes Registry Helm Upgrades Network Hetzner Ingress Observability Backups Kwerft Handoff"
   actual=$(printf '%s\n' "$output" | sed -n 's/^→ \([A-Za-z]*\).*/\1/p' | tr '\n' ' ' | sed 's/ $//')
   [ "$actual" = "$expected" ]
 }
@@ -1714,4 +1714,529 @@ upgrades_env() {
   [[ "$output" == *"/var/lib/kwerft/install.env"* ]]
   [[ "$output" != *"Give it on every run"* ]]
   ! grep -q 'Re-running repairs a broken install or upgrades it' "$SCRIPT"
+}
+
+# ---------------------------------------------------------------------------
+# Backups (docs/phase6.md): etcd snapshots, Velero, --restore
+# ---------------------------------------------------------------------------
+
+# A valid recovery key as the console shows it (52 base32 characters in
+# groups of four), lower case and with dashes to test normalization.
+RECOVERY_KEY_SHOWN="abcd-efgh-ijkl-mnop-qrst-uvwx-yz23-4567-abcd-efgh-ijkl-mnop-qrst"
+RECOVERY_KEY_PASSWORD="ABCDEFGHIJKLMNOPQRSTUVWXYZ234567ABCDEFGHIJKLMNOPQRST"
+
+# restore_config [extra backups lines…] writes a --config with a backups block
+# and its key files; prints its path.
+restore_config() {
+  local d="$BATS_TEST_TMPDIR/restore" l
+  mkdir -p "$d"
+  printf 'AKIA-ACCESS\n' >"$d/s3.access"
+  printf 'SECRET-KEY-VALUE\n' >"$d/s3.secret"
+  printf '%s\n' "$RECOVERY_KEY_SHOWN" >"$d/recovery.key"
+  {
+    echo "backups:"
+    echo "  endpoint: ${ENDPOINT:-https://fsn1.your-objectstorage.com}"
+    echo "  bucket: acme-kwerft"
+    echo "  accessKeyFile: $d/s3.access"
+    echo "  secretKeyFile: $d/s3.secret"
+    echo "  recoveryKeyFile: $d/recovery.key"
+    for l in "$@"; do echo "  $l"; done
+  } >"$d/kwerft.yaml"
+  printf '%s' "$d/kwerft.yaml"
+}
+
+@test "velero pins are versions, dated with the other pins" {
+  KWERFT_SOURCED=1 source "$SCRIPT"
+  [[ "$VELERO_VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
+  [[ "$VELERO_CHART_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
+  [[ "$VELERO_PLUGIN_AWS_VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
+  grep -q "^# Backups (docs/phase6.md), latest stable as of 20[0-9-]*\." "$SCRIPT"
+}
+
+@test "--help documents --restore and exit code 60" {
+  run "$SCRIPT" --help
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"--restore B"* ]]
+  [[ "$output" == *"60 restore"* ]]
+  grep -q '^readonly EXIT_RESTORE=60' "$SCRIPT"
+}
+
+@test "--dry-run --restore restores before Kwerft is installed" {
+  cfg=$(restore_config "prefix: ops.example.com")
+  run "$SCRIPT" --dry-run --platform cloud --config "$cfg" --restore latest
+  [ "$status" -eq 0 ]
+  expected="Preflight System Firewall Kubernetes Registry Helm Upgrades Network Hetzner Ingress Observability Backups Restore Kwerft Handoff"
+  actual=$(printf '%s\n' "$output" | sed -n 's/^→ \([A-Za-z]*\).*/\1/p' | tr '\n' ' ' | sed 's/ $//')
+  [ "$actual" = "$expected" ]
+  [[ "$output" == *"Restoring backup latest from s3://acme-kwerft/ops.example.com/velero at https://fsn1.your-objectstorage.com; the console hostname comes from the backup."* ]]
+  [[ "$output" != *"temporary hostname"* ]]
+}
+
+@test "--restore: what it needs and what it refuses" {
+  cfg=$(restore_config "prefix: ops.example.com")
+  run "$SCRIPT" --dry-run --restore latest
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"--restore needs --config with a backups block"* ]]
+  run "$SCRIPT" --dry-run --config "$cfg" --restore latest --lite
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"--lite leaves out"* ]]
+  run "$SCRIPT" --dry-run --config "$cfg" --restore 'Kwerft Cluster!'
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"--restore takes latest or a backup's name"* ]]
+  run "$SCRIPT" --dry-run --join https://ops.example.com --token t --restore latest
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"does not combine with --agent, --join"* ]]
+  # A named backup is fine.
+  run "$SCRIPT" --dry-run --config "$cfg" --restore kwerft-cluster-20261005030000
+  [ "$status" -eq 0 ]
+}
+
+@test "--restore: the backups block is checked" {
+  cfg=$(restore_config)
+  # No prefix and no --domain: the folder is unknown.
+  run "$SCRIPT" --dry-run --config "$cfg" --restore latest
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"backups.prefix in $cfg is needed"* ]]
+  # --domain is the default prefix.
+  run "$SCRIPT" --dry-run --config "$cfg" --restore latest --domain ops.example.com
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"s3://acme-kwerft/ops.example.com/velero"* ]]
+  [[ "$output" != *"comes from the backup"* ]]
+
+  cfg=$(ENDPOINT=http://insecure.example.com restore_config "prefix: ops.example.com")
+  run "$SCRIPT" --dry-run --config "$cfg" --restore latest
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"backups.endpoint"* ]]
+
+  cfg=$(restore_config "prefix: ../escape")
+  run "$SCRIPT" --dry-run --config "$cfg" --restore latest
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"backups.prefix"* ]]
+
+  cfg=$(restore_config "prefix: ops.example.com")
+  rm "$BATS_TEST_TMPDIR/restore/s3.secret"
+  run "$SCRIPT" --dry-run --config "$cfg" --restore latest
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"backups.secretKeyFile in $cfg not readable"* ]]
+
+  cfg=$(restore_config "prefix: ops.example.com")
+  printf 'not-a-key\n' >"$BATS_TEST_TMPDIR/restore/recovery.key"
+  run "$SCRIPT" --dry-run --config "$cfg" --restore latest
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"does not hold a recovery key"* ]]
+  # The key itself is never printed.
+  [[ "$output" != *"not-a-key"* ]]
+}
+
+@test "parse_restore_args: region from a Hetzner endpoint, prefix without slashes" {
+  KWERFT_SOURCED=1 source "$SCRIPT"
+  CONFIG_FILE=$(restore_config "prefix: /ops.example.com/")
+  RESTORE_FROM=latest; MODE=install
+  parse_restore_args
+  [ "$BACKUP_REGION" = "fsn1" ]
+  [ "$BACKUP_PREFIX" = "ops.example.com" ]
+  [ "$BACKUP_ENDPOINT" = "https://fsn1.your-objectstorage.com" ]
+  CONFIG_FILE=$(restore_config "prefix: p" "region: nbg1")
+  parse_restore_args
+  [ "$BACKUP_REGION" = "nbg1" ]
+  # Without --restore the block is not read.
+  RESTORE_FROM=""; BACKUP_BUCKET=""
+  parse_restore_args
+  [ -z "$BACKUP_BUCKET" ]
+}
+
+@test "recovery_key: the console's grouping becomes Velero's repository password" {
+  KWERFT_SOURCED=1 source "$SCRIPT"
+  [ "$(printf '%s\n' "$RECOVERY_KEY_SHOWN" | recovery_key)" = "$RECOVERY_KEY_PASSWORD" ]
+  [ "$(printf 'abcd efgh\nijkl\n' | recovery_key)" = "ABCDEFGHIJKL" ]
+}
+
+# etcd snapshots: the k3s config and its drop-in in the test directory,
+# systemctl stubbed (SYSTEMCTL_LOG, ACTIVE as for the registry mirror) and
+# ConsoleSettings answered from SCHEDULE and RETENTION.
+etcd_env() {
+  KWERFT_SOURCED=1 source "$SCRIPT"
+  K3S_CONFIG_FILE="$BATS_TEST_TMPDIR/k3s/config.yaml"
+  K3S_ETCD_CONFIG_FILE="$BATS_TEST_TMPDIR/k3s/config.yaml.d/50-kwerft-etcd-snapshots.yaml"
+  mkdir -p "$BATS_TEST_TMPDIR/k3s"
+  printf '# Managed by Kwerft installer.\ncluster-init: true\n' >"$K3S_CONFIG_FILE"
+  LOG_FILE="$BATS_TEST_TMPDIR/install.log"; : >"$LOG_FILE"
+  SYSTEMCTL_LOG="$BATS_TEST_TMPDIR/systemctl.log"; : >"$SYSTEMCTL_LOG"
+  ACTIVE=k3s; SCHEDULE=""; RETENTION=""
+  systemctl() {
+    case "$1" in
+      is-active) [[ "$3" == "$ACTIVE" ]] ;;
+      *) printf '%s\n' "$*" >>"$SYSTEMCTL_LOG" ;;
+    esac
+  }
+  kc() {
+    case "$*" in
+      *"{.spec.backups.etcdSnapshots.schedule}"*) printf '%s' "$SCHEDULE" ;;
+      *"{.spec.backups.etcdSnapshots.retention}"*) printf '%s' "$RETENTION" ;;
+    esac
+    return 0
+  }
+}
+
+@test "etcd_snapshot_config: local and S3 snapshots from the console's Secret only" {
+  etcd_env
+  run etcd_snapshot_config "0 */6 * * *" 28
+  [ "$status" -eq 0 ]
+  [[ "$output" == *'etcd-snapshot-schedule-cron: "0 */6 * * *"'* ]]
+  [[ "$output" == *"etcd-snapshot-retention: 28"* ]]
+  [[ "$output" == *"etcd-s3: true"* ]]
+  [[ "$output" == *"etcd-s3-config-secret: kwerft-etcd-s3"* ]]
+  # Any other etcd-s3-* option would make k3s ignore the Secret.
+  [ "$(printf '%s\n' "$output" | grep -c '^etcd-s3')" -eq 2 ]
+}
+
+@test "ensure_etcd_snapshots: defaults, restart only when the drop-in changes" {
+  etcd_env
+  run ensure_etcd_snapshots
+  [ "$status" -eq 0 ]
+  [ "$output" = "etcd snapshots (0 */6 * * *, 28 kept) · k3s restarted" ]
+  grep -qx "restart k3s" "$SYSTEMCTL_LOG"
+  grep -qx 'etcd-snapshot-schedule-cron: "0 \*/6 \* \* \*"' "$K3S_ETCD_CONFIG_FILE"
+  [ "$(stat -c %a "$K3S_ETCD_CONFIG_FILE" 2>/dev/null || stat -f %Lp "$K3S_ETCD_CONFIG_FILE")" = "600" ]
+
+  : >"$SYSTEMCTL_LOG"
+  run ensure_etcd_snapshots
+  [ "$output" = "etcd snapshots (0 */6 * * *, 28 kept)" ]
+  [ ! -s "$SYSTEMCTL_LOG" ]
+
+  # Settings › Backups changed the schedule: the next run applies it.
+  SCHEDULE="30 2 * * *"; RETENTION="7"
+  run ensure_etcd_snapshots
+  [ "$output" = "etcd snapshots (30 2 * * *, 7 kept) · k3s restarted" ]
+  grep -qx 'etcd-snapshot-retention: 7' "$K3S_ETCD_CONFIG_FILE"
+}
+
+@test "ensure_etcd_snapshots: invalid settings fall back to the defaults with a warning" {
+  etcd_env
+  SCHEDULE='0 0 * * * "; rm -rf /'; RETENTION="9999"
+  run ensure_etcd_snapshots
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"is not a cron schedule"* ]]
+  [[ "$output" == *"is not between 1 and 500"* ]]
+  [[ "$output" == *"etcd snapshots (0 */6 * * *, 28 kept)"* ]]
+  absent 'rm -rf' "$K3S_ETCD_CONFIG_FILE"
+  SCHEDULE="@daily"; RETENTION="0028"
+  run ensure_etcd_snapshots
+  [[ "$output" == *"etcd snapshots (@daily, 28 kept)"* ]]
+  [[ "$output" == *"is not between 1 and 500"* ]]
+}
+
+@test "write_etcd_snapshot_config: nothing without Kwerft's embedded etcd" {
+  etcd_env
+  printf 'server: https://10.0.0.2:6443\n' >"$K3S_CONFIG_FILE"
+  [ "$(write_etcd_snapshot_config "0 */6 * * *" 28)" = "none" ]
+  [ ! -e "$K3S_ETCD_CONFIG_FILE" ]
+  run ensure_etcd_snapshots
+  [[ "$output" == "etcd snapshots as k3s has them"* ]]
+  [ ! -s "$SYSTEMCTL_LOG" ]
+}
+
+@test "stage_kubernetes writes the etcd drop-in before k3s first starts" {
+  sed -n '/^stage_kubernetes()/,/^}/p' "$SCRIPT" >"$BATS_TEST_TMPDIR/fn"
+  line_drop_in=$(grep -n 'write_etcd_snapshot_config' "$BATS_TEST_TMPDIR/fn" | cut -d: -f1)
+  line_k3s=$(grep -n 'get.k3s.io' "$BATS_TEST_TMPDIR/fn" | cut -d: -f1)
+  [ -n "$line_drop_in" ]
+  [ "$line_drop_in" -lt "$line_k3s" ]
+}
+
+@test "velero_values: Kopia file-system backups, the AWS plugin, no storage location" {
+  KWERFT_SOURCED=1 source "$SCRIPT"
+  run velero_values
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"tag: $VELERO_VERSION"* ]]
+  [[ "$output" == *"image: docker.io/velero/velero-plugin-for-aws:$VELERO_PLUGIN_AWS_VERSION"* ]]
+  [[ "$output" == *"uploaderType: kopia"* ]]
+  [[ "$output" == *"defaultVolumesToFsBackup: true"* ]]
+  [[ "$output" == *"deployNodeAgent: true"* ]]
+  [[ "$output" == *"backupStorageLocation: []"* ]]
+  [[ "$output" == *"volumeSnapshotLocation: []"* ]]
+  [[ "$output" == *"snapshotsEnabled: false"* ]]
+  [[ "$output" == *"useSecret: false"* ]]
+  [[ "$output" == *"defaultBackupStorageLocation: kwerft"* ]]
+  # The node agent runs on tainted build nodes too.
+  [[ "$output" == *"- operator: Exists"* ]]
+}
+
+backups_env() {
+  etcd_env
+  VALUES_DIR="$BATS_TEST_TMPDIR/values"
+  HELM_LOG="$BATS_TEST_TMPDIR/helm.log"; : >"$HELM_LOG"
+  helmk() { printf 'helm %s\n' "$*" >>"$HELM_LOG"; }
+}
+
+@test "stage_backups: Velero at its pins; --lite keeps only the etcd snapshots" {
+  backups_env
+  run stage_backups
+  [ "$status" -eq 0 ]
+  [[ "$output" == "Velero $VELERO_VERSION · volume backups with Kopia · etcd snapshots (0 */6 * * *, 28 kept)"* ]]
+  grep -q "upgrade --install velero vmware-tanzu/velero --version $VELERO_CHART_VERSION --namespace velero --create-namespace --wait" "$HELM_LOG"
+  grep -q "uploaderType: kopia" "$VALUES_DIR/velero.yaml"
+
+  : >"$HELM_LOG"; LITE=1
+  run stage_backups
+  [ "$status" -eq 0 ]
+  [[ "$output" == "Velero off (--lite) · etcd snapshots"* ]]
+  [ ! -s "$HELM_LOG" ]
+}
+
+# The restore against a stubbed cluster. kc logs every call (and what is
+# piped into apply/create) to KC_LOG and answers from variables and files:
+#   BSL_PHASE BSL_SYNCED BSL_MESSAGE   the BackupStorageLocation's status
+#   BACKUPS                            "<completed-at> <name>" of Completed Cluster backups
+#   BACKUP_PHASE BACKUP_SCOPE          a backup named on --restore (missing when no phase)
+#   $RESTORE_PHASES                    one phase per read; the last one stays
+#   PV_DIR REGISTRY_IP RESTORE_EXISTS
+# Secrets land in SECRETS_LOG as "<secret> <key>=<content>".
+restore_env() {
+  KWERFT_SOURCED=1 source "$SCRIPT"
+  LOG_FILE="$BATS_TEST_TMPDIR/install.log"; : >"$LOG_FILE"
+  KC_LOG="$BATS_TEST_TMPDIR/kc.log"; : >"$KC_LOG"
+  HELM_LOG="$BATS_TEST_TMPDIR/helm.log"; : >"$HELM_LOG"
+  SECRETS_LOG="$BATS_TEST_TMPDIR/secrets.log"; : >"$SECRETS_LOG"
+  HCLOUD_TMP_DIR="$BATS_TEST_TMPDIR/state"; mkdir -p "$HCLOUD_TMP_DIR"
+  RESTORE_PHASES="$BATS_TEST_TMPDIR/phases"; printf 'InProgress\nCompleted\n' >"$RESTORE_PHASES"
+  RESTORE_POLL=0; RESTORE_SYNC_TIMEOUT=3; RESTORE_TIMEOUT=30
+  PLATFORM=dedicated; MODE=install; RESTORE_FROM=latest
+  CONFIG_FILE=$(restore_config "prefix: ops.example.com")
+  parse_restore_args
+  BSL_PHASE=Available; BSL_SYNCED=2026-10-05T10:00:00Z; BSL_MESSAGE=""
+  BACKUPS=$'2026-10-04T03:04:00Z kwerft-cluster-20261004030000\n2026-10-05T03:05:00Z kwerft-cluster-20261005030000\n2026-10-03T03:03:00Z kwerft-cluster-20261003030000'
+  BACKUP_PHASE=""; BACKUP_SCOPE=Cluster; RESTORE_EXISTS=""
+  PV_DIR="$BATS_TEST_TMPDIR/pv"; mkdir -p "$PV_DIR/backup"; printf 'SQLite format 3\0' >"$PV_DIR/backup/kwerft.db"
+  REGISTRY_IP=10.43.7.7
+  kc() {
+    local a="$*" arg
+    printf 'kc %s\n' "$a" >>"$KC_LOG"
+    case "$a" in
+      *"create secret generic"*)
+        for arg in "$@"; do
+          if [[ "$arg" == --from-file=*=* ]]; then
+            arg=${arg#--from-file=}
+            printf '%s %s=%s\n' "$(sed -n 's/.*generic \([^ ]*\).*/\1/p' <<<"$a")" "${arg%%=*}" "$(cat "${arg#*=}")" >>"$SECRETS_LOG"
+          fi
+        done
+        printf 'kind: Secret\n' ;;
+      *"apply"*"-f -"*|*"create -f -"*) cat >>"$KC_LOG" ;;
+      *"get backupstoragelocations"*"{.status.phase}"*) printf '%s' "$BSL_PHASE" ;;
+      *"get backupstoragelocations"*"{.status.lastSyncedTime}"*) printf '%s' "$BSL_SYNCED" ;;
+      *"get backupstoragelocations"*"{.status.message}"*) printf '%s' "$BSL_MESSAGE" ;;
+      *"get backups.velero.io -l kwerft.dev/backup-scope=Cluster"*) printf '%s\n' "$BACKUPS" ;;
+      *"get backups.velero.io -o name"*) printf 'backup.velero.io/other\n' ;;
+      *"get backups.velero.io"*"{.status.phase}"*) [[ -n "$BACKUP_PHASE" ]] || return 1; printf '%s' "$BACKUP_PHASE" ;;
+      *"get backups.velero.io"*"backup-scope}"*) printf '%s' "$BACKUP_SCOPE" ;;
+      *"get restores.velero.io"*"{.status.phase}"*)
+        head -n1 "$RESTORE_PHASES"
+        if [[ $(wc -l <"$RESTORE_PHASES") -gt 1 ]]; then
+          tail -n +2 "$RESTORE_PHASES" >"$RESTORE_PHASES.next"; mv "$RESTORE_PHASES.next" "$RESTORE_PHASES"
+        fi ;;
+      *"get restores.velero.io"*"itemsRestored}"*) printf '412' ;;
+      *"get restores.velero.io"*"totalItems}"*) printf '412' ;;
+      *"get restores.velero.io"*"{.status.errors}"*) printf '3' ;;
+      *"get restores.velero.io"*"failureReason}"*) printf 'error downloading backup' ;;
+      *"get restores.velero.io"*) [[ -n "$RESTORE_EXISTS" ]] || return 1 ;;
+      *"get pvc kwerft-data"*) printf 'pvc-1234' ;;
+      *"get pv pvc-1234"*) printf '%s' "$PV_DIR" ;;
+      *"get service kwerft-registry"*) printf '%s' "$REGISTRY_IP" ;;
+      *"get pods"*) printf '' ;;
+    esac
+    return 0
+  }
+  helmk() { printf 'helm %s\n' "$*" >>"$HELM_LOG"; if [[ "$1" == show ]]; then printf 'kind: CustomResourceDefinition\n'; fi; }
+  chown() { printf 'chown %s\n' "$*" >>"$KC_LOG"; }
+  retry() { "${@:3}"; }
+}
+
+@test "stage_restore: the newest Cluster backup comes back and the database is marked" {
+  restore_env
+  run stage_restore
+  [ "$status" -eq 0 ]
+  [ "${lines[${#lines[@]}-1]}" = "backup kwerft-cluster-20261005030000 · 412 objects · console database from the backup" ]
+
+  # Kwerft's CRDs first, for the restored kwerft.dev objects.
+  grep -q "helm show crds" "$HELM_LOG"
+  grep -q "kind: CustomResourceDefinition" "$KC_LOG"
+  # The repository password and the S3 credentials, as the console writes them.
+  grep -qx "velero-repo-credentials repository-password=$RECOVERY_KEY_PASSWORD" "$SECRETS_LOG"
+  grep -q "kwerft-bsl-credentials cloud=\[default\]" "$SECRETS_LOG"
+  grep -qx "aws_access_key_id=AKIA-ACCESS" "$SECRETS_LOG"
+  grep -qx "aws_secret_access_key=SECRET-KEY-VALUE" "$SECRETS_LOG"
+  [ "$(grep -n velero-repo-credentials "$SECRETS_LOG" | cut -d: -f1)" -lt "$(grep -n kwerft-bsl-credentials "$SECRETS_LOG" | cut -d: -f1)" ]
+  # Keys never in the log or kubectl's arguments; the temporary files are gone.
+  absent "SECRET-KEY-VALUE" "$LOG_FILE"
+  absent "SECRET-KEY-VALUE" "$KC_LOG"
+  absent "$RECOVERY_KEY_PASSWORD" "$KC_LOG"
+  [ -z "$(ls "$HCLOUD_TMP_DIR")" ]
+
+  # The location: read-only while restoring, then the console's.
+  grep -q "accessMode: ReadOnly" "$KC_LOG"
+  grep -q 'prefix: "ops.example.com/velero"' "$KC_LOG"
+  grep -q 's3Url: "https://fsn1.your-objectstorage.com"' "$KC_LOG"
+  grep -q 'region: "fsn1"' "$KC_LOG"
+  grep -qF 'patch backupstoragelocations.velero.io kwerft --type merge -p {"spec":{"accessMode":"ReadWrite"}}' "$KC_LOG"
+
+  # The restore.
+  grep -q "name: restore-kwerft-cluster-20261005030000" "$KC_LOG"
+  grep -q "backupName: kwerft-cluster-20261005030000" "$KC_LOG"
+  grep -q "existingResourcePolicy: none" "$KC_LOG"
+  grep -q "includeClusterResources: true" "$KC_LOG"
+  grep -q 'excludedNamespaces: \["kube-system", .*"velero", .*"kwerft-observability"\]' "$KC_LOG"
+  grep -q 'excludedResources: \["nodes", .*"jobs.batch", .*"customresourcedefinitions.apiextensions.k8s.io"' "$KC_LOG"
+  grep -qF 'includedResources: ["builds.kwerft.dev", "tasks.kwerft.dev", "upgrades.kwerft.dev", "restores.kwerft.dev"]' "$KC_LOG"
+
+  # Fixed up for Helm: the registry's Service gets its fixed address back,
+  # a pending release revision goes.
+  grep -q "delete service kwerft-registry" "$KC_LOG"
+  grep -qF "delete secret -l owner=helm,name=kwerft,status in (pending-install,pending-upgrade,pending-rollback)" "$KC_LOG"
+
+  # The marker, written while the console is stopped; the volume is the console's.
+  [ -f "$PV_DIR/backup/RESTORE" ]
+  grep -q "restored from backup kwerft-cluster-20261005030000" "$PV_DIR/backup/RESTORE"
+  scale0=$(grep -n "scale deployment kwerft --replicas=0" "$KC_LOG" | cut -d: -f1)
+  chown_line=$(grep -n "chown -R 65532:65532 $PV_DIR" "$KC_LOG" | cut -d: -f1)
+  scale1=$(grep -n "scale deployment kwerft --replicas=1" "$KC_LOG" | cut -d: -f1)
+  [ "$scale0" -lt "$chown_line" ]
+  [ "$chown_line" -lt "$scale1" ]
+}
+
+@test "stage_restore: a re-run waits for the same restore; a correct registry address stays" {
+  restore_env
+  RESTORE_EXISTS=1; REGISTRY_IP=10.43.0.50
+  run stage_restore
+  [ "$status" -eq 0 ]
+  absent "kind: Restore" "$KC_LOG"
+  absent "delete service kwerft-registry" "$KC_LOG"
+}
+
+@test "pick_backup: a named backup must exist, cover the cluster and be complete" {
+  restore_env
+  RESTORE_FROM=kwerft-cluster-20261004030000
+  run pick_backup
+  [ "$status" -eq 60 ]
+  [[ "$output" == *"no backup named kwerft-cluster-20261004030000 in s3://acme-kwerft/ops.example.com/velero"* ]]
+  BACKUP_PHASE=Completed
+  run pick_backup
+  [ "$status" -eq 0 ]
+  [ "$output" = "kwerft-cluster-20261004030000" ]
+  BACKUP_SCOPE=Projects
+  run pick_backup
+  [ "$status" -eq 60 ]
+  [[ "$output" == *"not a backup of the whole cluster (scope: Projects)"* ]]
+  BACKUP_SCOPE=Cluster; BACKUP_PHASE=Failed
+  run pick_backup
+  [ "$status" -eq 60 ]
+  [[ "$output" == *"did not complete (Failed)"* ]]
+  BACKUP_PHASE=PartiallyFailed
+  run pick_backup
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"is incomplete"* ]]
+}
+
+@test "pick_backup: latest without any complete Cluster backup exits 60" {
+  restore_env
+  BACKUPS=""
+  run pick_backup
+  [ "$status" -eq 60 ]
+  [[ "$output" == *"no complete Cluster backup in s3://acme-kwerft/ops.example.com/velero at https://fsn1.your-objectstorage.com (1 backups of any kind there)"* ]]
+}
+
+@test "wait_backup_sync: an unreadable bucket exits 60 with Velero's reason" {
+  restore_env
+  BSL_PHASE=Unavailable; BSL_MESSAGE="BackupStorageLocation is unavailable: AccessDenied"
+  run wait_backup_sync
+  [ "$status" -eq 60 ]
+  [[ "$output" == *"Cannot read the backups in s3://acme-kwerft/ops.example.com/velero at https://fsn1.your-objectstorage.com: BackupStorageLocation is unavailable: AccessDenied."* ]]
+  [[ "$output" == *"Check backups.endpoint, region, bucket, prefix and the access keys"* ]]
+  BSL_PHASE=Available; BSL_SYNCED=""
+  run wait_backup_sync
+  [ "$status" -eq 60 ]
+  [[ "$output" == *"has not listed its backups"* ]]
+}
+
+@test "wait_restore: failures exit 60, partial restores warn, slow ones time out" {
+  restore_env
+  printf 'InProgress\nFailed\n' >"$RESTORE_PHASES"
+  run wait_restore restore-x
+  [ "$status" -eq 60 ]
+  [[ "$output" == *"failed: error downloading backup"* ]]
+  printf 'PartiallyFailed\n' >"$RESTORE_PHASES"
+  run wait_restore restore-x
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"finished with 3 errors"* ]]
+  [ "${lines[${#lines[@]}-1]}" = "PartiallyFailed" ]
+  printf 'InProgress\n' >"$RESTORE_PHASES"; RESTORE_TIMEOUT=2
+  run wait_restore restore-x
+  [ "$status" -eq 60 ]
+  [[ "$output" == *"did not finish within"* ]]
+}
+
+@test "mark_database_restore: a backup without the hook's copy exits 60" {
+  restore_env
+  rm "$PV_DIR/backup/kwerft.db"
+  run mark_database_restore kwerft-cluster-1
+  [ "$status" -eq 60 ]
+  [[ "$output" == *"has no copy of the console's database"* ]]
+  [ ! -e "$PV_DIR/backup/RESTORE" ]
+  absent "scale deployment" "$KC_LOG"
+  PV_DIR="$BATS_TEST_TMPDIR/nowhere"
+  run mark_database_restore kwerft-cluster-1
+  [ "$status" -eq 60 ]
+  [[ "$output" == *"not a directory on this server"* ]]
+}
+
+@test "restore_cloud_volumes: the CSI driver once the Cloud token is back" {
+  restore_env
+  stage_hcloud() { echo "hcloud stage ran" >>"$KC_LOG"; }
+  stored_hcloud_token() { printf ''; }
+  restore_cloud_volumes
+  absent "hcloud stage ran" "$KC_LOG"
+  PLATFORM=cloud
+  restore_cloud_volumes
+  absent "hcloud stage ran" "$KC_LOG"
+  stored_hcloud_token() { printf 'token'; }
+  helmk() { [[ "$*" != *"status hcloud-csi"* ]]; }
+  restore_cloud_volumes
+  grep -q "hcloud stage ran" "$KC_LOG"
+  : >"$KC_LOG"
+  helmk() { return 0; }   # installed already
+  restore_cloud_volumes
+  absent "hcloud stage ran" "$KC_LOG"
+}
+
+@test "restore_refused: a server running Kwerft refuses --restore, a restored one resumes" {
+  KWERFT_SOURCED=1 source "$SCRIPT"
+  DONE=""
+  stage_done() { [[ " $DONE " == *" $1 "* ]]; }
+  run restore_refused
+  [ "$status" -ne 0 ]
+  DONE="kubernetes backups"
+  run restore_refused
+  [ "$status" -ne 0 ]
+  DONE="kwerft handoff"
+  run restore_refused
+  [ "$status" -eq 0 ]
+  DONE="kwerft-agent"
+  run restore_refused
+  [ "$status" -eq 0 ]
+  DONE="restore kwerft handoff"
+  run restore_refused
+  [ "$status" -ne 0 ]
+}
+
+@test "Handoff and summary after a restore: accounts from the backup" {
+  summary_env
+  RESTORE_FROM=latest; CONFIG_FILE=/root/kwerft.yaml
+  [ "$(setup_token_state)" = "restored" ]
+  run print_summary
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"Sign in with your accounts"* ]]
+  [[ "$output" != *"owner account"* ]]
+  [[ "$output" == *"point ops.example.com and the apps hostnames at this server: 203.0.113.24"* ]]
+  SETTING_RECORDS=true
+  run print_summary
+  [[ "$output" == *"Kwerft points its records at this server (203.0.113.24) by itself"* ]]
 }

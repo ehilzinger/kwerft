@@ -47,6 +47,10 @@ func main() {
 	if len(os.Args) > 1 && os.Args[1] == "node-agent" {
 		os.Exit(runNodeAgent(os.Args[2:]))
 	}
+	// `kwerft db-snapshot` is Velero's pre-backup hook on the console pod (dbsnapshot.go).
+	if len(os.Args) > 1 && os.Args[1] == "db-snapshot" {
+		os.Exit(runDBSnapshot(os.Args[2:]))
+	}
 	// `kwerft agent` takes the console's flags for the reconcilers, plus its own.
 	agentMode := len(os.Args) > 1 && os.Args[1] == "agent"
 	if agentMode {
@@ -167,6 +171,12 @@ func main() {
 	previousKeys, err := dataKeyPrevious()
 	if err != nil {
 		log.Error("invalid previous data key", "err", err)
+		os.Exit(1)
+	}
+	// After install.sh --restore: the backup's consistent copy replaces the
+	// restored live files before anything opens them (dbsnapshot.go).
+	if _, err := applyRestoredDatabase(*dataDir, log); err != nil {
+		log.Error("cannot restore the database from the backup", "err", err)
 		os.Exit(1)
 	}
 	st, err := store.Open(ctx, filepath.Join(*dataDir, "kwerft.db"))

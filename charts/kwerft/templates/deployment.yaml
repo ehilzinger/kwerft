@@ -19,6 +19,17 @@ spec:
   template:
     metadata:
       labels: {{- include "kwerft.selectorLabels" . | nindent 8 }}
+      {{- if not $agent }}
+      # Backups (docs/phase6.md): before Velero copies the data volume, a
+      # consistent copy of the database goes to backup/kwerft.db on it; a
+      # failed copy fails the backup of this pod rather than carrying a
+      # database that may be torn. install.sh --restore swaps the copy in.
+      annotations:
+        pre.hook.backup.velero.io/container: kwerft
+        pre.hook.backup.velero.io/command: '["/usr/local/bin/kwerft", "db-snapshot", "--data-dir=/var/lib/kwerft"]'
+        pre.hook.backup.velero.io/on-error: Fail
+        pre.hook.backup.velero.io/timeout: 2m
+      {{- end }}
     spec:
       serviceAccountName: {{ include "kwerft.fullname" . }}
       securityContext: {{- toYaml .Values.podSecurityContext | nindent 8 }}
