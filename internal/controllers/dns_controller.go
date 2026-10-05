@@ -31,9 +31,11 @@ import (
 // DNS records for the console and the apps domain (ConsoleSettings
 // spec.dns.manageRecords): A and AAAA records for the console hostname (and,
 // during a move, the new and the previous one) and *.<appsDomain>, pointing
-// at the nodes' public addresses. App hostnames need nothing more: the
-// wildcard record covers every name under the apps domain, whatever the
-// certificate method, so developers never cause DNS writes.
+// at the nodes' public addresses. The console's own app hostnames need
+// nothing more: the wildcard record covers every name under the apps domain,
+// whatever the certificate method. Hostnames of remote clusters under the
+// apps domain get a record each, pointing at their cluster
+// (dns_clusters.go).
 //
 // Ownership lives in the provider: Kwerft labels the RRsets it creates with
 // its instance (the kube-system namespace UID) and only ever changes or
@@ -63,6 +65,9 @@ type DNSReconciler struct {
 
 	ConsoleDomain string // console hostname from the flag, like DomainReconciler's
 	HetznerAPI    string // Cloud API base URL; empty is production
+	// RemoteClusters also keeps the records of remote clusters' hostnames
+	// under the apps domain (dns_clusters.go): the console's process only.
+	RemoteClusters bool
 
 	Now func() time.Time
 
@@ -79,6 +84,15 @@ func (r *DNSReconciler) now() time.Time {
 // dnsHost is one hostname Kwerft wants records for.
 type dnsHost struct {
 	host, purpose string
+	// cluster and project of a remote cluster's hostname (purpose app);
+	// empty for the console's own.
+	cluster, project string
+	// v4 and v6 are where the records point.
+	v4, v6 []string
+	// hold keeps the records as they are (a remote cluster whose addresses
+	// are not known yet), with note as the status message.
+	hold bool
+	note string
 }
 
 // wantedHosts are the console's hostnames and the apps wildcard, in the
@@ -96,7 +110,7 @@ func (r *DNSReconciler) wantedHosts(s *kwerftv1.ConsoleSettings) []dnsHost {
 	add := func(h, purpose string) {
 		if h != "" && !seen[h] {
 			seen[h] = true
-			out = append(out, dnsHost{h, purpose})
+			out = append(out, dnsHost{host: h, purpose: purpose})
 		}
 	}
 	add(active, "console")
@@ -134,12 +148,16 @@ func (r *DNSReconciler) Reconcile(ctx context.Context, _ ctrl.Request) (ctrl.Res
 	if err := r.Get(ctx, client.ObjectKey{Name: kwerftv1.ConsoleSettingsName}, &s); err != nil {
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
+	remotes, err := r.remoteClusters(ctx)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
 	if s.Spec.DNS == nil || !s.Spec.DNS.ManageRecords {
 		// Records stay where they are; only the report goes.
-		return ctrl.Result{}, r.report(ctx, &s, nil)
+		return ctrl.Result{}, r.report(ctx, &s, &dnsResult{clusters: unmanagedClusters(remotes, s.Spec.AppsDomain)}, remotes)
 	}
-	st, after, err := r.sync(ctx, &s)
-	if rerr := r.report(ctx, &s, st); rerr != nil {
+	res, after, err := r.sync(ctx, &s, remotes)
+	if rerr := r.report(ctx, &s, res, remotes); rerr != nil {
 		return ctrl.Result{}, rerr
 	}
 	if err != nil {
@@ -148,23 +166,42 @@ func (r *DNSReconciler) Reconcile(ctx context.Context, _ ctrl.Request) (ctrl.Res
 	return ctrl.Result{RequeueAfter: after}, nil
 }
 
+// dnsResult is what one sync reports: the console's own hostnames
+// (ConsoleSettings status.dns) and each remote cluster's (Cluster
+// status.dns; a cluster missing from the map gets none).
+type dnsResult struct {
+	local    *kwerftv1.DNSStatus
+	clusters map[string]*kwerftv1.DNSStatus
+}
+
 // sync brings the provider in line and returns the status to report and when
 // to look again. An error means retry with backoff.
-func (r *DNSReconciler) sync(ctx context.Context, s *kwerftv1.ConsoleSettings) (*kwerftv1.DNSStatus, time.Duration, error) {
+func (r *DNSReconciler) sync(ctx context.Context, s *kwerftv1.ConsoleSettings, remotes []kwerftv1.Cluster) (*dnsResult, time.Duration, error) {
 	logger := log.FromContext(ctx)
 	prev := map[string]kwerftv1.DNSRecordStatus{}
-	if s.Status.DNS != nil {
-		for _, rec := range s.Status.DNS.Records {
+	prevZones := map[string]bool{} // zones that held managed records last time
+	remember := func(st *kwerftv1.DNSStatus) {
+		if st == nil {
+			return
+		}
+		for _, rec := range st.Records {
 			prev[rec.Hostname] = rec
+			if rec.Zone != "" && rec.State == kwerftv1.DNSManaged {
+				prevZones[rec.Zone] = true
+			}
 		}
 	}
+	remember(s.Status.DNS)
+	for i := range remotes {
+		remember(remotes[i].Status.DNS)
+	}
 	// Problems before any record is looked at keep the last known records.
-	stalled := func(msg string) *kwerftv1.DNSStatus {
-		st := &kwerftv1.DNSStatus{Message: msg}
+	stalled := func(msg string) *dnsResult {
+		res := &dnsResult{local: &kwerftv1.DNSStatus{Message: msg}, clusters: stalledClusters(remotes, msg)}
 		if s.Status.DNS != nil {
-			st.Records, st.Zones, st.SyncedAt = s.Status.DNS.Records, s.Status.DNS.Zones, s.Status.DNS.SyncedAt
+			res.local.Records, res.local.Zones, res.local.SyncedAt = s.Status.DNS.Records, s.Status.DNS.Zones, s.Status.DNS.SyncedAt
 		}
-		return st
+		return res
 	}
 
 	v4, v6 := publicDNSAddresses(s.Status.PublicAddresses)
@@ -190,9 +227,21 @@ func (r *DNSReconciler) sync(ctx context.Context, s *kwerftv1.ConsoleSettings) (
 		return stalled("Could not list the DNS zones: " + err.Error()), 0, err
 	}
 
+	// The console's hostnames point at this cluster's nodes, the remote
+	// clusters' hostnames at theirs; some of those are settled without the
+	// provider (conflicts, names Kwerft keeps no record for).
+	wanted := r.wantedHosts(s)
+	for i := range wanted {
+		wanted[i].v4, wanted[i].v6 = v4, v6
+	}
+	remote, settled, err := r.remoteHosts(ctx, s, wanted, remotes)
+	if err != nil {
+		return nil, 0, err
+	}
+	wanted = append(wanted, remote...)
+
 	// Which zone each wanted host lives in, and which zones to read: those,
 	// plus zones that held managed records last time (to clean them up).
-	wanted := r.wantedHosts(s)
 	type placed struct {
 		dnsHost
 		zone hetzner.Zone
@@ -200,26 +249,36 @@ func (r *DNSReconciler) sync(ctx context.Context, s *kwerftv1.ConsoleSettings) (
 	}
 	var hosts []placed
 	var out []kwerftv1.DNSRecordStatus
+	clusterOut := map[string][]kwerftv1.DNSRecordStatus{}
+	for name, recs := range settled {
+		clusterOut[name] = recs
+	}
+	emit := func(h dnsHost, rec kwerftv1.DNSRecordStatus) {
+		if h.cluster == "" {
+			out = append(out, rec)
+		} else {
+			rec.Project = h.project
+			clusterOut[h.cluster] = append(clusterOut[h.cluster], rec)
+		}
+	}
 	read := map[string]bool{}
 	for _, h := range wanted {
 		z, name, ok := hetzner.MatchZone(zones, h.host)
 		switch {
 		case !ok:
-			out = append(out, kwerftv1.DNSRecordStatus{Hostname: h.host, Purpose: h.purpose, State: kwerftv1.DNSNoZone,
+			emit(h, kwerftv1.DNSRecordStatus{Hostname: h.host, Purpose: h.purpose, State: kwerftv1.DNSNoZone,
 				Message: "No zone in the token's Hetzner project contains " + h.host + "; create its records by hand."})
 		case z.Mode != "" && z.Mode != "primary":
-			out = append(out, kwerftv1.DNSRecordStatus{Hostname: h.host, Purpose: h.purpose, Zone: z.Name, State: kwerftv1.DNSNoZone,
+			emit(h, kwerftv1.DNSRecordStatus{Hostname: h.host, Purpose: h.purpose, Zone: z.Name, State: kwerftv1.DNSNoZone,
 				Message: "The zone " + z.Name + " is a secondary zone; its records are managed at its primary."})
 		default:
 			hosts = append(hosts, placed{h, z, name})
 			read[z.Name] = true
 		}
 	}
-	for _, rec := range prev {
-		if rec.Zone != "" && rec.State == kwerftv1.DNSManaged {
-			if z, _, ok := hetzner.MatchZone(zones, rec.Zone); ok && z.Name == rec.Zone && (z.Mode == "" || z.Mode == "primary") {
-				read[rec.Zone] = true
-			}
+	for zone := range prevZones {
+		if z, _, ok := hetzner.MatchZone(zones, zone); ok && z.Name == zone && (z.Mode == "" || z.Mode == "primary") {
+			read[zone] = true
 		}
 	}
 
@@ -242,8 +301,6 @@ func (r *DNSReconciler) sync(ctx context.Context, s *kwerftv1.ConsoleSettings) (
 		return set.Labels[DNSLabelManagedBy] == ManagedByKwerft && set.Labels[DNSLabelInstance] == instance
 	}
 	kwerfts := func(set hetzner.RRSet) bool { return set.Labels[DNSLabelManagedBy] == ManagedByKwerft }
-	want := map[string][]string{"A": v4, "AAAA": v6}
-	all := append(slices.Clone(v4), v6...)
 	keep := map[string]bool{} // zone/name/TYPE of managed sets to keep
 	failed := false
 	var rateLimited *hetzner.RateLimitError
@@ -251,6 +308,21 @@ func (r *DNSReconciler) sync(ctx context.Context, s *kwerftv1.ConsoleSettings) (
 	for _, h := range hosts {
 		rec := kwerftv1.DNSRecordStatus{Hostname: h.host, Purpose: h.purpose, Zone: h.zone.Name}
 		sets := existing[h.zone.Name]
+		if h.hold {
+			// Whatever this instance wrote stays until the addresses are known.
+			var held []hetzner.RRSet
+			for _, t := range []string{"A", "AAAA"} {
+				keep[h.zone.Name+"/"+h.name+"/"+t] = true
+				if set, ok := sets[h.name+"/"+t]; ok && ours(set) {
+					held = append(held, set)
+				}
+			}
+			rec.State, rec.Values, rec.Message = kwerftv1.DNSPending, valuesOf(held), h.note
+			emit(h.dnsHost, rec)
+			continue
+		}
+		want := map[string][]string{"A": h.v4, "AAAA": h.v6}
+		all := append(slices.Clone(h.v4), h.v6...)
 		cname, hasCNAME := sets[h.name+"/CNAME"]
 		var foreign, others []hetzner.RRSet
 		for _, t := range []string{"A", "AAAA"} {
@@ -309,7 +381,7 @@ func (r *DNSReconciler) sync(ctx context.Context, s *kwerftv1.ConsoleSettings) (
 		if rateLimited != nil {
 			break
 		}
-		out = append(out, rec)
+		emit(h.dnsHost, rec)
 	}
 	if rateLimited != nil {
 		return stalled(rateLimited.Error()), time.Until(rateLimited.Reset) + time.Second, nil
@@ -344,11 +416,16 @@ func (r *DNSReconciler) sync(ctx context.Context, s *kwerftv1.ConsoleSettings) (
 		}
 	}
 	slices.Sort(primary)
-	st := &kwerftv1.DNSStatus{Records: out, Zones: primary, SyncedAt: &metav1.Time{Time: r.now()}}
-	if failed {
-		return st, dnsRetry, nil
+	now := &metav1.Time{Time: r.now()}
+	res := &dnsResult{local: &kwerftv1.DNSStatus{Records: out, Zones: primary, SyncedAt: now}, clusters: map[string]*kwerftv1.DNSStatus{}}
+	for name, recs := range clusterOut {
+		slices.SortFunc(recs, func(a, b kwerftv1.DNSRecordStatus) int { return strings.Compare(a.Hostname, b.Hostname) })
+		res.clusters[name] = &kwerftv1.DNSStatus{Records: recs, Zones: primary, SyncedAt: now}
 	}
-	return st, dnsResync, nil
+	if failed {
+		return res, dnsRetry, nil
+	}
+	return res, dnsResync, nil
 }
 
 // ensureSet makes the RRset of one name and type hold values, as this
@@ -444,28 +521,36 @@ func (r *DNSReconciler) instanceID(ctx context.Context) (string, error) {
 	return r.instance, nil
 }
 
-// report writes status.dns, and nothing else of the status, which the
-// Domain reconciler owns.
-func (r *DNSReconciler) report(ctx context.Context, s *kwerftv1.ConsoleSettings, st *kwerftv1.DNSStatus) error {
-	if equality.Semantic.DeepEqual(s.Status.DNS, st) {
+// report writes status.dns of the settings and of each remote cluster, and
+// nothing else of their status, which other reconcilers own. A nil result
+// (the sync failed before it knew anything) leaves them as they are.
+func (r *DNSReconciler) report(ctx context.Context, s *kwerftv1.ConsoleSettings, res *dnsResult, remotes []kwerftv1.Cluster) error {
+	if res == nil {
 		return nil
 	}
-	// A new sync time alone is not worth a write every ten minutes unless
-	// the last one is old.
-	if s.Status.DNS != nil && st != nil && st.SyncedAt != nil && s.Status.DNS.SyncedAt != nil &&
-		r.now().Sub(s.Status.DNS.SyncedAt.Time) < time.Hour {
-		same := st.DeepCopy()
-		same.SyncedAt = s.Status.DNS.SyncedAt
-		if equality.Semantic.DeepEqual(s.Status.DNS, same) {
-			return nil
+	if !r.sameDNS(s.Status.DNS, res.local) {
+		orig := s.DeepCopy()
+		s.Status.DNS = res.local
+		if err := patchStatus(ctx, r.Client, s, orig); err != nil && !apierrors.IsNotFound(err) {
+			return err
 		}
 	}
-	orig := s.DeepCopy()
-	s.Status.DNS = st
-	if err := patchStatus(ctx, r.Client, s, orig); err != nil && !apierrors.IsNotFound(err) {
-		return err
+	return r.reportClusters(ctx, res.clusters, remotes)
+}
+
+// sameDNS: nothing worth a write changed. A new sync time alone is not worth
+// a write every ten minutes unless the last one is old.
+func (r *DNSReconciler) sameDNS(cur, next *kwerftv1.DNSStatus) bool {
+	if equality.Semantic.DeepEqual(cur, next) {
+		return true
 	}
-	return nil
+	if cur != nil && next != nil && next.SyncedAt != nil && cur.SyncedAt != nil &&
+		r.now().Sub(cur.SyncedAt.Time) < time.Hour {
+		same := next.DeepCopy()
+		same.SyncedAt = cur.SyncedAt
+		return equality.Semantic.DeepEqual(cur, same)
+	}
+	return false
 }
 
 // dnsInputs is what the records depend on, so the reconciler's own status
@@ -480,12 +565,21 @@ func (r *DNSReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	toSettings := handler.EnqueueRequestsFromMapFunc(func(context.Context, client.Object) []reconcile.Request {
 		return []reconcile.Request{dnsRequest}
 	})
-	return ctrl.NewControllerManagedBy(mgr).
+	b := ctrl.NewControllerManagedBy(mgr).
 		Named("dns").
 		Watches(&kwerftv1.ConsoleSettings{}, toSettings, builder.WithPredicates(predicate.Funcs{
 			UpdateFunc: func(e event.UpdateEvent) bool {
 				return dnsInputs(e.ObjectOld.(*kwerftv1.ConsoleSettings)) != dnsInputs(e.ObjectNew.(*kwerftv1.ConsoleSettings))
 			},
-		})).
-		Complete(r)
+		}))
+	if r.RemoteClusters {
+		// Remote clusters' hostnames and addresses (dns_clusters.go), and
+		// local claims on hostnames they want.
+		b = b.Watches(&kwerftv1.Cluster{}, toSettings, builder.WithPredicates(clusterChanged)).
+			Watches(&kwerftv1.Domain{}, handler.EnqueueRequestsFromMapFunc(r.domainClaimedRemotely(mgr.GetCache())),
+				builder.WithPredicates(predicate.Funcs{UpdateFunc: func(e event.UpdateEvent) bool {
+					return e.ObjectOld.(*kwerftv1.Domain).Status.Listener != e.ObjectNew.(*kwerftv1.Domain).Status.Listener
+				}}))
+	}
+	return b.Complete(r)
 }

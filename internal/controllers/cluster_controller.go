@@ -172,6 +172,11 @@ func (r *ClusterReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 			log.FromContext(ctx).Info("copying channels and Git connections into the cluster failed", "cluster", c.Name, "err", err.Error())
 		}
 		setMirrored(&c, err)
+		if connErr == nil {
+			if err := r.observeIngress(ctx, remote, &c); err != nil {
+				log.FromContext(ctx).Info("reading the cluster's hostnames and addresses failed", "cluster", c.Name, "err", err.Error())
+			}
+		}
 		if c.Spec.Provider == kwerftv1.ClusterHetznerCloud && c.Spec.HetznerCloud != nil {
 			note, err := "", connErr
 			if err == nil {
@@ -490,8 +495,9 @@ func (r *ClusterReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		changed := builder.WithPredicates(predicate.Or(predicate.GenerationChangedPredicate{}, predicate.AnnotationChangedPredicate{}))
 		b = b.Watches(&kwerftv1.NotificationChannel{}, all, changed).Watches(&kwerftv1.GitConnection{}, all, changed).
 			// A new Cloud API token (Settings marks it on ConsoleSettings):
-			// hand it to the Cloud clusters at once.
-			Watches(&kwerftv1.ConsoleSettings{}, all, builder.WithPredicates(predicate.AnnotationChangedPredicate{}))
+			// hand it to the Cloud clusters at once; a new apps domain:
+			// read their hostnames under it.
+			Watches(&kwerftv1.ConsoleSettings{}, all, changed)
 	}
 	if r.Tunnel != nil {
 		events := make(chan event.GenericEvent)

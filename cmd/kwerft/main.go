@@ -125,7 +125,7 @@ func main() {
 			go flows.Run(ctx, hubble.NewRelay(*hubbleRelay))
 			traffic.Counts = flows
 		}
-		mgr, err := newManager(log, *leaderElect, *metricsListen, *privateNetwork, traffic, &controllers.DomainReconciler{
+		mgr, err := newManager(log, *leaderElect, *metricsListen, *privateNetwork, !agentMode, traffic, &controllers.DomainReconciler{
 			ConsoleDomain: *consoleDomain,
 			GatewayClass:  *gatewayClass,
 			ClusterIssuer: *clusterIssuer,
@@ -358,7 +358,9 @@ func waitUntilReady(ctx context.Context, log *slog.Logger, mgr ctrl.Manager, rea
 	}
 }
 
-func newManager(log *slog.Logger, leaderElect bool, metricsListen, privateNetwork string, traffic *controllers.TrafficRuleReconciler, domains *controllers.DomainReconciler, builds *controllers.BuildReconciler) (ctrl.Manager, error) {
+// console: the console's cluster (not agent mode), whose DNS reconciler
+// also keeps the records of remote clusters' hostnames.
+func newManager(log *slog.Logger, leaderElect bool, metricsListen, privateNetwork string, console bool, traffic *controllers.TrafficRuleReconciler, domains *controllers.DomainReconciler, builds *controllers.BuildReconciler) (ctrl.Manager, error) {
 	ctrl.SetLogger(logr.FromSlogHandler(log.Handler()))
 	cfg, err := ctrl.GetConfig()
 	if err != nil {
@@ -400,7 +402,8 @@ func newManager(log *slog.Logger, leaderElect bool, metricsListen, privateNetwor
 	if err := domains.SetupWithManager(mgr); err != nil {
 		return nil, err
 	}
-	dns := &controllers.DNSReconciler{Client: mgr.GetClient(), APIReader: mgr.GetAPIReader(), ConsoleDomain: domains.ConsoleDomain}
+	dns := &controllers.DNSReconciler{Client: mgr.GetClient(), APIReader: mgr.GetAPIReader(), ConsoleDomain: domains.ConsoleDomain,
+		RemoteClusters: console}
 	if err := dns.SetupWithManager(mgr); err != nil {
 		return nil, err
 	}

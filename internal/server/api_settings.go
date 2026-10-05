@@ -20,6 +20,7 @@ import (
 
 	kwerftv1 "github.com/ehilzinger/kwerft/api/v1alpha1"
 	"github.com/ehilzinger/kwerft/internal/auth"
+	"github.com/ehilzinger/kwerft/internal/clusters"
 	"github.com/ehilzinger/kwerft/internal/controllers"
 	"github.com/ehilzinger/kwerft/internal/hetzner"
 	"github.com/ehilzinger/kwerft/internal/store"
@@ -98,16 +99,40 @@ type settingsJSON struct {
 	// Cluster whose settings these are.
 	Cluster string     `json:"cluster"`
 	HCloud  hcloudJSON `json:"hcloud"`
+	// For a remote cluster: the console's apps domain, whether the console
+	// keeps records for the cluster's hostnames under it, and those records
+	// (docs/phase5.md › DNS for remote clusters).
+	ConsoleAppsDomain string          `json:"consoleAppsDomain,omitempty"`
+	ConsoleRecords    bool            `json:"consoleRecords,omitempty"`
+	ClusterDNS        *clusterDNSJSON `json:"clusterDNS,omitempty"`
 }
 
 // dnsRecordJSON is one hostname whose records Kwerft keeps (status.dns).
 type dnsRecordJSON struct {
 	Hostname string   `json:"hostname"`
-	Purpose  string   `json:"purpose"`
+	Purpose  string   `json:"purpose"`           // console | console-next | console-previous | apps | app
+	Project  string   `json:"project,omitempty"` // purpose app: the Domain's project
 	Zone     string   `json:"zone,omitempty"`
 	State    string   `json:"state"` // Managed | External | Conflict | TakenOver | NoZone | Error
 	Values   []string `json:"values"`
 	Message  string   `json:"message,omitempty"`
+}
+
+func dnsRecordView(rec kwerftv1.DNSRecordStatus) dnsRecordJSON {
+	values := rec.Values
+	if values == nil {
+		values = []string{}
+	}
+	return dnsRecordJSON{Hostname: rec.Hostname, Purpose: rec.Purpose, Project: rec.Project, Zone: rec.Zone,
+		State: string(rec.State), Values: values, Message: rec.Message}
+}
+
+func dnsRecordsView(recs []kwerftv1.DNSRecordStatus) []dnsRecordJSON {
+	out := make([]dnsRecordJSON, 0, len(recs))
+	for _, rec := range recs {
+		out = append(out, dnsRecordView(rec))
+	}
+	return out
 }
 
 type conditionJSON struct {
@@ -153,14 +178,7 @@ func (s *settingsAPI) view(cs *kwerftv1.ConsoleSettings) settingsJSON {
 		out.ManageRecords = cs.Spec.DNS.ManageRecords
 	}
 	if d := st.DNS; d != nil && out.ManageRecords {
-		for _, rec := range d.Records {
-			values := rec.Values
-			if values == nil {
-				values = []string{}
-			}
-			out.DNSRecords = append(out.DNSRecords, dnsRecordJSON{Hostname: rec.Hostname, Purpose: rec.Purpose, Zone: rec.Zone,
-				State: string(rec.State), Values: values, Message: rec.Message})
-		}
+		out.DNSRecords = dnsRecordsView(d.Records)
 		out.DNSMessage = d.Message
 		out.DNSSyncedAt = timePtr(d.SyncedAt)
 	}
@@ -201,7 +219,39 @@ func (s *settingsAPI) get(w http.ResponseWriter, r *http.Request) {
 	}
 	out := s.view(cs)
 	out.Cluster = s.conn(ctx).name
+	s.addConsoleDNS(ctx, &out)
 	writeJSON(w, http.StatusOK, out)
+}
+
+// consoleApps is the console's (the management cluster's) apps domain and
+// whether it keeps DNS records, read with the console's own identity.
+func (s *settingsAPI) consoleApps(ctx context.Context) (string, bool) {
+	if s.cfg.System == nil {
+		return "", false
+	}
+	var cs kwerftv1.ConsoleSettings
+	if err := s.cfg.System.Get(ctx, client.ObjectKey{Name: kwerftv1.ConsoleSettingsName}, &cs); err != nil {
+		return "", false
+	}
+	return cs.Spec.AppsDomain, cs.Spec.DNS != nil && cs.Spec.DNS.ManageRecords
+}
+
+// addConsoleDNS fills a remote cluster's view with what the console does
+// for its hostnames: the console's apps domain and the records it keeps.
+func (s *settingsAPI) addConsoleDNS(ctx context.Context, out *settingsJSON) {
+	if out.Cluster == "" || out.Cluster == clusters.Local {
+		return
+	}
+	out.ConsoleAppsDomain, out.ConsoleRecords = s.consoleApps(ctx)
+	if out.ConsoleAppsDomain == "" || s.cfg.System == nil {
+		return
+	}
+	var cl kwerftv1.Cluster
+	if err := s.cfg.System.Get(ctx, client.ObjectKey{Name: out.Cluster}, &cl); err != nil || cl.Status.DNS == nil {
+		return
+	}
+	d := cl.Status.DNS
+	out.ClusterDNS = &clusterDNSJSON{Records: dnsRecordsView(d.Records), Message: d.Message, SyncedAt: timePtr(d.SyncedAt)}
 }
 
 // ---- DNS ---------------------------------------------------------------------
@@ -540,6 +590,23 @@ func (s *settingsAPI) setApps(w http.ResponseWriter, r *http.Request) {
 	if apps != "" && (apps == view.ConsoleDomain || apps == view.PendingConsoleDomain) {
 		writeFieldError(w, "appsDomain", apps+" is the console's hostname. Apps need a domain of their own, like apps.example.com.")
 		return
+	}
+	// A remote cluster under the console's apps domain gets a certificate
+	// per hostname and its records from the console: the wildcard
+	// certificate and record of that domain are the console cluster's.
+	if cluster := s.conn(ctx).name; cluster != clusters.Local && apps != "" {
+		if consoleApps, _ := s.consoleApps(ctx); apps == consoleApps {
+			switch {
+			case tls == kwerftv1.TLSDNS01:
+				writeFieldError(w, "tls", "*."+apps+" is the console cluster's wildcard. Apps of cluster "+cluster+
+					" under "+apps+" get a certificate each (HTTP-01); the console keeps their DNS records.")
+				return
+			case req.ManageRecords:
+				writeFieldError(w, "manageRecords", "The console keeps the records of cluster "+cluster+"'s hostnames under "+apps+
+					"; *."+apps+" points at the console's cluster.")
+				return
+			}
+		}
 	}
 	if useDNS && token == "" && !view.TokenSet {
 		writeFieldError(w, "token", "Enter a Hetzner API token with read and write access to the DNS zone.")

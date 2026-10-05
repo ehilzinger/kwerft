@@ -6,7 +6,10 @@ import { Field } from "../components/Field";
 import { Icon } from "../components/Icon";
 import { HOST_RE } from "../workloads";
 import { shortDate } from "../jobs";
-import { isTemporaryHost, settingsApi, type CertificateState, type DNSCheck, type DNSRecord, type PasskeyHolder, type Settings as SettingsData } from "../settings";
+import { LOCAL, useClusters } from "../clusters";
+import { ClusterPicker } from "../components/ClusterUI";
+import { DNSRecordsTable } from "../components/DNSRecords";
+import { isTemporaryHost, settingsApi, type CertificateState, type DNSCheck, type PasskeyHolder, type Settings as SettingsData } from "../settings";
 import "../styles/workloads.css";
 import "../styles/settings.css";
 import { GitConnectionsCard } from "./GitConnections";
@@ -26,10 +29,21 @@ export function Settings() {
   const canEdit = session.data?.role === "owner" || session.data?.role === "admin";
   const settings = useQuery({
     queryKey: ["settings"],
-    queryFn: settingsApi.get,
+    queryFn: () => settingsApi.get(),
     // Poll quickly while something is being issued: the move waits for it.
     refetchInterval: (q) => (q.state.data?.pendingConsoleDomain || (q.state.data?.ready && !q.state.data.ready.status) ? 3000 : 20000),
   });
+  // The apps domain, its DNS records and certificates are per cluster
+  // (docs/phase5.md); everything else is the console's.
+  const { multi } = useClusters();
+  const [cluster, setCluster] = useState(LOCAL);
+  const remote = useQuery({
+    queryKey: ["settings", cluster],
+    queryFn: () => settingsApi.get(cluster),
+    enabled: cluster !== LOCAL,
+    refetchInterval: 20000,
+  });
+  const apps = cluster === LOCAL ? settings.data : remote.data;
 
   return (
     <section className="view settings">
@@ -47,9 +61,24 @@ export function Settings() {
       {settings.data && (
         <>
           <ConsoleCard s={settings.data} canEdit={canEdit} />
-          <AppsCard s={settings.data} canEdit={canEdit} />
-          {settings.data.manageRecords && <DNSRecordsCard s={settings.data} />}
-          <CertificatesCard s={settings.data} />
+          {multi && (
+            <div className="toolbar">
+              <ClusterPicker value={cluster} onChange={setCluster} />
+              <span className="dim">Apps domain, DNS records and certificates of this cluster</span>
+            </div>
+          )}
+          {remote.isError && cluster !== LOCAL && <div className="banner bad" role="alert"><Icon name="alert" /><span>{errText(remote.error)}</span></div>}
+          {!apps ? (
+            cluster !== LOCAL && remote.isPending && <p className="loading">Loading the settings of cluster {cluster}…</p>
+          ) : (
+            <>
+              <AppsCard key={apps.cluster} s={apps} canEdit={canEdit} />
+              {apps.cluster === LOCAL || !apps.cluster
+                ? apps.manageRecords && <DNSRecordsCard s={apps} />
+                : apps.consoleAppsDomain && <ClusterRecordsCard s={apps} />}
+              <CertificatesCard s={apps} />
+            </>
+          )}
           <GitConnectionsCard canEdit={canEdit} />
           {canEdit && <SSOCard />}
           {session.data?.role === "owner" && <DataKeyCard />}
@@ -235,6 +264,9 @@ function Holders({ list }: { list: PasskeyHolder[] }) {
 
 function AppsCard({ s, canEdit }: { s: SettingsData; canEdit: boolean }) {
   const queryClient = useQueryClient();
+  // A remote cluster under the console's apps domain: a certificate per
+  // hostname, records kept by the console.
+  const remote = !!s.cluster && s.cluster !== LOCAL;
   const [apps, setApps] = useState(s.appsDomain ?? "");
   const [tls, setTLS] = useState<"http01" | "dns01">(s.tls);
   const [records, setRecords] = useState(s.manageRecords);
@@ -248,7 +280,8 @@ function AppsCard({ s, canEdit }: { s: SettingsData; canEdit: boolean }) {
   const fieldError = (f: string) => (error?.field === f ? error.message : undefined);
   const changed = domain !== (s.appsDomain ?? "") || tls !== s.tls || records !== s.manageRecords || token.trim() !== "";
   const needsToken = tls === "dns01" || records;
-  const ip = s.publicAddresses.join(", ") || "this server";
+  const ip = s.publicAddresses.join(", ") || (remote ? "the cluster" : "this server");
+  const sharesConsoleDomain = remote && !!s.consoleAppsDomain && (domain === "" || domain === s.consoleAppsDomain);
 
   async function save(e: FormEvent) {
     e.preventDefault();
@@ -261,8 +294,8 @@ function AppsCard({ s, canEdit }: { s: SettingsData; canEdit: boolean }) {
     }
     setBusy(true);
     try {
-      const res = await settingsApi.saveApps({ appsDomain: domain, tls, manageRecords: records, ...(token.trim() ? { token: token.trim() } : {}) });
-      queryClient.setQueryData(["settings"], res.settings);
+      const res = await settingsApi.saveApps({ appsDomain: domain, tls, manageRecords: records, ...(token.trim() ? { token: token.trim() } : {}) }, s.cluster);
+      queryClient.setQueryData(remote ? ["settings", s.cluster] : ["settings"], res.settings);
       setToken("");
       setWarning(res.warning);
       setDone(res.zone ? `Saved. The token can manage the zone ${res.zone}.` : "Saved.");
@@ -286,16 +319,25 @@ function AppsCard({ s, canEdit }: { s: SettingsData; canEdit: boolean }) {
     <section className="card">
       <h2>Apps domain &amp; certificates</h2>
       <form className="bd stack" onSubmit={save}>
-        <p className="dim note">
-          Apps get subdomains under a base domain, so <code>invoices</code> becomes <code>invoices.{domain || "apps.example.com"}</code> without touching DNS again. The deploy wizard suggests these names.
-        </p>
+        {remote ? (
+          <p className="dim note">
+            Leave it empty to use the console&apos;s apps domain{s.consoleAppsDomain && <> <code>{s.consoleAppsDomain}</code></>}: {s.consoleRecords
+              ? <>the console keeps a DNS record for each of this cluster&apos;s hostnames under it, pointing to {ip}</>
+              : <>create a DNS record for each of this cluster&apos;s hostnames under it, pointing to {ip}</>}, and the cluster gets a certificate for each (HTTP-01).
+            A domain of its own works as it does for the console&apos;s cluster.
+          </p>
+        ) : (
+          <p className="dim note">
+            Apps get subdomains under a base domain, so <code>invoices</code> becomes <code>invoices.{domain || "apps.example.com"}</code> without touching DNS again. The deploy wizard suggests these names.
+          </p>
+        )}
         <div className="fields">
           <div className="stack tight">
-            <Field id="apps-domain" label="Base domain for apps" className="mono" value={apps} placeholder="apps.example.com"
+            <Field id="apps-domain" label="Base domain for apps" className="mono" value={apps} placeholder={remote && s.consoleAppsDomain ? s.consoleAppsDomain : "apps.example.com"}
               onChange={(e) => { setApps(e.target.value); setCheck(undefined); }} disabled={!canEdit} autoComplete="off" spellCheck={false}
               error={fieldError("appsDomain")}
-              hint={records ? `Kwerft keeps *.${domain || "apps.example.com"} → ${ip}` : `Create *.${domain || "apps.example.com"} → ${ip}`} />
-            {canEdit && domain && HOST_RE.test(domain) && (
+              hint={sharesConsoleDomain ? `One record per hostname → ${ip}` : records ? `Kwerft keeps *.${domain || "apps.example.com"} → ${ip}` : `Create *.${domain || "apps.example.com"} → ${ip}`} />
+            {canEdit && !remote && domain && HOST_RE.test(domain) && (
               <div className="inline-check">
                 <button type="button" className="btn sm" onClick={checkWildcard}>Check wildcard DNS</button>
                 {check && <span className={check.ok ? "ok-text" : "form-error"} role="status">{check.ok ? `✓ ${check.managed ? check.message : `*.${domain} points to this server.`}` : check.message}</span>}
@@ -309,13 +351,13 @@ function AppsCard({ s, canEdit }: { s: SettingsData; canEdit: boolean }) {
                 <span className="r" /><b>HTTP-01, one certificate per hostname</b>
                 <span>No DNS credentials needed. Every app hostname needs a DNS record (a wildcard record covers them all) and a listener of its own; the Gateway has room for 59.</span>
               </button>
-              <button type="button" className="opt" aria-pressed={tls === "dns01"} disabled={!canEdit} onClick={() => setTLS("dns01")}>
+              <button type="button" className="opt" aria-pressed={tls === "dns01"} disabled={!canEdit || sharesConsoleDomain} onClick={() => setTLS("dns01")}>
                 <span className="r" /><b>DNS-01 via Hetzner DNS, wildcard certificate</b>
                 <span>One <code>*.{domain || "apps.example.com"}</code> certificate and listener for every app under the domain, without limit. Needs a Hetzner API token for the DNS zone.</span>
               </button>
             </div>
           </div>
-          <div className="field full">
+          {!sharesConsoleDomain && <div className="field full">
             <label className="check records">
               <input type="checkbox" checked={records} disabled={!canEdit} onChange={(e) => setRecords(e.target.checked)} />
               <span>
@@ -326,7 +368,7 @@ function AppsCard({ s, canEdit }: { s: SettingsData; canEdit: boolean }) {
                 </small>
               </span>
             </label>
-          </div>
+          </div>}
           {needsToken && (
             <div className="full">
               <Field id="dns-token" label="Hetzner API token" className="mono" type="password" value={token} disabled={!canEdit}
@@ -364,13 +406,6 @@ function AppsCard({ s, canEdit }: { s: SettingsData; canEdit: boolean }) {
 
 // ---- DNS records -----------------------------------------------------------------------
 
-const recordPurposes: Record<DNSRecord["purpose"], string> = {
-  console: "Console",
-  "console-next": "New console hostname",
-  "console-previous": "Previous console hostname",
-  apps: "Apps",
-};
-
 function DNSRecordsCard({ s }: { s: SettingsData }) {
   return (
     <section className="card">
@@ -381,21 +416,7 @@ function DNSRecordsCard({ s }: { s: SettingsData }) {
       {s.dnsRecords.length === 0 ? (
         <div className="bd"><p className="dim note">{s.dnsMessage ? "No records yet." : "Kwerft is creating the records…"}</p></div>
       ) : (
-        <div className="scroll-x">
-          <table className="t">
-            <thead><tr><th>Hostname</th><th>For</th><th>Points to</th><th>State</th></tr></thead>
-            <tbody>
-              {s.dnsRecords.map((r) => (
-                <tr key={r.hostname}>
-                  <td className="nm mono">{r.hostname}{r.zone && <span className="sub">zone {r.zone}</span>}</td>
-                  <td>{recordPurposes[r.purpose] ?? r.purpose}</td>
-                  <td className="mono">{r.values.length ? r.values.join(", ") : "—"}</td>
-                  <td><RecordPill r={r} />{r.message && r.state !== "Managed" && <span className="sub wrap">{r.message}</span>}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+        <DNSRecordsTable records={s.dnsRecords} />
       )}
       <div className="bd">
         <p className="dim note">
@@ -406,15 +427,27 @@ function DNSRecordsCard({ s }: { s: SettingsData }) {
   );
 }
 
-function RecordPill({ r }: { r: DNSRecord }) {
-  switch (r.state) {
-    case "Managed": return <span className="pill ok" title={r.message}>Managed</span>;
-    case "External": return <span className="pill ok" title={r.message}>Yours, points here</span>;
-    case "Conflict": return <span className="pill bad" title={r.message}>Conflict</span>;
-    case "TakenOver": return <span className="pill warn" title={r.message}>Another installation</span>;
-    case "NoZone": return <span className="pill mute" title={r.message}>Not in your zones</span>;
-    default: return <span className="pill bad" title={r.message}>Error</span>;
-  }
+/** A remote cluster: the records the console keeps for its hostnames under the console's apps domain. */
+function ClusterRecordsCard({ s }: { s: SettingsData }) {
+  const d = s.clusterDNS;
+  return (
+    <section className="card">
+      <h2>DNS records</h2>
+      {d?.message && (
+        <div className="bd"><div className="banner warn" role="status"><Icon name="alert" /><span>{d.message}</span></div></div>
+      )}
+      {!d || d.records.length === 0 ? (
+        <div className="bd"><p className="dim note">No app of this cluster has a hostname under <code>{s.consoleAppsDomain}</code> yet.</p></div>
+      ) : (
+        <DNSRecordsTable records={d.records} />
+      )}
+      <div className="bd">
+        <p className="dim note">
+          The console keeps one record per hostname, more specific than <code>*.{s.consoleAppsDomain}</code>, which points at the console&apos;s cluster. A new hostname gets its record within a minute or two of its deploy.
+        </p>
+      </div>
+    </section>
+  );
 }
 
 // ---- certificates ----------------------------------------------------------------------

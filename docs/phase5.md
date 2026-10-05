@@ -505,7 +505,9 @@ a credential change without the annotation arrives within a minute.
 - Per-cluster throughput is one TCP connection (WebSocket through Traefik);
   fine for API traffic, not for bulk data.
 - The agent runs the full reconciler set, including the DNS reconciler with
-  no console hostname; per-cluster apps domains are W4's.
+  no console hostname; per-cluster apps domains are W4's. Records for a
+  remote cluster's hostnames under the console's apps domain: see DNS for
+  remote clusters.
 
 ## As built (W4)
 
@@ -592,9 +594,9 @@ a credential change without the annotation arrives within a minute.
   wizard names each project's cluster; a cluster picker on Monitoring ›
   Metrics and on Monitoring › Logs (without a project); a banner on every
   page while a cluster is unreachable. All of it renders nothing while only
-  `local` exists. Not built: a cluster picker on Settings (apps domain) and
-  Network › Firewall — their API takes `?cluster=`; W1 owns those pages
-  this phase.
+  `local` exists. Not built: a cluster picker on Network › Firewall — its API
+  takes `?cluster=`; W1 owns that page this phase. (Settings got its picker
+  for the apps domain with DNS for remote clusters.)
 - **Tests**: `internal/server/multicluster_test.go` runs a second envtest
   cluster ("edge", same CRDs, RBAC and reconcilers) behind a test Registry
   with the edge's console identity, so remote connections, caches and
@@ -902,6 +904,125 @@ Closes the gap between W1 (Cloud Firewall, Load Balancer, CSI) and W2/W3
   deletes it after its servers (waiting while Hetzner still counts
   something attached); networks without Kwerft's label are never deleted.
 - **Not covered**: the CCM in remote clusters (install-time only, and the
-  token arrives after the first install), and DNS records for a remote
-  cluster's Load Balancer (the cluster has no DNS token; point its records
-  at the Load Balancer's addresses shown on the card).
+  token arrives after the first install). DNS records for a remote
+  cluster's Load Balancer: its app hostnames under the console's apps
+  domain follow it (DNS for remote clusters, below: the cluster reports the
+  Load Balancer's addresses while it serves); records under a domain of the
+  cluster's own stay manual (point them at the addresses on the card).
+
+## DNS for remote clusters (2026-10-05)
+
+**Problem.** Apps in a remote cluster (agent mode) got hostnames under the
+console's apps domain (`router-next.apps.kwerft.dev` on `kwerft-dedi-1`),
+but the only record was the console's `*.apps.kwerft.dev`, pointing at the
+console's cluster. The remote cluster has no DNS token (it never leaves
+the management cluster) and had no ConsoleSettings at all, so it neither
+wrote records nor reported where it is reached.
+
+**Decision: per-host records under the shared apps domain (built).** The
+console keeps one A/AAAA pair per hostname a remote cluster serves under
+the console's apps domain, pointing at that cluster. Being more specific
+than the wildcard, the record wins; `*.<appsDomain>` keeps pointing at the
+console's cluster. The remote cluster issues each hostname's certificate
+itself through HTTP-01, as it would for any per-host listener.
+
+**Alternative: a wildcard per cluster** (`*.<cluster>.<appsDomain>` →
+the cluster, apps named `<app>.<cluster>.<appsDomain>`). One record and one
+certificate per cluster, no per-deploy DNS writes, no listener limit, HTTPS
+at once. But the wildcard certificate needs DNS-01, so the console would
+have to issue it and copy the TLS Secret into the cluster (the mirroring
+path exists), and names change when an app moves to another cluster.
+
+**Recommendation.** Keep per-host records as the default: it is what users
+expect, names do not depend on placement, nothing secret leaves the
+console, and remote clusters serve few hostnames so far. Add the
+per-cluster wildcard (console-issued, mirrored certificate) as an opt-in
+per cluster once one serves many hostnames or many new ones a week. Costs
+of the default, to watch:
+- Let's Encrypt: one certificate per hostname; 50 per week per registered
+  domain (`kwerft.dev`), shared with the console's certificates, and 5 per
+  week per exact hostname (reinstalls re-issue).
+- At most 59 hostnames with listeners per remote Gateway.
+- A new hostname answers a minute or two after its deploy: the Cluster
+  reconciler polls every minute, then the record, then HTTP-01.
+- Only names one label below the apps domain: a record for `a.b.<apps>`
+  makes `b.<apps>` an empty non-terminal, which the wildcard then no
+  longer answers for (RFC 4592). Such names are reported (`Unsupported`)
+  with a suggested `a-b.<apps>`.
+
+**As built.**
+- *Types.* `Cluster.status.publicAddresses`, `.hostnames[]`
+  (`{hostname, project, since}`) and `.dns` (a `DNSStatus`, as on
+  ConsoleSettings). Record states `Pending` (the cluster's addresses are
+  unknown; existing records stay) and `Unsupported`; records carry
+  `project` and purpose `app`.
+- *Cluster reconciler* (`cluster_hostnames.go`), every pass for a
+  connected cluster, through the tunnel: creates the cluster's
+  ConsoleSettings when it has none (empty spec; only then does its Domain
+  reconciler report `status.publicAddresses`: the nodes', or the Load
+  Balancer's while it serves), copies those addresses, and lists its
+  Domains for hostnames below the console's apps domain that won their
+  claim there (listener assigned for the current generation), one per
+  hostname, the oldest claim's. A disconnected cluster keeps what it last
+  reported, so its records stay; a read error keeps them too.
+- *DNS reconciler* (`dns_clusters.go`, the console's process only:
+  `RemoteClusters`), in the same sync as the console's records, with the
+  same ownership labels (`kwerft.dev/managed-by`, `kwerft.dev/instance`):
+  - a hostname the console's own cluster holds (a Domain with a listener)
+    stays the console's; the remote cluster is told (`Conflict`);
+  - of two remote clusters, the older claim (`since`, then name) gets the
+    record, the other is told;
+  - records point at the cluster's public addresses (private ones left
+    out); without any, existing records are held (`Pending`);
+  - records Kwerft did not create, CNAMEs and another installation's
+    records are reported, never changed, exactly as for the console's;
+  - a hostname that goes away, or a deleted Cluster, loses its records in
+    the next sync (the zone is read from the last status);
+  - with managed records off, nothing is written; clusters with hostnames
+    are told to create the records by hand.
+  Triggers: Cluster changes of addresses, hostnames or deletion; local
+  Domains whose listener changes for a hostname a remote cluster wants;
+  the 10-minute resync. Status goes to `Cluster.status.dns` (merge patch of
+  that field alone); the console's own `status.dns` lists only its own.
+- *Certificates in the remote cluster.* Its Domain reconciler gives each
+  such hostname a per-host listener (no wildcard there), whose certificate
+  gateway-shim requests from the cluster's `letsencrypt` ClusterIssuer
+  (HTTP-01 through its own Gateway). cert-manager's self-check waits until
+  the name resolves to the cluster, so Let's Encrypt is asked only after
+  the record is live. `PUT /settings/apps?cluster=<remote>` refuses DNS-01
+  or managed records for the console's apps domain itself (they would take
+  over the console's wildcard); HTTP-01 is fine, and a domain of the
+  cluster's own works as before.
+- *API/UI.* `GET /domains` items of remote clusters carry `dns` (state,
+  values, message); the cluster JSON carries `publicAddresses` and `dns`;
+  `GET /settings?cluster=<remote>` adds `consoleAppsDomain`,
+  `consoleRecords` and `clusterDNS`. Network › Domains has a DNS column and
+  cluster badges (with more than one cluster), the cluster page a DNS card,
+  Settings a cluster picker for the apps domain, DNS records and
+  certificates, and the deploy wizard says where a remote project's
+  hostname will point.
+- *Tests.* `dns_clusters_test.go` (fake client + Hetzner fake: records per
+  cluster, older claim, local claim wins, deep names, held while addresses
+  are unknown, removal, foreign records, management off, agent mode),
+  `cluster_hostnames_test.go` (envtest: the remote ConsoleSettings,
+  addresses and hostnames reported, kept while disconnected),
+  `internal/server/dns_clusters_test.go` (two-cluster envtest: Domains list,
+  remote settings view, the DNS-01 guard).
+
+**Trying it on the real setup** (with the user's go; one certificate for
+the new name):
+1. Deploy the console (`make web && make dev-server HOST=root@46.224.139.73`)
+   and the agent on `kwerft-dedi-1` with the same image (see the
+   dedicated-server notes); the installer applies the new CRDs.
+2. `kubectl get consolesettings kwerft -o yaml` on the agent cluster: created
+   by the console, `status.publicAddresses: [65.108.43.91]`.
+3. Give an app there a public hostname one label below the apps domain,
+   e.g. `router-next.apps.kwerft.dev`. Within about a minute
+   `kubectl get cluster kwerft-dedi-1 -o yaml` on the console shows it in
+   `status.hostnames` and `status.dns` (Managed), and
+   `dig +short router-next.apps.kwerft.dev` answers `65.108.43.91` (other
+   names under `apps.kwerft.dev` still the console's address).
+4. On the agent cluster the Domain's certificate becomes Ready
+   (`kubectl get certificates -A`), and the app answers on HTTPS.
+5. Remove the hostname: its record goes in the next sync; the name falls
+   back to the wildcard.

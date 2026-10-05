@@ -36,6 +36,8 @@ func ForKind(kind schema.GroupVersionKind) interface{} {
 		return &apiv1alpha1.CloudServerStatusApplyConfiguration{}
 	case v1alpha1.SchemeGroupVersion.WithKind("Cluster"):
 		return &apiv1alpha1.ClusterApplyConfiguration{}
+	case v1alpha1.SchemeGroupVersion.WithKind("ClusterHostname"):
+		return &apiv1alpha1.ClusterHostnameApplyConfiguration{}
 	case v1alpha1.SchemeGroupVersion.WithKind("ClusterSpec"):
 		return &apiv1alpha1.ClusterSpecApplyConfiguration{}
 	case v1alpha1.SchemeGroupVersion.WithKind("ClusterStatus"):

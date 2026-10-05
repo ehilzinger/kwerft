@@ -91,8 +91,36 @@ type ClusterStatus struct {
 	// clusters only, copied through the agent's tunnel.
 	// +optional
 	HetznerCloud *HetznerCloudStatus `json:"hetznerCloud,omitempty"`
+	// PublicAddresses are where the cluster's ingress is reached: what its
+	// own ConsoleSettings reports (its nodes' public addresses, or its Load
+	// Balancer's). Remote clusters only; kept while the agent is away.
+	// +optional
+	PublicAddresses []string `json:"publicAddresses,omitempty"`
+	// Hostnames under the console's apps domain that the cluster's Domains
+	// hold (their Gateway listener is assigned). The console's DNS
+	// reconciler points a record of its own at PublicAddresses for each.
+	// Remote clusters only; kept while the agent is away.
+	// +kubebuilder:validation:MaxItems=500
+	// +optional
+	Hostnames []ClusterHostname `json:"hostnames,omitempty"`
+	// DNS is what the console's DNS reconciler did for Hostnames (Settings ›
+	// Let Kwerft create the DNS records).
+	// +optional
+	DNS *DNSStatus `json:"dns,omitempty"`
 	// +optional
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
+}
+
+// ClusterHostname is a public hostname one of a remote cluster's Domains
+// holds.
+type ClusterHostname struct {
+	Hostname string `json:"hostname"`
+	// Project (namespace) of the Domain.
+	Project string `json:"project"`
+	// Since is when the Domain was created: of two clusters wanting a
+	// hostname, the older claim gets the record.
+	// +optional
+	Since metav1.Time `json:"since,omitzero"`
 }
 
 // Cluster is a Kubernetes cluster managed from this console. It lives in

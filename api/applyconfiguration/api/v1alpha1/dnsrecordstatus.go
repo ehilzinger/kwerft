@@ -13,8 +13,11 @@ import (
 type DNSRecordStatusApplyConfiguration struct {
 	// Hostname, e.g. ops.example.com or *.apps.example.com.
 	Hostname *string `json:"hostname,omitempty"`
-	// Purpose: console, console-next, console-previous or apps.
+	// Purpose: console, console-next, console-previous, apps, or app (a
+	// remote cluster's hostname under the apps domain).
 	Purpose *string `json:"purpose,omitempty"`
+	// Project of the Domain, for purpose app.
+	Project *string `json:"project,omitempty"`
 	// Zone that contains the hostname; empty for NoZone.
 	Zone *string `json:"zone,omitempty"`
 	// State of the hostname's records.
@@ -43,6 +46,14 @@ func (b *DNSRecordStatusApplyConfiguration) WithHostname(value string) *DNSRecor
 // If called multiple times, the Purpose field is set to the value of the last call.
 func (b *DNSRecordStatusApplyConfiguration) WithPurpose(value string) *DNSRecordStatusApplyConfiguration {
 	b.Purpose = &value
+	return b
+}
+
+// WithProject sets the Project field in the declarative configuration to the given value
+// and returns the receiver, so that objects can be built by chaining "With" function invocations.
+// If called multiple times, the Project field is set to the value of the last call.
+func (b *DNSRecordStatusApplyConfiguration) WithProject(value string) *DNSRecordStatusApplyConfiguration {
+	b.Project = &value
 	return b
 }
 

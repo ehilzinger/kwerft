@@ -1067,6 +1067,10 @@ type domainJSON struct {
 	Message     string     `json:"message,omitempty"`
 	NotAfter    *time.Time `json:"notAfter,omitempty"`
 	Created     time.Time  `json:"created"`
+	// DNS is the record the console keeps for a remote cluster's hostname
+	// under its apps domain (the Cluster's status.dns); none for the
+	// console's own cluster, whose apps the wildcard record covers.
+	DNS *dnsRecordJSON `json:"dns,omitempty"`
 }
 
 func domainSummary(d *kwerftv1.Domain) domainJSON {
@@ -1115,6 +1119,7 @@ func (a *api) domainList(w http.ResponseWriter, r *http.Request) {
 	}) {
 		return
 	}
+	a.attachClusterDNS(ctx, out)
 	slices.SortFunc(out, func(x, y domainJSON) int {
 		if n := strings.Compare(x.Hostname, y.Hostname); n != 0 {
 			return n

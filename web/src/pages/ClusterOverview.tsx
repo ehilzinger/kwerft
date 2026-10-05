@@ -4,6 +4,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { ApiError, api } from "../api";
 import { Dialog } from "../components/Dialog";
 import { Field } from "../components/Field";
+import { DNSRecordsTable } from "../components/DNSRecords";
 import { Icon } from "../components/Icon";
 import { clusterState, clustersApi, clustersKey, nodesText, providerLabel, type AgentInstall, type Cluster } from "../clusterAdmin";
 import { ago } from "../workloads";
@@ -123,7 +124,33 @@ function Overview({ c }: { c: Cluster }) {
         </div>
       </div>
       {c.cloud && !c.deleting && <ClusterCloudCard c={c} cloud={c.cloud} />}
+      {!local && !c.deleting && <ClusterDNSCard c={c} />}
     </>
+  );
+}
+
+/** Where the cluster is reached and the records the console keeps for its
+ * hostnames under the apps domain (docs/phase5.md › DNS for remote clusters). */
+function ClusterDNSCard({ c }: { c: Cluster }) {
+  const d = c.dns;
+  return (
+    <section className="card">
+      <h2>DNS</h2>
+      <div className="bd">
+        <p className="note">
+          Reached at {c.publicAddresses?.length ? <code>{c.publicAddresses.join(", ")}</code> : <span className="dim">addresses not reported yet</span>}.
+          {" "}The console keeps a DNS record for each of the cluster&apos;s hostnames under its apps domain, pointing here; the cluster gets their certificates itself.
+        </p>
+      </div>
+      {d?.message && (
+        <div className="bd"><div className="banner warn" role="status"><Icon name="alert" /><span>{d.message}</span></div></div>
+      )}
+      {d && d.records.length > 0 ? (
+        <DNSRecordsTable records={d.records} />
+      ) : (
+        <div className="bd"><p className="dim note">No app of this cluster has a hostname under the console&apos;s apps domain.</p></div>
+      )}
+    </section>
   );
 }
 

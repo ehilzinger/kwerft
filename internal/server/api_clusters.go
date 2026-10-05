@@ -85,21 +85,32 @@ type clusterJSON struct {
 	HetznerCloud *hetznerSpecJSON `json:"hetznerCloud,omitempty"`
 	// Cloud: a hetzner-cloud cluster's Cloud Firewall and Load Balancer
 	// (api_hcloud.go).
-	Cloud        *clusterCloudJSON  `json:"cloud,omitempty"`
-	Phase        string             `json:"phase"`
-	Message      string             `json:"message,omitempty"`
-	Connected    bool               `json:"connected"`
-	Deleting     bool               `json:"deleting,omitempty"`
-	HasToken     bool               `json:"hasToken"`
-	Nodes        int32              `json:"nodes"`
-	ReadyNodes   int32              `json:"readyNodes"`
-	Kubernetes   string             `json:"kubernetesVersion,omitempty"`
-	AgentVersion string             `json:"agentVersion,omitempty"`
-	LastSeen     *time.Time         `json:"lastSeen,omitempty"`
-	CreatedAt    time.Time          `json:"createdAt"`
-	Agent        *clusterAgentJSON  `json:"agent,omitempty"`
-	Pools        []clusterPoolJSON  `json:"pools,omitempty"`
-	Conditions   []metav1.Condition `json:"conditions,omitempty"`
+	Cloud        *clusterCloudJSON `json:"cloud,omitempty"`
+	Phase        string            `json:"phase"`
+	Message      string            `json:"message,omitempty"`
+	Connected    bool              `json:"connected"`
+	Deleting     bool              `json:"deleting,omitempty"`
+	HasToken     bool              `json:"hasToken"`
+	Nodes        int32             `json:"nodes"`
+	ReadyNodes   int32             `json:"readyNodes"`
+	Kubernetes   string            `json:"kubernetesVersion,omitempty"`
+	AgentVersion string            `json:"agentVersion,omitempty"`
+	LastSeen     *time.Time        `json:"lastSeen,omitempty"`
+	CreatedAt    time.Time         `json:"createdAt"`
+	Agent        *clusterAgentJSON `json:"agent,omitempty"`
+	Pools        []clusterPoolJSON `json:"pools,omitempty"`
+	// PublicAddresses: where a remote cluster's ingress is reached.
+	PublicAddresses []string `json:"publicAddresses,omitempty"`
+	// DNS: the records the console keeps for a remote cluster's hostnames
+	// under its apps domain.
+	DNS        *clusterDNSJSON    `json:"dns,omitempty"`
+	Conditions []metav1.Condition `json:"conditions,omitempty"`
+}
+
+type clusterDNSJSON struct {
+	Records  []dnsRecordJSON `json:"records"`
+	Message  string          `json:"message,omitempty"`
+	SyncedAt *time.Time      `json:"syncedAt,omitempty"`
 }
 
 type hetznerSpecJSON struct {
@@ -139,6 +150,10 @@ func (c *clustersAPI) view(cl *kwerftv1.Cluster) clusterJSON {
 	if cl.Status.LastSeen != nil {
 		t := cl.Status.LastSeen.Time
 		out.LastSeen = &t
+	}
+	out.PublicAddresses = cl.Status.PublicAddresses
+	if d := cl.Status.DNS; d != nil {
+		out.DNS = &clusterDNSJSON{Records: dnsRecordsView(d.Records), Message: d.Message, SyncedAt: timePtr(d.SyncedAt)}
 	}
 	if cond := meta.FindStatusCondition(cl.Status.Conditions, controllers.ConditionReady); cond != nil {
 		out.Message = cond.Message

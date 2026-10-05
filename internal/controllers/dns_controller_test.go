@@ -40,7 +40,7 @@ func newDNSFixture(t *testing.T, spec kwerftv1.ConsoleSettingsSpec, status kwerf
 	hz := hetznertest.New(t, dnsToken, zones...)
 	settings := &kwerftv1.ConsoleSettings{ObjectMeta: metav1.ObjectMeta{Name: kwerftv1.ConsoleSettingsName}, Spec: spec, Status: status}
 	c := fake.NewClientBuilder().WithScheme(NewScheme()).
-		WithStatusSubresource(&kwerftv1.ConsoleSettings{}).
+		WithStatusSubresource(&kwerftv1.ConsoleSettings{}, &kwerftv1.Cluster{}, &kwerftv1.Domain{}).
 		WithObjects(settings,
 			&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "kube-system", UID: types.UID(dnsInstance)}},
 			&corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: DNSTokenSecret, Namespace: GatewayNamespace},

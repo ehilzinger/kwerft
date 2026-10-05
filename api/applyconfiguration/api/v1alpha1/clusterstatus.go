@@ -25,7 +25,19 @@ type ClusterStatusApplyConfiguration struct {
 	// reported (its Cloud Firewall and Load Balancer); hetzner-cloud
 	// clusters only, copied through the agent's tunnel.
 	HetznerCloud *HetznerCloudStatusApplyConfiguration `json:"hetznerCloud,omitempty"`
-	Conditions   []metav1.ConditionApplyConfiguration  `json:"conditions,omitempty"`
+	// PublicAddresses are where the cluster's ingress is reached: what its
+	// own ConsoleSettings reports (its nodes' public addresses, or its Load
+	// Balancer's). Remote clusters only; kept while the agent is away.
+	PublicAddresses []string `json:"publicAddresses,omitempty"`
+	// Hostnames under the console's apps domain that the cluster's Domains
+	// hold (their Gateway listener is assigned). The console's DNS
+	// reconciler points a record of its own at PublicAddresses for each.
+	// Remote clusters only; kept while the agent is away.
+	Hostnames []ClusterHostnameApplyConfiguration `json:"hostnames,omitempty"`
+	// DNS is what the console's DNS reconciler did for Hostnames (Settings ›
+	// Let Kwerft create the DNS records).
+	DNS        *DNSStatusApplyConfiguration         `json:"dns,omitempty"`
+	Conditions []metav1.ConditionApplyConfiguration `json:"conditions,omitempty"`
 }
 
 // ClusterStatusApplyConfiguration constructs a declarative configuration of the ClusterStatus type for use with
@@ -95,6 +107,37 @@ func (b *ClusterStatusApplyConfiguration) WithReadyNodes(value int32) *ClusterSt
 // If called multiple times, the HetznerCloud field is set to the value of the last call.
 func (b *ClusterStatusApplyConfiguration) WithHetznerCloud(value *HetznerCloudStatusApplyConfiguration) *ClusterStatusApplyConfiguration {
 	b.HetznerCloud = value
+	return b
+}
+
+// WithPublicAddresses adds the given value to the PublicAddresses field in the declarative configuration
+// and returns the receiver, so that objects can be build by chaining "With" function invocations.
+// If called multiple times, values provided by each call will be appended to the PublicAddresses field.
+func (b *ClusterStatusApplyConfiguration) WithPublicAddresses(values ...string) *ClusterStatusApplyConfiguration {
+	for i := range values {
+		b.PublicAddresses = append(b.PublicAddresses, values[i])
+	}
+	return b
+}
+
+// WithHostnames adds the given value to the Hostnames field in the declarative configuration
+// and returns the receiver, so that objects can be build by chaining "With" function invocations.
+// If called multiple times, values provided by each call will be appended to the Hostnames field.
+func (b *ClusterStatusApplyConfiguration) WithHostnames(values ...*ClusterHostnameApplyConfiguration) *ClusterStatusApplyConfiguration {
+	for i := range values {
+		if values[i] == nil {
+			panic("nil value passed to WithHostnames")
+		}
+		b.Hostnames = append(b.Hostnames, *values[i])
+	}
+	return b
+}
+
+// WithDNS sets the DNS field in the declarative configuration to the given value
+// and returns the receiver, so that objects can be built by chaining "With" function invocations.
+// If called multiple times, the DNS field is set to the value of the last call.
+func (b *ClusterStatusApplyConfiguration) WithDNS(value *DNSStatusApplyConfiguration) *ClusterStatusApplyConfiguration {
+	b.DNS = value
 	return b
 }
 

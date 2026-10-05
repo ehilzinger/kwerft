@@ -179,15 +179,30 @@ export function Deploy() {
   const { multi, unreachable } = useClusters();
   const chosenProject = projects.data?.find((p) => p.name === project);
   // Until a hostname is typed, suggest <app>.<apps domain> (Settings).
-  const settings = useQuery({ queryKey: ["settings"], queryFn: settingsApi.get, staleTime: 60_000 });
-  const appsDomain = settings.data?.appsDomain;
+  const settings = useQuery({ queryKey: ["settings"], queryFn: () => settingsApi.get(), staleTime: 60_000 });
+  // A project in a remote cluster: that cluster's apps domain, else the
+  // console's, whose records the console keeps for it per hostname.
+  const projectCluster = chosenProject?.cluster ?? LOCAL;
+  const clusterSettings = useQuery({
+    queryKey: ["settings", projectCluster], queryFn: () => settingsApi.get(projectCluster),
+    enabled: projectCluster !== LOCAL && !unreachable.includes(projectCluster), staleTime: 60_000, retry: false,
+  });
+  const remote = projectCluster !== LOCAL ? clusterSettings.data : undefined;
+  const ownAppsDomain = remote?.appsDomain && remote.appsDomain !== settings.data?.appsDomain ? remote.appsDomain : undefined;
+  const appsDomain = projectCluster === LOCAL ? settings.data?.appsDomain : ownAppsDomain ?? settings.data?.appsDomain;
   const [domainTouched, setDomainTouched] = useState(false);
   const domain = appsDomain && !domainTouched ? `${f.name || "app"}.${appsDomain}` : f.domain;
-  const domainHint = !appsDomain || !domain.endsWith("." + appsDomain)
-    ? "Point its DNS A record at this server. Kwerft gets a Let's Encrypt certificate automatically."
-    : settings.data?.wildcardDomain && underWildcard(domain, appsDomain)
-      ? `Covered by the ${settings.data.wildcardDomain} wildcard: no DNS record or certificate to wait for.`
-      : `The *.${appsDomain} DNS record covers it; Kwerft gets a Let's Encrypt certificate automatically.`;
+  const domainHint = projectCluster !== LOCAL && !ownAppsDomain && appsDomain && domain.endsWith("." + appsDomain)
+    ? !underWildcard(domain, appsDomain)
+      ? `Kwerft keeps DNS records only for names one level below ${appsDomain}; create this one by hand, pointing at cluster ${projectCluster}.`
+      : settings.data?.manageRecords
+        ? `Kwerft points ${domain} at cluster ${projectCluster} with a DNS record of its own; the cluster gets a Let's Encrypt certificate once it is live, usually within a few minutes.`
+        : `Point a DNS record for ${domain} at cluster ${projectCluster}${remote?.publicAddresses.length ? ` (${remote.publicAddresses.join(", ")})` : ""}; it gets a Let's Encrypt certificate automatically.`
+    : !appsDomain || !domain.endsWith("." + appsDomain)
+      ? `Point its DNS A record at ${projectCluster !== LOCAL ? `cluster ${projectCluster}` : "this server"}. Kwerft gets a Let's Encrypt certificate automatically.`
+      : (remote ?? settings.data)?.wildcardDomain && underWildcard(domain, appsDomain)
+        ? `Covered by the ${(remote ?? settings.data)!.wildcardDomain} wildcard: no DNS record or certificate to wait for.`
+        : `The *.${appsDomain} DNS record covers it; Kwerft gets a Let's Encrypt certificate automatically.`;
   // Git connections that may build in this project; the one for the
   // repository's host is picked until the user chooses.
   const conns = useQuery({ queryKey: ["git-connections"], queryFn: gitApi.connections, enabled: f.source === "git", retry: false, staleTime: 30_000 });

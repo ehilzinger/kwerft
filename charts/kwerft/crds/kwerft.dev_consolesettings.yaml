@@ -329,9 +329,13 @@ spec:
                           type: string
                         message:
                           type: string
+                        project:
+                          description: Project of the Domain, for purpose app.
+                          type: string
                         purpose:
-                          description: 'Purpose: console, console-next, console-previous
-                            or apps.'
+                          description: |-
+                            Purpose: console, console-next, console-previous, apps, or app (a
+                            remote cluster's hostname under the apps domain).
                           type: string
                         state:
                           description: State of the hostname's records.
@@ -342,6 +346,8 @@ spec:
                           - TakenOver
                           - NoZone
                           - Error
+                          - Pending
+                          - Unsupported
                           type: string
                         values:
                           description: Values the hostname's A and AAAA records hold

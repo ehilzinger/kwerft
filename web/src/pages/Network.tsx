@@ -1,6 +1,9 @@
 import { useState } from "react";
 import { Link } from "@tanstack/react-router";
 import { useQuery } from "@tanstack/react-query";
+import { useClusters } from "../clusters";
+import { ClusterBadge } from "../components/ClusterUI";
+import { RecordPill } from "../components/DNSRecords";
 import { Icon } from "../components/Icon";
 import { jobs, shortDate, type Domain } from "../jobs";
 import { words } from "../workloads";
@@ -43,7 +46,8 @@ export function Network() {
 }
 
 function Domains({ q }: { q: { data?: Domain[]; isPending: boolean; isError: boolean; error: unknown } }) {
-  const settings = useQuery({ queryKey: ["settings"], queryFn: settingsApi.get, refetchInterval: 20000 });
+  const { multi } = useClusters();
+  const settings = useQuery({ queryKey: ["settings"], queryFn: () => settingsApi.get(), refetchInterval: 20000 });
   const console_ = settings.data?.consoleDomain ?? window.location.hostname;
   const consoleCert = settings.data?.certificates.find((c) => c.purpose === "console");
   const wildcard = settings.data?.certificates.find((c) => c.purpose === "apps-wildcard");
@@ -53,11 +57,12 @@ function Domains({ q }: { q: { data?: Domain[]; isPending: boolean; isError: boo
       {q.isError && <div className="banner bad" role="alert"><Icon name="alert" /><span>{errorText(q.error)}</span></div>}
       <div className="card scroll-x">
         <table className="t">
-          <thead><tr><th>Hostname</th><th>Routes to</th><th>Certificate</th><th>Expires</th><th>Listener</th></tr></thead>
+          <thead><tr><th>Hostname</th><th>Routes to</th>{multi && <th>DNS</th>}<th>Certificate</th><th>Expires</th><th>Listener</th></tr></thead>
           <tbody>
             <tr>
               <td className="nm">{console_}</td>
               <td>Kwerft console <Link to="/settings" className="dim">· Settings</Link></td>
+              {multi && <td className="dim">—</td>}
               <td>{consoleCert ? <SettingsCert state={consoleCert.state} message={consoleCert.message} /> : <span className="pill mute nodot">Console</span>}</td>
               <td className="dim">{consoleCert?.notAfter ? shortDate(consoleCert.notAfter) : "—"}</td>
               <td className="mono dim">console</td>
@@ -66,6 +71,7 @@ function Domains({ q }: { q: { data?: Domain[]; isPending: boolean; isError: boo
               <tr>
                 <td className="nm">{wildcard.hostnames.join(", ")}</td>
                 <td className="dim">Apps directly under it <Link to="/settings">· Settings</Link></td>
+                {multi && <td className="dim">—</td>}
                 <td><SettingsCert state={wildcard.state} message={wildcard.message} /> <span className="tag">DNS-01</span></td>
                 <td className="dim">{wildcard.notAfter ? shortDate(wildcard.notAfter) : "—"}</td>
                 <td className="mono dim">apps-wildcard</td>
@@ -76,7 +82,11 @@ function Domains({ q }: { q: { data?: Domain[]; isPending: boolean; isError: boo
                 <td className="nm"><a href={`https://${d.hostname}`} target="_blank" rel="noreferrer">{d.hostname}</a></td>
                 <td>
                   {d.app ? <Link to="/apps/$project/$name" params={{ project: d.project, name: d.app }}>{d.project}/{d.app}</Link> : <span className="dim">{d.project} · no app</span>}
+                  <ClusterBadge cluster={d.cluster} />
                 </td>
+                {multi && (
+                  <td>{d.dns ? <><RecordPill r={d.dns} />{d.dns.values.length > 0 && <span className="sub mono">{d.dns.values.join(", ")}</span>}</> : <span className="dim">—</span>}</td>
+                )}
                 <td><CertStatus d={d} /></td>
                 <td className={expiresSoon(d.notAfter) ? "warn-text" : undefined} title={d.notAfter ? new Date(d.notAfter).toLocaleString() : undefined}>{d.notAfter ? shortDate(d.notAfter) : <span className="dim">—</span>}</td>
                 <td className="mono dim">{d.listener ?? "—"}</td>

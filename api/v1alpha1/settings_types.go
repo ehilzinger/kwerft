@@ -329,7 +329,7 @@ type LoadBalancerStatus struct {
 }
 
 // DNSRecordState says where a managed hostname's records stand.
-// +kubebuilder:validation:Enum=Managed;External;Conflict;TakenOver;NoZone;Error
+// +kubebuilder:validation:Enum=Managed;External;Conflict;TakenOver;NoZone;Error;Pending;Unsupported
 type DNSRecordState string
 
 const (
@@ -348,14 +348,24 @@ const (
 	DNSNoZone DNSRecordState = "NoZone"
 	// DNSError: the provider's API failed for this host.
 	DNSError DNSRecordState = "Error"
+	// DNSPending: a remote cluster's hostname waits for the cluster's public
+	// addresses; records it already has stay as they are.
+	DNSPending DNSRecordState = "Pending"
+	// DNSUnsupported: a remote cluster's hostname Kwerft keeps no record for
+	// (more than one label below the apps domain).
+	DNSUnsupported DNSRecordState = "Unsupported"
 )
 
 // DNSRecordStatus is one hostname Kwerft keeps records for.
 type DNSRecordStatus struct {
 	// Hostname, e.g. ops.example.com or *.apps.example.com.
 	Hostname string `json:"hostname"`
-	// Purpose: console, console-next, console-previous or apps.
+	// Purpose: console, console-next, console-previous, apps, or app (a
+	// remote cluster's hostname under the apps domain).
 	Purpose string `json:"purpose"`
+	// Project of the Domain, for purpose app.
+	// +optional
+	Project string `json:"project,omitempty"`
 	// Zone that contains the hostname; empty for NoZone.
 	// +optional
 	Zone string `json:"zone,omitempty"`

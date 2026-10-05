@@ -3,6 +3,7 @@
 // them; owners and admins change them. The DNS token is write-only.
 
 import { request } from "./api";
+import { clusterQuery } from "./clusters";
 
 export type CertificateState = {
   name: string;
@@ -13,12 +14,15 @@ export type CertificateState = {
   notAfter?: string;
 };
 
-export type DNSRecordState = "Managed" | "External" | "Conflict" | "TakenOver" | "NoZone" | "Error";
+export type DNSRecordState = "Managed" | "External" | "Conflict" | "TakenOver" | "NoZone" | "Error" | "Pending" | "Unsupported";
 
-/** A hostname whose A/AAAA records Kwerft keeps (spec.dns.manageRecords). */
+/** A hostname whose A/AAAA records Kwerft keeps (spec.dns.manageRecords).
+ * Purpose "app": a remote cluster's hostname under the console's apps domain. */
 export type DNSRecord = {
   hostname: string;
-  purpose: "console" | "console-next" | "console-previous" | "apps";
+  purpose: "console" | "console-next" | "console-previous" | "apps" | "app";
+  /** Purpose app: the Domain's project. */
+  project?: string;
   zone?: string;
   state: DNSRecordState;
   values: string[];
@@ -48,7 +52,17 @@ export type Settings = {
   certificates: CertificateState[];
   ready?: { status: boolean; reason: string; message: string };
   hcloud: HCloud;
+  /** The cluster whose settings these are. */
+  cluster: string;
+  /** A remote cluster: the console's apps domain, whether the console keeps
+   * DNS records for the cluster's hostnames under it, and those records. */
+  consoleAppsDomain?: string;
+  consoleRecords?: boolean;
+  clusterDNS?: ClusterDNS;
 };
+
+/** The records the console keeps for a remote cluster's hostnames. */
+export type ClusterDNS = { records: DNSRecord[]; message?: string; syncedAt?: string };
 
 // ---- Hetzner Cloud API (api_hcloud.go) -------------------------------------
 
@@ -119,14 +133,14 @@ export type PasskeyHolder = { email: string; name: string; passkeys: number; tot
 export type AppsSaved = { settings: Settings; zone?: string; warning?: string };
 
 export const settingsApi = {
-  get: () => request<Settings>("/settings"),
+  get: (cluster?: string) => request<Settings>(`/settings${clusterQuery(cluster)}`),
   dnsCheck: (hostname: string, wildcard = false) =>
     request<DNSCheck>("/settings/dns-check", { method: "POST", json: { hostname, wildcard } }),
   passkeyHolders: () => request<PasskeyHolder[]>("/settings/passkeys"),
   moveConsole: (hostname: string, confirm: string) =>
     request<Settings>("/settings/console-domain", { method: "PUT", json: { hostname, confirm } }),
-  saveApps: (s: { appsDomain: string; tls: "http01" | "dns01"; manageRecords: boolean; token?: string }) =>
-    request<AppsSaved>("/settings/apps", { method: "PUT", json: { ...s, provider: s.tls === "dns01" || s.manageRecords ? "hetzner" : "" } }),
+  saveApps: (s: { appsDomain: string; tls: "http01" | "dns01"; manageRecords: boolean; token?: string }, cluster?: string) =>
+    request<AppsSaved>(`/settings/apps${clusterQuery(cluster)}`, { method: "PUT", json: { ...s, provider: s.tls === "dns01" || s.manageRecords ? "hetzner" : "" } }),
   saveHCloudToken: (token: string) => request<HCloudTokenSaved>("/settings/hcloud-token", { method: "PUT", json: { token } }),
   removeHCloudToken: () => request<{ settings: Settings }>("/settings/hcloud-token", { method: "DELETE" }),
   saveHCloud: (s: { firewall: "sync" | "off"; loadBalancer: { enabled: boolean; type?: string; location?: string } }) =>

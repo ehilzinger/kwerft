@@ -2,6 +2,7 @@
 // the read-only Domains list. Like workloads.ts, the server acts as the
 // signed-in user, so a 403 is Kubernetes RBAC talking.
 import { request } from "./api";
+import type { DNSRecord } from "./settings";
 import type { Condition, EnvVar, Size } from "./workloads";
 
 // ---- volumes ---------------------------------------------------------------
@@ -172,6 +173,8 @@ export type Domain = {
   message?: string;
   notAfter?: string;
   created: string;
+  /** A remote cluster's hostname: the DNS record the console keeps for it. */
+  dns?: DNSRecord;
 };
 
 // ---- client ----------------------------------------------------------------

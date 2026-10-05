@@ -2,7 +2,7 @@
 // cluster runs Kwerft in agent mode and connects to the console; the console
 // reaches its API through that connection. Owners and admins only.
 import { request } from "./api";
-import type { HCloudStatus } from "./settings";
+import type { ClusterDNS, HCloudStatus } from "./settings";
 
 export type ClusterProvider = "local" | "hetzner-cloud" | "adopted";
 export type ClusterPhase = "Pending" | "Provisioning" | "Connected" | "Disconnected" | "Failed" | "";
@@ -29,6 +29,10 @@ export type Cluster = {
   createdAt: string;
   agent?: { remote: string; since: string; error?: string };
   pools?: { name: string; role: string; serverType: string; location: string; count: number; readyNodes: number }[];
+  /** A remote cluster: where its ingress is reached. */
+  publicAddresses?: string[];
+  /** A remote cluster: the records the console keeps for its hostnames under the apps domain. */
+  dns?: ClusterDNS;
   conditions?: { type: string; status: string; reason: string; message: string }[];
 };
 
