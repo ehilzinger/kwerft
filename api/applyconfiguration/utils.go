@@ -28,6 +28,20 @@ func ForKind(kind schema.GroupVersionKind) interface{} {
 		return &apiv1alpha1.AppSourceApplyConfiguration{}
 	case v1alpha1.SchemeGroupVersion.WithKind("AppVolume"):
 		return &apiv1alpha1.AppVolumeApplyConfiguration{}
+	case v1alpha1.SchemeGroupVersion.WithKind("AvailableUpdate"):
+		return &apiv1alpha1.AvailableUpdateApplyConfiguration{}
+	case v1alpha1.SchemeGroupVersion.WithKind("BackupPlan"):
+		return &apiv1alpha1.BackupPlanApplyConfiguration{}
+	case v1alpha1.SchemeGroupVersion.WithKind("BackupPlanSpec"):
+		return &apiv1alpha1.BackupPlanSpecApplyConfiguration{}
+	case v1alpha1.SchemeGroupVersion.WithKind("BackupPlanStatus"):
+		return &apiv1alpha1.BackupPlanStatusApplyConfiguration{}
+	case v1alpha1.SchemeGroupVersion.WithKind("BackupRun"):
+		return &apiv1alpha1.BackupRunApplyConfiguration{}
+	case v1alpha1.SchemeGroupVersion.WithKind("BackupSettings"):
+		return &apiv1alpha1.BackupSettingsApplyConfiguration{}
+	case v1alpha1.SchemeGroupVersion.WithKind("BackupsStatus"):
+		return &apiv1alpha1.BackupsStatusApplyConfiguration{}
 	case v1alpha1.SchemeGroupVersion.WithKind("CertificateState"):
 		return &apiv1alpha1.CertificateStateApplyConfiguration{}
 	case v1alpha1.SchemeGroupVersion.WithKind("CloudFirewallStatus"):
@@ -48,6 +62,8 @@ func ForKind(kind schema.GroupVersionKind) interface{} {
 		return &apiv1alpha1.ConsoleSettingsSpecApplyConfiguration{}
 	case v1alpha1.SchemeGroupVersion.WithKind("ConsoleSettingsStatus"):
 		return &apiv1alpha1.ConsoleSettingsStatusApplyConfiguration{}
+	case v1alpha1.SchemeGroupVersion.WithKind("DerivedSecretKey"):
+		return &apiv1alpha1.DerivedSecretKeyApplyConfiguration{}
 	case v1alpha1.SchemeGroupVersion.WithKind("DNSRecordStatus"):
 		return &apiv1alpha1.DNSRecordStatusApplyConfiguration{}
 	case v1alpha1.SchemeGroupVersion.WithKind("DNSSettings"):
@@ -62,6 +78,8 @@ func ForKind(kind schema.GroupVersionKind) interface{} {
 		return &apiv1alpha1.DomainStatusApplyConfiguration{}
 	case v1alpha1.SchemeGroupVersion.WithKind("EmailSettings"):
 		return &apiv1alpha1.EmailSettingsApplyConfiguration{}
+	case v1alpha1.SchemeGroupVersion.WithKind("EtcdSnapshotSettings"):
+		return &apiv1alpha1.EtcdSnapshotSettingsApplyConfiguration{}
 	case v1alpha1.SchemeGroupVersion.WithKind("FirewallRule"):
 		return &apiv1alpha1.FirewallRuleApplyConfiguration{}
 	case v1alpha1.SchemeGroupVersion.WithKind("FirewallRuleSpec"):
@@ -92,6 +110,8 @@ func ForKind(kind schema.GroupVersionKind) interface{} {
 		return &apiv1alpha1.LoadBalancerSettingsApplyConfiguration{}
 	case v1alpha1.SchemeGroupVersion.WithKind("LoadBalancerStatus"):
 		return &apiv1alpha1.LoadBalancerStatusApplyConfiguration{}
+	case v1alpha1.SchemeGroupVersion.WithKind("MaintenanceWindow"):
+		return &apiv1alpha1.MaintenanceWindowApplyConfiguration{}
 	case v1alpha1.SchemeGroupVersion.WithKind("NodePool"):
 		return &apiv1alpha1.NodePoolApplyConfiguration{}
 	case v1alpha1.SchemeGroupVersion.WithKind("NodePoolSpec"):
@@ -116,6 +136,12 @@ func ForKind(kind schema.GroupVersionKind) interface{} {
 		return &apiv1alpha1.ProjectSpecApplyConfiguration{}
 	case v1alpha1.SchemeGroupVersion.WithKind("ProjectStatus"):
 		return &apiv1alpha1.ProjectStatusApplyConfiguration{}
+	case v1alpha1.SchemeGroupVersion.WithKind("Restore"):
+		return &apiv1alpha1.RestoreApplyConfiguration{}
+	case v1alpha1.SchemeGroupVersion.WithKind("RestoreSpec"):
+		return &apiv1alpha1.RestoreSpecApplyConfiguration{}
+	case v1alpha1.SchemeGroupVersion.WithKind("RestoreStatus"):
+		return &apiv1alpha1.RestoreStatusApplyConfiguration{}
 	case v1alpha1.SchemeGroupVersion.WithKind("Schedule"):
 		return &apiv1alpha1.ScheduleApplyConfiguration{}
 	case v1alpha1.SchemeGroupVersion.WithKind("ScheduleHistory"):
@@ -124,6 +150,14 @@ func ForKind(kind schema.GroupVersionKind) interface{} {
 		return &apiv1alpha1.ScheduleSpecApplyConfiguration{}
 	case v1alpha1.SchemeGroupVersion.WithKind("ScheduleStatus"):
 		return &apiv1alpha1.ScheduleStatusApplyConfiguration{}
+	case v1alpha1.SchemeGroupVersion.WithKind("SecretKeyStatus"):
+		return &apiv1alpha1.SecretKeyStatusApplyConfiguration{}
+	case v1alpha1.SchemeGroupVersion.WithKind("SecretSet"):
+		return &apiv1alpha1.SecretSetApplyConfiguration{}
+	case v1alpha1.SchemeGroupVersion.WithKind("SecretSetSpec"):
+		return &apiv1alpha1.SecretSetSpecApplyConfiguration{}
+	case v1alpha1.SchemeGroupVersion.WithKind("SecretSetStatus"):
+		return &apiv1alpha1.SecretSetStatusApplyConfiguration{}
 	case v1alpha1.SchemeGroupVersion.WithKind("SlackSettings"):
 		return &apiv1alpha1.SlackSettingsApplyConfiguration{}
 	case v1alpha1.SchemeGroupVersion.WithKind("SSOSettings"):
@@ -144,6 +178,26 @@ func ForKind(kind schema.GroupVersionKind) interface{} {
 		return &apiv1alpha1.TrafficRuleSpecApplyConfiguration{}
 	case v1alpha1.SchemeGroupVersion.WithKind("TrafficRuleStatus"):
 		return &apiv1alpha1.TrafficRuleStatusApplyConfiguration{}
+	case v1alpha1.SchemeGroupVersion.WithKind("UpdateSettings"):
+		return &apiv1alpha1.UpdateSettingsApplyConfiguration{}
+	case v1alpha1.SchemeGroupVersion.WithKind("UpdatesStatus"):
+		return &apiv1alpha1.UpdatesStatusApplyConfiguration{}
+	case v1alpha1.SchemeGroupVersion.WithKind("Upgrade"):
+		return &apiv1alpha1.UpgradeApplyConfiguration{}
+	case v1alpha1.SchemeGroupVersion.WithKind("UpgradeBackup"):
+		return &apiv1alpha1.UpgradeBackupApplyConfiguration{}
+	case v1alpha1.SchemeGroupVersion.WithKind("UpgradeCheck"):
+		return &apiv1alpha1.UpgradeCheckApplyConfiguration{}
+	case v1alpha1.SchemeGroupVersion.WithKind("UpgradeNode"):
+		return &apiv1alpha1.UpgradeNodeApplyConfiguration{}
+	case v1alpha1.SchemeGroupVersion.WithKind("UpgradeSpec"):
+		return &apiv1alpha1.UpgradeSpecApplyConfiguration{}
+	case v1alpha1.SchemeGroupVersion.WithKind("UpgradeStatus"):
+		return &apiv1alpha1.UpgradeStatusApplyConfiguration{}
+	case v1alpha1.SchemeGroupVersion.WithKind("UpgradeStep"):
+		return &apiv1alpha1.UpgradeStepApplyConfiguration{}
+	case v1alpha1.SchemeGroupVersion.WithKind("UpgradeVersions"):
+		return &apiv1alpha1.UpgradeVersionsApplyConfiguration{}
 	case v1alpha1.SchemeGroupVersion.WithKind("Volume"):
 		return &apiv1alpha1.VolumeApplyConfiguration{}
 	case v1alpha1.SchemeGroupVersion.WithKind("VolumeSpec"):

@@ -9,6 +9,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"os"
 	"strings"
 	"time"
 
@@ -84,6 +85,17 @@ func Open(ctx context.Context, path string) (*Store, error) {
 }
 
 func (s *Store) Close() error { return s.db.Close() }
+
+// Snapshot writes a consistent copy of the database to path (VACUUM INTO),
+// while the console keeps serving: what upgrades keep for a rollback and
+// backups carry (docs/phase6.md). path must not exist yet.
+func (s *Store) Snapshot(ctx context.Context, path string) error {
+	if _, err := os.Stat(path); err == nil {
+		return fmt.Errorf("snapshot %s: file exists", path)
+	}
+	_, err := s.db.ExecContext(ctx, `VACUUM INTO ?`, path)
+	return err
+}
 
 // migrations run in order; append only, never edit a released one.
 var migrations = []string{

@@ -67,6 +67,50 @@ spec:
                 maxLength: 200
                 pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?\.)+[a-z]([-a-z0-9]*[a-z0-9])?$
                 type: string
+              backups:
+                description: |-
+                  Backups is where backups go (docs/phase6.md). The bucket's access
+                  keys live in the Secret kwerft-backup-credentials and the recovery
+                  key in kwerft-backup-key (kwerft-system), which owners and admins may
+                  write but nobody reads back.
+                properties:
+                  bucket:
+                    maxLength: 63
+                    minLength: 3
+                    type: string
+                  endpoint:
+                    description: Endpoint, e.g. https://fsn1.your-objectstorage.com.
+                    pattern: ^https://[^/\s]+/?$
+                    type: string
+                  etcdSnapshots:
+                    description: |-
+                      EtcdSnapshots: k3s's own snapshots of the cluster state, to the same
+                      bucket; nil keeps k3s's defaults (local only).
+                    properties:
+                      retention:
+                        description: 'Retention: how many snapshots to keep (default
+                          28).'
+                        format: int32
+                        maximum: 500
+                        minimum: 1
+                        type: integer
+                      schedule:
+                        description: Schedule in cron syntax (default every 6 hours).
+                        type: string
+                    type: object
+                  prefix:
+                    description: |-
+                      Prefix inside the bucket, so several consoles can share one
+                      (default: the console's hostname).
+                    maxLength: 200
+                    type: string
+                  region:
+                    description: Region, e.g. fsn1.
+                    type: string
+                required:
+                - bucket
+                - endpoint
+                type: object
               consoleDomain:
                 description: |-
                   ConsoleDomain is the console's hostname. Empty falls back to the
@@ -205,12 +249,79 @@ spec:
                 - http01
                 - dns01
                 type: string
+              updates:
+                description: |-
+                  Updates is how this console learns about and installs new releases
+                  (docs/phase6-upgrades.md); management cluster only, for every cluster.
+                properties:
+                  channel:
+                    default: stable
+                    enum:
+                    - stable
+                    - edge
+                    type: string
+                  kubernetesPatches:
+                    description: KubernetesPatches lets AutoPatch install k3s patch
+                      versions too.
+                    type: boolean
+                  policy:
+                    default: Notify
+                    description: UpdatePolicy is what the console does about new releases.
+                    enum:
+                    - "Off"
+                    - Notify
+                    - AutoPatch
+                    type: string
+                  window:
+                    description: MaintenanceWindow is when automatic upgrades may
+                      start.
+                    properties:
+                      days:
+                        description: 'Days of the week (Mon … Sun); empty: every day.'
+                        items:
+                          type: string
+                        type: array
+                        x-kubernetes-list-type: set
+                      duration:
+                        type: string
+                      start:
+                        description: Start as HH:MM in TimeZone.
+                        pattern: ^([01][0-9]|2[0-3]):[0-5][0-9]$
+                        type: string
+                      timeZone:
+                        description: TimeZone, an IANA name (default UTC).
+                        type: string
+                    required:
+                    - start
+                    type: object
+                type: object
             type: object
           status:
             description: |-
               ConsoleSettingsStatus is written by the Domain reconciler, which owns the
               shared Gateway.
             properties:
+              backups:
+                description: Backups is the state of the backup target.
+                properties:
+                  checkedAt:
+                    format: date-time
+                    type: string
+                  lastSuccessfulAt:
+                    format: date-time
+                    type: string
+                  message:
+                    type: string
+                  recoveryKeyCreatedAt:
+                    description: |-
+                      RecoveryKeyCreatedAt is when the recovery key (the repository
+                      password) was made; it was shown once then.
+                    format: date-time
+                    type: string
+                  state:
+                    description: 'State: NotConfigured, Ready, Error.'
+                    type: string
+                type: object
               certificates:
                 description: Certificates the console and the wildcard listener use.
                 items:
@@ -511,6 +622,61 @@ spec:
               switchedAt:
                 format: date-time
                 type: string
+              updates:
+                description: Updates is what release discovery found (docs/phase6-upgrades.md).
+                properties:
+                  autoPatchPausedBy:
+                    description: |-
+                      AutoPatchPausedBy names the auto-update that failed or rolled back;
+                      AutoPatch waits until an owner resumes it.
+                    type: string
+                  available:
+                    items:
+                      description: AvailableUpdate is one release the console could
+                        upgrade to.
+                      properties:
+                        allowed:
+                          description: 'Allowed: preflight-free rules (order, upgradeFrom,
+                            supported k3s).'
+                          type: boolean
+                        component:
+                          description: UpgradeComponent is what an Upgrade moves to
+                            a new version.
+                          enum:
+                          - Kwerft
+                          - Kubernetes
+                          type: string
+                        kind:
+                          description: 'Kind: Patch or Minor.'
+                          type: string
+                        notes:
+                          type: string
+                        reason:
+                          type: string
+                        version:
+                          type: string
+                      required:
+                      - allowed
+                      - component
+                      - kind
+                      - version
+                      type: object
+                    type: array
+                  checkedAt:
+                    format: date-time
+                    type: string
+                  current:
+                    description: UpgradeVersions are the running versions before an
+                      Upgrade.
+                    properties:
+                      kubernetes:
+                        type: string
+                      kwerft:
+                        type: string
+                    type: object
+                  error:
+                    type: string
+                type: object
               wildcardDomain:
                 description: |-
                   WildcardDomain is "*.<appsDomain>" once the wildcard listener serves

@@ -39,6 +39,14 @@ type ConsoleSettingsSpecApplyConfiguration struct {
 	// kwerft-system, which owners and admins may write through the console
 	// but nobody reads back.
 	HetznerCloud *HetznerCloudSettingsApplyConfiguration `json:"hetznerCloud,omitempty"`
+	// Updates is how this console learns about and installs new releases
+	// (docs/phase6-upgrades.md); management cluster only, for every cluster.
+	Updates *UpdateSettingsApplyConfiguration `json:"updates,omitempty"`
+	// Backups is where backups go (docs/phase6.md). The bucket's access
+	// keys live in the Secret kwerft-backup-credentials and the recovery
+	// key in kwerft-backup-key (kwerft-system), which owners and admins may
+	// write but nobody reads back.
+	Backups *BackupSettingsApplyConfiguration `json:"backups,omitempty"`
 }
 
 // ConsoleSettingsSpecApplyConfiguration constructs a declarative configuration of the ConsoleSettingsSpec type for use with
@@ -92,5 +100,21 @@ func (b *ConsoleSettingsSpecApplyConfiguration) WithSSO(value *SSOSettingsApplyC
 // If called multiple times, the HetznerCloud field is set to the value of the last call.
 func (b *ConsoleSettingsSpecApplyConfiguration) WithHetznerCloud(value *HetznerCloudSettingsApplyConfiguration) *ConsoleSettingsSpecApplyConfiguration {
 	b.HetznerCloud = value
+	return b
+}
+
+// WithUpdates sets the Updates field in the declarative configuration to the given value
+// and returns the receiver, so that objects can be built by chaining "With" function invocations.
+// If called multiple times, the Updates field is set to the value of the last call.
+func (b *ConsoleSettingsSpecApplyConfiguration) WithUpdates(value *UpdateSettingsApplyConfiguration) *ConsoleSettingsSpecApplyConfiguration {
+	b.Updates = value
+	return b
+}
+
+// WithBackups sets the Backups field in the declarative configuration to the given value
+// and returns the receiver, so that objects can be built by chaining "With" function invocations.
+// If called multiple times, the Backups field is set to the value of the last call.
+func (b *ConsoleSettingsSpecApplyConfiguration) WithBackups(value *BackupSettingsApplyConfiguration) *ConsoleSettingsSpecApplyConfiguration {
+	b.Backups = value
 	return b
 }

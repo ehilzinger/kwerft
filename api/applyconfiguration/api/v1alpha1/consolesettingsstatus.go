@@ -36,7 +36,11 @@ type ConsoleSettingsStatusApplyConfiguration struct {
 	// HetznerCloud is what the Hetzner Cloud reconciler found and did (the
 	// Cloud Firewall, the Load Balancer). A field of its own, like DNS.
 	HetznerCloud *HetznerCloudStatusApplyConfiguration `json:"hetznerCloud,omitempty"`
-	Conditions   []metav1.ConditionApplyConfiguration  `json:"conditions,omitempty"`
+	// Updates is what release discovery found (docs/phase6-upgrades.md).
+	Updates *UpdatesStatusApplyConfiguration `json:"updates,omitempty"`
+	// Backups is the state of the backup target.
+	Backups    *BackupsStatusApplyConfiguration     `json:"backups,omitempty"`
+	Conditions []metav1.ConditionApplyConfiguration `json:"conditions,omitempty"`
 }
 
 // ConsoleSettingsStatusApplyConfiguration constructs a declarative configuration of the ConsoleSettingsStatus type for use with
@@ -121,6 +125,22 @@ func (b *ConsoleSettingsStatusApplyConfiguration) WithDNS(value *DNSStatusApplyC
 // If called multiple times, the HetznerCloud field is set to the value of the last call.
 func (b *ConsoleSettingsStatusApplyConfiguration) WithHetznerCloud(value *HetznerCloudStatusApplyConfiguration) *ConsoleSettingsStatusApplyConfiguration {
 	b.HetznerCloud = value
+	return b
+}
+
+// WithUpdates sets the Updates field in the declarative configuration to the given value
+// and returns the receiver, so that objects can be built by chaining "With" function invocations.
+// If called multiple times, the Updates field is set to the value of the last call.
+func (b *ConsoleSettingsStatusApplyConfiguration) WithUpdates(value *UpdatesStatusApplyConfiguration) *ConsoleSettingsStatusApplyConfiguration {
+	b.Updates = value
+	return b
+}
+
+// WithBackups sets the Backups field in the declarative configuration to the given value
+// and returns the receiver, so that objects can be built by chaining "With" function invocations.
+// If called multiple times, the Backups field is set to the value of the last call.
+func (b *ConsoleSettingsStatusApplyConfiguration) WithBackups(value *BackupsStatusApplyConfiguration) *ConsoleSettingsStatusApplyConfiguration {
+	b.Backups = value
 	return b
 }
 

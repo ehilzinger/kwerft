@@ -1,0 +1,262 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.20.1
+  name: upgrades.kwerft.dev
+spec:
+  group: kwerft.dev
+  names:
+    kind: Upgrade
+    listKind: UpgradeList
+    plural: upgrades
+    singular: upgrade
+  scope: Cluster
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .spec.component
+      name: Component
+      type: string
+    - jsonPath: .spec.version
+      name: Version
+      type: string
+    - jsonPath: .status.phase
+      name: Phase
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: |-
+          Upgrade is one attempt to upgrade Kwerft or Kubernetes on this cluster.
+          Cluster-scoped; at most one is active at a time, others wait as Queued.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: |-
+              UpgradeSpec is one attempt to move Kwerft or k3s to a version. The API
+              creates it as the owner who asked (annotation kwerft.dev/requested-by);
+              the update policy creates AutoPatch ones as "auto-update".
+            properties:
+              acceptDataRollback:
+                description: |-
+                  AcceptDataRollback acknowledges that rolling back a release marked
+                  rollbackSafe: false restores the database copy, losing writes made
+                  since the backup.
+                type: boolean
+              component:
+                description: UpgradeComponent is what an Upgrade moves to a new version.
+                enum:
+                - Kwerft
+                - Kubernetes
+                type: string
+                x-kubernetes-validations:
+                - message: component cannot be changed
+                  rule: self == oldSelf
+              version:
+                description: Version is a Kwerft release (0.6.0) or a k3s version
+                  (v1.38.1+k3s1).
+                maxLength: 64
+                minLength: 1
+                type: string
+                x-kubernetes-validations:
+                - message: version cannot be changed
+                  rule: self == oldSelf
+            required:
+            - component
+            - version
+            type: object
+          status:
+            description: UpgradeStatus is written by the Upgrade controller and the
+              runner.
+            properties:
+              backup:
+                description: UpgradeBackup is what the upgrade can roll back to.
+                properties:
+                  database:
+                    description: Database is the path of the SQLite copy in the console's
+                      volume.
+                    type: string
+                  etcdSnapshot:
+                    type: string
+                  helmRevisions:
+                    additionalProperties:
+                      format: int32
+                      type: integer
+                    description: |-
+                      HelmRevisions maps "<namespace>/<release>" to its revision before the
+                      upgrade.
+                    type: object
+                type: object
+              conditions:
+                items:
+                  description: Condition contains details for one aspect of the current
+                    state of this API Resource.
+                  properties:
+                    lastTransitionTime:
+                      description: |-
+                        lastTransitionTime is the last time the condition transitioned from one status to another.
+                        This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
+                      format: date-time
+                      type: string
+                    message:
+                      description: |-
+                        message is a human readable message indicating details about the transition.
+                        This may be an empty string.
+                      maxLength: 32768
+                      type: string
+                    observedGeneration:
+                      description: |-
+                        observedGeneration represents the .metadata.generation that the condition was set based upon.
+                        For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
+                        with respect to the current state of the instance.
+                      format: int64
+                      minimum: 0
+                      type: integer
+                    reason:
+                      description: |-
+                        reason contains a programmatic identifier indicating the reason for the condition's last transition.
+                        Producers of specific condition types may define expected values and meanings for this field,
+                        and whether the values are considered a guaranteed API.
+                        The value should be a CamelCase string.
+                        This field may not be empty.
+                      maxLength: 1024
+                      minLength: 1
+                      pattern: ^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$
+                      type: string
+                    status:
+                      description: status of the condition, one of True, False, Unknown.
+                      enum:
+                      - "True"
+                      - "False"
+                      - Unknown
+                      type: string
+                    type:
+                      description: type of condition in CamelCase or in foo.example.com/CamelCase.
+                      maxLength: 316
+                      pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$
+                      type: string
+                  required:
+                  - lastTransitionTime
+                  - message
+                  - reason
+                  - status
+                  - type
+                  type: object
+                type: array
+              finishedAt:
+                format: date-time
+                type: string
+              from:
+                description: UpgradeVersions are the running versions before an Upgrade.
+                properties:
+                  kubernetes:
+                    type: string
+                  kwerft:
+                    type: string
+                type: object
+              message:
+                type: string
+              nodes:
+                items:
+                  description: UpgradeNode is one node's progress in a Kubernetes
+                    upgrade.
+                  properties:
+                    message:
+                      type: string
+                    name:
+                      type: string
+                    state:
+                      description: 'State: Waiting, Draining, Upgrading, Done or Failed.'
+                      type: string
+                    version:
+                      type: string
+                  required:
+                  - name
+                  - state
+                  type: object
+                type: array
+              observedGeneration:
+                format: int64
+                type: integer
+              phase:
+                description: UpgradePhase is where an Upgrade stands (docs/phase6-upgrades.md).
+                type: string
+              preflight:
+                items:
+                  description: UpgradeCheck is one preflight check.
+                  properties:
+                    check:
+                      type: string
+                    message:
+                      type: string
+                    ok:
+                      type: boolean
+                    warning:
+                      description: |-
+                        Warning: a failed check that does not block (e.g. deprecated APIs on
+                        a patch upgrade).
+                      type: boolean
+                  required:
+                  - check
+                  - ok
+                  type: object
+                type: array
+              reason:
+                description: |-
+                  Reason of a failure: Usage, Preflight, Network, Kubernetes, Platform,
+                  Kwerft (the installer's exit codes), Verify or Timeout.
+                type: string
+              startedAt:
+                format: date-time
+                type: string
+              steps:
+                items:
+                  description: UpgradeStep is one installer stage, with its summary
+                    line as printed.
+                  properties:
+                    at:
+                      format: date-time
+                      type: string
+                    detail:
+                      type: string
+                    id:
+                      type: string
+                    label:
+                      type: string
+                    state:
+                      description: 'State: Running, Done, Skipped or Failed.'
+                      type: string
+                  required:
+                  - id
+                  - label
+                  - state
+                  type: object
+                type: array
+            type: object
+        required:
+        - spec
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}

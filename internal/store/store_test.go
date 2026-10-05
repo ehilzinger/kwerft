@@ -112,3 +112,31 @@ func TestAuditIsNewestFirst(t *testing.T) {
 		t.Fatalf("RecentAudit = %+v, %v", got, err)
 	}
 }
+
+func TestSnapshot(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	s, err := Open(ctx, filepath.Join(dir, "kwerft.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	if err := s.CreateUser(ctx, &User{Email: "a@example.com", Name: "A", Role: RoleOwner, PasswordHash: "x"}); err != nil {
+		t.Fatal(err)
+	}
+	copyPath := filepath.Join(dir, "copy.db")
+	if err := s.Snapshot(ctx, copyPath); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Snapshot(ctx, copyPath); err == nil {
+		t.Fatal("overwrote an existing snapshot")
+	}
+	c, err := Open(ctx, copyPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	if u, err := c.UserByEmail(ctx, "a@example.com"); err != nil || u.Name != "A" {
+		t.Fatalf("copy: %+v %v", u, err)
+	}
+}

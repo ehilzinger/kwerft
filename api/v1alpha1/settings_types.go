@@ -85,6 +85,95 @@ type ConsoleSettingsSpec struct {
 	// but nobody reads back.
 	// +optional
 	HetznerCloud *HetznerCloudSettings `json:"hetznerCloud,omitempty"`
+
+	// Updates is how this console learns about and installs new releases
+	// (docs/phase6-upgrades.md); management cluster only, for every cluster.
+	// +optional
+	Updates *UpdateSettings `json:"updates,omitempty"`
+
+	// Backups is where backups go (docs/phase6.md). The bucket's access
+	// keys live in the Secret kwerft-backup-credentials and the recovery
+	// key in kwerft-backup-key (kwerft-system), which owners and admins may
+	// write but nobody reads back.
+	// +optional
+	Backups *BackupSettings `json:"backups,omitempty"`
+}
+
+// UpdatePolicy is what the console does about new releases.
+// +kubebuilder:validation:Enum=Off;Notify;AutoPatch
+type UpdatePolicy string
+
+const (
+	UpdatesOff       UpdatePolicy = "Off"
+	UpdatesNotify    UpdatePolicy = "Notify"
+	UpdatesAutoPatch UpdatePolicy = "AutoPatch"
+)
+
+// UpdateSettings: channel, policy and the maintenance window for AutoPatch.
+type UpdateSettings struct {
+	// +kubebuilder:validation:Enum=stable;edge
+	// +kubebuilder:default=stable
+	// +optional
+	Channel string `json:"channel,omitempty"`
+	// +kubebuilder:default=Notify
+	// +optional
+	Policy UpdatePolicy `json:"policy,omitempty"`
+	// KubernetesPatches lets AutoPatch install k3s patch versions too.
+	// +optional
+	KubernetesPatches bool `json:"kubernetesPatches,omitempty"`
+	// +optional
+	Window *MaintenanceWindow `json:"window,omitempty"`
+}
+
+// MaintenanceWindow is when automatic upgrades may start.
+type MaintenanceWindow struct {
+	// Days of the week (Mon … Sun); empty: every day.
+	// +listType=set
+	// +optional
+	Days []string `json:"days,omitempty"`
+	// Start as HH:MM in TimeZone.
+	// +kubebuilder:validation:Pattern=`^([01][0-9]|2[0-3]):[0-5][0-9]$`
+	Start string `json:"start"`
+	// +optional
+	Duration *metav1.Duration `json:"duration,omitempty"`
+	// TimeZone, an IANA name (default UTC).
+	// +optional
+	TimeZone string `json:"timeZone,omitempty"`
+}
+
+// BackupSettings: the S3-compatible bucket backups go to (Hetzner Object
+// Storage) and the etcd snapshot schedule.
+type BackupSettings struct {
+	// Endpoint, e.g. https://fsn1.your-objectstorage.com.
+	// +kubebuilder:validation:Pattern=`^https://[^/\s]+/?$`
+	Endpoint string `json:"endpoint"`
+	// Region, e.g. fsn1.
+	// +optional
+	Region string `json:"region,omitempty"`
+	// +kubebuilder:validation:MinLength=3
+	// +kubebuilder:validation:MaxLength=63
+	Bucket string `json:"bucket"`
+	// Prefix inside the bucket, so several consoles can share one
+	// (default: the console's hostname).
+	// +kubebuilder:validation:MaxLength=200
+	// +optional
+	Prefix string `json:"prefix,omitempty"`
+	// EtcdSnapshots: k3s's own snapshots of the cluster state, to the same
+	// bucket; nil keeps k3s's defaults (local only).
+	// +optional
+	EtcdSnapshots *EtcdSnapshotSettings `json:"etcdSnapshots,omitempty"`
+}
+
+// EtcdSnapshotSettings schedules k3s etcd snapshots to the bucket.
+type EtcdSnapshotSettings struct {
+	// Schedule in cron syntax (default every 6 hours).
+	// +optional
+	Schedule string `json:"schedule,omitempty"`
+	// Retention: how many snapshots to keep (default 28).
+	// +kubebuilder:validation:Minimum=1
+	// +kubebuilder:validation:Maximum=500
+	// +optional
+	Retention int32 `json:"retention,omitempty"`
 }
 
 // CloudFirewallMode says whether Kwerft keeps a Hetzner Cloud Firewall.
@@ -235,6 +324,14 @@ type ConsoleSettingsStatus struct {
 	// Cloud Firewall, the Load Balancer). A field of its own, like DNS.
 	// +optional
 	HetznerCloud *HetznerCloudStatus `json:"hetznerCloud,omitempty"`
+
+	// Updates is what release discovery found (docs/phase6-upgrades.md).
+	// +optional
+	Updates *UpdatesStatus `json:"updates,omitempty"`
+
+	// Backups is the state of the backup target.
+	// +optional
+	Backups *BackupsStatus `json:"backups,omitempty"`
 
 	// +optional
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
@@ -429,4 +526,51 @@ type ConsoleSettingsList struct {
 
 func init() {
 	SchemeBuilder.Register(&ConsoleSettings{}, &ConsoleSettingsList{})
+}
+
+// UpdatesStatus is the last release discovery.
+type UpdatesStatus struct {
+	// +optional
+	CheckedAt *metav1.Time `json:"checkedAt,omitempty"`
+	// +optional
+	Current *UpgradeVersions `json:"current,omitempty"`
+	// +optional
+	Available []AvailableUpdate `json:"available,omitempty"`
+	// +optional
+	Error string `json:"error,omitempty"`
+	// AutoPatchPausedBy names the auto-update that failed or rolled back;
+	// AutoPatch waits until an owner resumes it.
+	// +optional
+	AutoPatchPausedBy string `json:"autoPatchPausedBy,omitempty"`
+}
+
+// AvailableUpdate is one release the console could upgrade to.
+type AvailableUpdate struct {
+	Component UpgradeComponent `json:"component"`
+	Version   string           `json:"version"`
+	// Kind: Patch or Minor.
+	Kind string `json:"kind"`
+	// +optional
+	Notes string `json:"notes,omitempty"`
+	// Allowed: preflight-free rules (order, upgradeFrom, supported k3s).
+	Allowed bool `json:"allowed"`
+	// +optional
+	Reason string `json:"reason,omitempty"`
+}
+
+// BackupsStatus is the state of the backup target.
+type BackupsStatus struct {
+	// State: NotConfigured, Ready, Error.
+	// +optional
+	State string `json:"state,omitempty"`
+	// +optional
+	Message string `json:"message,omitempty"`
+	// RecoveryKeyCreatedAt is when the recovery key (the repository
+	// password) was made; it was shown once then.
+	// +optional
+	RecoveryKeyCreatedAt *metav1.Time `json:"recoveryKeyCreatedAt,omitempty"`
+	// +optional
+	LastSuccessfulAt *metav1.Time `json:"lastSuccessfulAt,omitempty"`
+	// +optional
+	CheckedAt *metav1.Time `json:"checkedAt,omitempty"`
 }
