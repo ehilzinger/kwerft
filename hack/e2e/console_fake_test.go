@@ -223,7 +223,9 @@ func (f *fakeConsole) serve(w http.ResponseWriter, r *http.Request) {
 		}
 		writeJSONTest(w, 200, out)
 	case len(parts) == 7 && parts[6] == "pods":
-		writeJSONTest(w, 200, []pod{{Name: fmt.Sprintf("%s-%d", parts[5], f.webGen), Status: "Running", Ready: true}})
+		// As the console answers (api_pods.go).
+		writeJSONTest(w, 200, map[string]any{"pods": []pod{{Name: fmt.Sprintf("%s-%d", parts[5], f.webGen), Status: "Running", Ready: true}},
+			"metrics": true, "access": map[string]bool{"logs": true, "exec": false}})
 	case len(parts) == 7 && parts[6] == "builds" && r.Method == "POST":
 		writeJSONTest(w, 201, build{Name: "git-1", Phase: "pending"})
 	case len(parts) == 6 && parts[4] == "builds":

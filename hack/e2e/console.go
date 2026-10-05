@@ -252,10 +252,14 @@ type pod struct {
 	Restarts int32  `json:"restarts"`
 }
 
+// appPods lists an App's replicas (the console answers {"pods": [...],
+// "metrics": …, "access": …}).
 func (c *console) appPods(ctx context.Context, project, name string) ([]pod, error) {
-	var out []pod
+	var out struct {
+		Pods []pod `json:"pods"`
+	}
 	err := c.do(ctx, http.MethodGet, "/api/v1/projects/"+url.PathEscape(project)+"/apps/"+url.PathEscape(name)+"/pods", nil, &out)
-	return out, err
+	return out.Pods, err
 }
 
 type build struct {
