@@ -24,6 +24,7 @@ the same plan in long form.
 | Test servers (2026-10-04) | **Hetzner Cloud now, a dedicated server later** | The e2e harness runs on Cloud servers with a test-project API token stored as a GitHub secret; the dedicated-server run follows when one is available. Deferred to Phase 4, then to Phase 5 with the rest of the Hetzner Cloud API work (2026-10-04): until then releases are checked by hand on the test server. |
 | Build registry (2026-10-04) | **zot (`zot-minimal`, no extensions) in the Kwerft chart; nodes pull `registry.kwerft.internal:5000` through a k3s mirror to a fixed ClusterIP (`10.43.0.50`)** | One Deployment, PVC, Service and policy are simpler than a second release, and zot upgrades with Kwerft. containerd on the host cannot resolve cluster DNS, so `registries.yaml` names the ClusterIP, which Cilium's socket load balancer serves to host processes on every node. Not a NodePort: Cilium answers NodePorts in eBPF before the nftables host firewall, which would publish an unauthenticated registry. Plain HTTP inside the cluster (WireGuard between nodes); a CiliumNetworkPolicy admits only build pods, the console and the nodes (`host`, `remote-node`), which a Kubernetes NetworkPolicy cannot name. Retention per App repository: `buildcache`, the newest 20 tags and every tag pulled within 90 days. The installer restarts k3s only when `registries.yaml` changed and never edits a file it did not write. |
 | Build tools (2026-10-04) | **Rootless BuildKit (`moby/buildkit:<v>-rootless`) and the Railpack frontend image (`ghcr.io/railwayapp/railpack-frontend`, which carries the `railpack` CLI at `/railpack`)**, pinned in `install.sh` | Builds run in `kwerft-builds`, the only namespace with Pod Security `privileged` (rootless BuildKit needs seccomp and AppArmor `Unconfined`); a LimitRange and ResourceQuota cap them, and a NetworkPolicy allows DNS, zot and the internet (no private ranges, no metadata service, nothing in the cluster). |
+| Secret store (2026-10-05) | **Project-scoped `SecretSet`s on Kubernetes Secrets, managed by Kwerft; no Vault/OpenBao.** Phase 6, before the beta | Apps could already reference a Secret, but nothing in Kwerft could create one (the API reads no Secrets, the kubeconfig proxy refuses them). k3s already encrypts Secrets at rest and project RBAC already covers them; a separate vault would be another stateful service to unseal and back up on a 4 GB server. Values are write-only for developers; names and keys are visible through the `SecretSet`'s status. External stores (External Secrets Operator) later, on demand. |
 
 ## Principles
 
@@ -118,6 +119,7 @@ Exit codes: 0 ok · 2 usage · 10 preflight · 20 network/DNS · 30 Kubernetes �
 | `Volume` | PVC (local-path / hcloud-volumes) that Apps and Tasks of a project mount by name; deletion waits while mounted | reconciler ✔ |
 | `Task` | Job (kwerft-batch priority, deny-ingress policy): a one-off run with App's shape, or `fromApp`; "run now" with `envOverrides` | reconciler ✔ |
 | `Schedule` | Tasks on a cron schedule, scheduled by the reconciler (a CronJob could not create Tasks without RBAC in pods) | reconciler ✔ |
+| `SecretSet` | A Secret of the same name (labelled `kwerft.dev/secret-set`) holding a project's shared values, or one App's (`<app>-env`, owned by the App); key names, update times and users in status, values never; a per-namespace Role giving `patch` on exactly these Secrets. Details: Secrets below | Phase 6 |
 | `Build` | Job running rootless BuildKit; pushes to zot; success creates an App revision | types ✔ |
 | `GitConnection` (cluster-scoped) | GitHub App / GitLab / Gitea / deploy key credentials and webhooks | types ✔, Phase 2 |
 | `Domain` | Gateway listener + certificate via cert-manager, or the shared apps wildcard listener for names one level below the apps domain; Apps create one per public port; the older claim wins; hostname fixed after creation; max 59 per-host listeners | reconciler ✔ (records: the apps wildcard record covers Domains under the apps domain; others stay manual) |
@@ -172,6 +174,62 @@ Exit codes: 0 ok · 2 usage · 10 preflight · 20 network/DNS · 30 Kubernetes �
   server: a writer Task fills a shared Volume and restarts an App, a reader
   Task sees the data, a Schedule fires on the minute.
 
+### Secrets (`SecretSet`, Phase 6)
+
+- **Where values live.** In ordinary Kubernetes Secrets in the project's
+  namespace, encrypted at rest by k3s. Kwerft adds the management layer, not
+  a second store. A `SecretSet` (namespaced) owns one Secret of the same name,
+  labelled `kwerft.dev/secret-set`; the reconciler never adopts an existing
+  Secret without that label (condition `Conflict`). Pull secrets and other
+  Secrets in the namespace stay untouched.
+- **Shared and per-app.** A project's shared sets (`payments` with
+  `STRIPE_KEY`, `STRIPE_WEBHOOK`) are referenced by any App, Task or Schedule
+  in that project, so a value is set and rotated once. The "secret" toggle in
+  an App's env editor writes into the App's own set `<app>-env` (owned by the
+  App, deleted with it) and stores a `secretKeyRef` in the spec. Both end up
+  as plain `secretKeyRef`s, which Apps already render
+  (`internal/controllers/app_render.go`).
+- **Write-only values.** The API sets, generates (32 random bytes,
+  base64url, for database passwords and templates) and removes keys by
+  impersonating the user: the reconciler keeps a Role
+  `kwerft:secret-sets` per namespace with `patch` on exactly its Secrets
+  (`resourceNames`), bound to the project's developers, like
+  `kwerft:notify-secrets`. No `get`, no `list`. The API discards the patch
+  response, which would carry the values (see Open follow-ups › "Patch-only"
+  Secrets), and never logs or audits a value — the audit entry names the set
+  and key.
+- **Names without values.** The reconciler (controller permissions) writes
+  each key's name, update time and updater (from the API's per-key
+  annotation), the App/Task/Schedule references using it, and missing keys
+  into the `SecretSet`'s status. Developers and viewers read that through
+  the project's RoleBindings, so listing secrets never touches a Secret and
+  stays confined to the project (cluster-scoped Project status would leak key
+  names across projects). The isolation suite gains: no role reads a value
+  through the API, a project's key names are invisible to other projects.
+- **Reveal.** Owners and admins only, after their password (like the
+  data-key rotation), audited (`secret.reveal`). The reconciler's Role
+  `kwerft:secret-sets-read` (`get` on exactly the managed Secrets, bound to
+  the owner and admin groups) keeps it on impersonation. API tokens and the
+  kubeconfig proxy never reveal.
+- **Rotation rolls the app.** The App reconciler hashes the referenced keys'
+  values into the pod template (`kwerft.dev/secrets-hash`), so a changed
+  value rolls the App like a restart (no new revision); Tasks read the value
+  at their next run. A reference to a missing set or key sets the App
+  condition `SecretMissing` instead of leaving pods in
+  `CreateContainerConfigError`.
+- **Not shared across projects.** Owners and admins can copy a set into
+  another project (server-side, audited); there is no live link, so project
+  isolation holds.
+- **Console:** a Secrets screen per project (sets, keys, used by, last
+  update; set, generate, remove a key; reveal for owners and admins), and
+  the env editor's toggle. YAML export and the Mac app's push/pull carry
+  the `SecretSet` with its key names, never values; the target asks for them.
+- **Multi-cluster:** a set lives in its project's cluster; the API reaches it
+  through the Registry like every other project resource.
+- **Later:** External Secrets Operator as an optional source per set
+  (1Password, Infisical, Vault, Hetzner-hosted OpenBao) for teams that
+  already run one.
+
 ## Security model
 
 - Console unusable until the setup token from the server's disk is presented; no default passwords.
@@ -183,7 +241,7 @@ Exit codes: 0 ok · 2 usage · 10 preflight · 20 network/DNS · 30 Kubernetes �
 - **Pods, logs, shells:** pods, logs and pod metrics are readable by every role; exec is for owner, admin and developer. Both are bound **per project namespace** by the Project reconciler (`kwerft:pods-read`, `kwerft:pods-exec`), never cluster-wide, so no role reaches `kube-system` or `kwerft-system` pods. Shell WebSockets require an Origin naming this console and a valid session before the upgrade; 15 min idle, 1 h maximum, 3 shells per user. Sessions are recorded as asciinema v2 (output only — keystrokes are not recorded because unechoed input is mostly passwords), 0600 on the data volume, kept 90 days, 64 MiB per session; owners and admins download them, audited. Logs stream over SSE with caps (16 KiB lines, 200 lines/s, 15 min idle, 2 h maximum). Verified on the test server (2026-10-04).
 - **Secrets at rest:** TOTP seeds in SQLite are encrypted (AES-GCM) with `KWERFT_DATA_KEY` from the Secret `kwerft-data-key`, which the chart creates once and keeps across upgrades and uninstalls. Back it up together with the database. Sealed values name their key, so it can be rotated: Settings › Data key (owners, with their password) writes a new key to the Secret, re-seals everything and retires the old one. By hand: put the new key in `key` and the old one in `previous`, restart the console (it re-seals at start-up), then remove `previous`. Backups made before a rotation need the old key.
 - Kubernetes API on the private network only; external `kubectl` through Kwerft's proxy with short-lived scoped kubeconfigs.
-- k3s secrets encryption; developers write but cannot read secrets unless granted.
+- k3s secrets encryption; developers write but cannot read secrets; owners and admins reveal one value at a time after their password, audited (Phase 6, `SecretSet`).
 - Exec sessions role-gated, time-limited and recorded.
 - Default-deny between projects, WireGuard between nodes, host firewall with lock-out protection.
 - API tokens scoped, expiring, stored hashed. Signed images, pinned digests, SBOMs.
@@ -198,7 +256,7 @@ Exit codes: 0 ok · 2 usage · 10 preflight · 20 network/DNS · 30 Kubernetes �
 | 3 Monitoring & logs | 13–15 | VictoriaMetrics/Logs, charts, log search, alerts, notification channels | Crash loop alerts in Slack in < 2 min — **usable by the team** |
 | 4 Network & access | 16–19 | TrafficRules + Hubble, server firewall (host rules), per-project access, SSO, API tokens, scoped kubeconfig | Automated RBAC suite proves project isolation |
 | 5 Nodes & clusters | 20–24 | Hetzner Cloud API token, Cloud API nodes, join script, hcloud CSI/LB, Cloud Firewall sync, vSwitch coupling, build node pool, HA, agent; e2e install runs on fresh Cloud servers (per release tag and nightly, upgrade from the previous release, Let's Encrypt staging, sweeper) | Mixed cluster survives losing a node; second cluster managed; every release tag passes a fresh install and an upgrade |
-| 6 Backups, upgrades, beta | 25–28 | Velero to Object Storage, upgrades with rollback, Compose import, templates, docs, license | Full restore onto a new server — **public beta** |
+| 6 Backups, upgrades, beta | 25–28 | Velero to Object Storage, upgrades with rollback, secret store (`SecretSet`), Compose import, templates, docs, license | Full restore onto a new server — **public beta** |
 | 7 Kwerft for Mac | 29–36 | Kernel build in CI, installer `--platform mac`, `local` profile, SwiftUI app around the console, push/pull Projects between instances (spike done 2026-10-04) | A Project runs on a Mac without a terminal and goes live on a Hetzner server with one push |
 
 ### Phase 1 checklist
@@ -229,10 +287,11 @@ Work split and contracts: `docs/phase5.md`. Full multi-cluster; verification on 
 
 - [x] Types: `Cluster`, `NodePool`; `internal/clusters` (Registry); pluggable Hetzner fake; Clusters page skeleton
 - [x] W1 Hetzner Cloud integrations: Cloud API token (write-only, checked against the project, `--config hcloud.tokenFile`), Cloud Firewall sync of the confirmed FirewallRules (one per cluster, by label, never locking out), hcloud CSI with storage class `hcloud-volumes` (Volumes page offers it where it exists), hcloud CCM as an install-time option (provider IDs cannot change later), optional Load Balancer in front of Traefik (PROXY protocol, DNS follows it). Fakes and envtest only; on a server: `docs/phase5.md` › As built (W1)
-- [ ] W2 Node pools & HA: Cloud servers as nodes (join, replace, drain, delete), 3-node HA control plane, build pools scaling to zero, dedicated join and remove, vSwitch coupling (fakes)
+- [x] W2 Node pools & HA: Cloud servers as nodes (join, replace, drain, delete), 3-node HA control plane, build pools scaling to zero, dedicated join and remove, vSwitch coupling (fakes); signed join tokens, k3s bootstrap tokens for workers (`docs/phase5.md` › As built (W2); on real Cloud servers: with the exit criteria)
 - [x] W3 Multi-cluster core: `kwerft agent` tunnel (HTTP/2 CONNECT streams over one WebSocket; the Registry hands out loopback rest.Configs), Cluster reconciler (local, Hetzner Cloud, adopted), agent mode in the installer (`--agent --console --cluster-token`) and chart (`mode: agent`), Clusters list and overview; envtest with a second API server behind the in-process tunnel. Notes in `docs/phase5.md` › As built (W3); on a real second cluster: with the exit criterion
-- [x] W4 Multi-cluster console: every API and page cluster-aware through the Registry (project → cluster, unique names, aggregated lists with `cluster`, 503 for unreachable clusters), observability per cluster through the service proxy, isolation suite across two clusters, cluster badges/filter/picker; per-kind decisions in `docs/phase5.md` (open: mirroring Git connections and notification channels into remote clusters, remote Hubble flows)
+- [x] W4 Multi-cluster console: every API and page cluster-aware through the Registry (project → cluster, unique names, aggregated lists with `cluster`, 503 for unreachable clusters), observability per cluster through the service proxy, isolation suite across two clusters, cluster badges/filter/picker; per-kind decisions in `docs/phase5.md` (open: remote Hubble flows); Git connections and notification channels are mirrored into remote clusters by the Cluster reconciler (W3)
 - [x] W5 e2e install runs per release tag and nightly, sweeper: `hack/e2e` + `.github/workflows/e2e.yml` (called by `release.yml` after publishing), fresh install and upgrade from the previous stable release on `cx33` servers, Let's Encrypt staging (`install.sh --acme-server`), checks of the Phase 1–3 exit criteria, always destroys; tested with fakes, not yet run for real (needs the `HCLOUD_TOKEN` secret: RELEASING.md › e2e install runs)
+- [ ] Hetzner Cloud integrations in remote clusters: agent mode does not run the Hetzner Cloud reconciler yet (it reads ConsoleSettings and the token Secret of the management cluster), so a remote Cloud cluster has no Cloud Firewall sync, Load Balancer or CSI token from Kwerft; needs per-cluster settings (on the Cluster object) and the token mirrored, and the agent naming its cluster (`KWERFT_CLUSTER_NAME`, from its token) in Cloud labels
 - [ ] Exit criteria on real Cloud servers: a node lost with apps reachable; a second cluster managed; a release tag passes e2e
 
 ### Phase 4 checklist
@@ -387,6 +446,7 @@ scripts: `hack/spike-mac/`.
 
 - **Single node is a single point of failure** — say so in the UI; etcd snapshots to Object Storage from day one.
 - **Overhead on small servers** — measured at ≈ 2.4 GB; hold it in CI; `--lite` profile for 4 GB servers.
+- **Backups carry secret values** — k3s encrypts Secrets only in etcd; Velero writes them to Object Storage in plain form. Phase 6 encrypts backups (Kopia repository password kept next to the data key) before `SecretSet`s ship.
 - **Builds and Tasks compete with apps for memory** — Jobs with limits, one build at a time on small nodes, Tasks in the lower `kwerft-batch` priority class, optional build node pool.
 - **Registry retention vs. long-running revisions** — zot deletes a tag that is neither among the newest 20 nor pulled for 90 days, even if a pod still runs it (it was pulled when the pod started); a rescheduled pod then cannot pull. Values are in the chart (`registry.retention`); before the beta, tag images that a revision uses (e.g. a kept `rev-*` pattern) or have the App reconciler re-pull them.
 - **Cloud vs. dedicated asymmetry** — Robot cannot create servers on demand; vSwitch ↔ Cloud Network coupling is per network zone; otherwise WireGuard over public IPs (requires the console to open node ports per joiner — Phase 5).

@@ -149,6 +149,10 @@ type PoolNode struct {
 	PublicIP string `json:"publicIP,omitempty"`
 	// +optional
 	PrivateIP string `json:"privateIP,omitempty"`
+	// ServerType the server runs as (differs from the pool's while it is
+	// being replaced).
+	// +optional
+	ServerType string `json:"serverType,omitempty"`
 	// Phase: Creating, Joining, Ready, Draining, Deleting, Failed.
 	Phase string `json:"phase"`
 	// +optional
@@ -163,6 +167,14 @@ type NodePoolStatus struct {
 	Nodes []PoolNode `json:"nodes,omitempty"`
 	// +optional
 	ReadyNodes int32 `json:"readyNodes,omitempty"`
+	// Desired is how many servers the pool aims for now: spec.count, or
+	// for a builds pool between zero and spec.count with the build load.
+	// +optional
+	Desired int32 `json:"desired,omitempty"`
+	// LastBuildAt is when a builds pool last saw a build running or
+	// queued; it scales to zero ScaleDownAfter later.
+	// +optional
+	LastBuildAt *metav1.Time `json:"lastBuildAt,omitempty"`
 	// +optional
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
 }

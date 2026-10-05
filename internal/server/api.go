@@ -115,6 +115,7 @@ func (a *api) register(mux *http.ServeMux) {
 
 	mux.HandleFunc("GET /api/v1/cluster-status", a.requireUser(a.clusterStatus)) // clusters.go
 	a.registerClusters(mux)                                                      // clusters, and their agents' tunnel endpoint (api_clusters.go)
+	a.registerNodes(mux)                                                         // node pools, nodes, join commands and the join endpoint (api_nodes.go)
 }
 
 // ---- setup -----------------------------------------------------------------

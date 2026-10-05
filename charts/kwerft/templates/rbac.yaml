@@ -29,6 +29,15 @@ rules:
   - apiGroups: [""]
     resources: [pods/exec]
     verbs: [create]
+  # Draining nodes (node pools, "remove node"): evictions respect
+  # PodDisruptionBudgets; local volumes pinned to a node hold its removal.
+  # Join material: k3s bootstrap tokens are Secrets in kube-system (above).
+  - apiGroups: [""]
+    resources: [pods/eviction]
+    verbs: [create]
+  - apiGroups: [""]
+    resources: [persistentvolumes]
+    verbs: [get, list, watch]
   - apiGroups: [apps]
     resources: [deployments, statefulsets, replicasets]
     verbs: [get, list, watch, create, update, patch, delete]
@@ -100,10 +109,11 @@ subjects:
     name: {{ include "kwerft.fullname" . }}
     namespace: {{ .Release.Namespace }}
 ---
-# A remote cluster's metrics, logs and Alertmanager are reached through the
-# Kubernetes service proxy, as the agent's identity (this service account),
-# from the console (docs/phase5.md › As built (W4)). Only in the
-# observability namespace; locally the console uses in-cluster URLs.
+# The cluster's metrics, logs and Alertmanager through the API server's
+# service proxy: how the console reaches a remote cluster's observability
+# stack through the agent tunnel (docs/phase5.md, W4), and the same right
+# locally so both identities stay equal. Only this namespace; the console
+# confines queries to the user's projects itself.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:

@@ -25,9 +25,12 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/util/httpstream"
+	"k8s.io/apimachinery/pkg/util/httpstream/spdy"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/remotecommand"
+	streamhttp "k8s.io/streaming/pkg/httpstream"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
@@ -103,6 +106,41 @@ func newFakeAPI(t *testing.T) *fakeAPI {
 				return
 			}
 		}
+	})
+	// exec over SPDY only (an API server or kubelet without WebSocket
+	// streaming): stdin back on stdout, then success on the error stream.
+	// A WebSocket upgrade is refused, so client-go's fallback executor
+	// switches to SPDY.
+	mux.HandleFunc("/api/v1/namespaces/default/pods/spdy/exec", func(w http.ResponseWriter, r *http.Request) {
+		if websocket.IsWebSocketUpgrade(r) {
+			http.Error(w, "WebSocket streaming is not supported here", http.StatusBadRequest)
+			return
+		}
+		if _, err := httpstream.Handshake(r, w, []string{"v4.channel.k8s.io"}); err != nil {
+			return
+		}
+		streams := make(chan httpstream.Stream, 4)
+		conn := spdy.NewResponseUpgrader().UpgradeResponse(w, r, func(s httpstream.Stream, _ <-chan struct{}) error {
+			streams <- s
+			return nil
+		})
+		if conn == nil {
+			return
+		}
+		defer conn.Close()
+		byType := map[string]httpstream.Stream{}
+		for len(byType) < 3 {
+			select {
+			case s := <-streams:
+				byType[s.Headers().Get(corev1.StreamType)] = s
+			case <-time.After(5 * time.Second):
+				return
+			}
+		}
+		_, _ = io.Copy(byType[corev1.StreamTypeStdout], byType[corev1.StreamTypeStdin])
+		_ = byType[corev1.StreamTypeStdout].Close()
+		_, _ = byType[corev1.StreamTypeError].Write([]byte(`{"metadata":{},"status":"Success"}`))
+		_ = byType[corev1.StreamTypeError].Close()
 	})
 	// Any other upgrade (SPDY, as kubectl exec and port-forward use): an
 	// echo after 101. Only possible over HTTP/1.1.
@@ -326,6 +364,33 @@ func TestTunnelCarriesStreamsAndUpgrades(t *testing.T) {
 		t.Errorf("exec output = %q", out.String())
 	}
 
+	// exec where only SPDY works: client-go's fallback executor (WebSocket
+	// first, as the console's shells use it) switches to SPDY.
+	spdyURL := cs.CoreV1().RESTClient().Post().Resource("pods").Namespace("default").Name("spdy").SubResource("exec").
+		Param("command", "cat").Param("stdin", "true").Param("stdout", "true").URL()
+	wsEx, err := remotecommand.NewWebSocketExecutor(cfg, "GET", spdyURL.String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	spdyEx, err := remotecommand.NewSPDYExecutor(cfg, "POST", spdyURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fallback, err := remotecommand.NewFallbackExecutor(wsEx, spdyEx, func(err error) bool {
+		// client-go >= 0.36 reports k8s.io/streaming's error type, not apimachinery's.
+		return streamhttp.IsUpgradeFailure(err) || streamhttp.IsHTTPSProxyError(err)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	out.Reset()
+	if err := fallback.StreamWithContext(ctx, remotecommand.StreamOptions{Stdin: strings.NewReader("and over SPDY\n"), Stdout: &out}); err != nil {
+		t.Fatalf("exec over SPDY: %v", err)
+	}
+	if out.String() != "and over SPDY\n" {
+		t.Errorf("SPDY exec output = %q", out.String())
+	}
+
 	// Any other upgrade (SPDY) goes to the API server over HTTP/1.1.
 	conn := rawUpgrade(t, cfg, "/upgrade/echo", "Bearer "+cfg.BearerToken)
 	if _, err := conn.Write([]byte("ping")); err != nil {
@@ -476,10 +541,22 @@ func TestTunnelReplacesOlderConnection(t *testing.T) {
 	c.startAgent(t, api.config(), func() (string, error) { return token, nil })
 	waitFor(t, "the first agent", connected(c.hub, "edge"))
 	first, _ := c.hub.Agent("edge")
+	firstCfg, _ := c.hub.RESTConfig("edge")
+	changed := c.hub.Changed()
 
 	// A second agent with the same token takes over; never two sessions.
 	c.startAgent(t, api.config(), func() (string, error) { return token, nil })
 	waitFor(t, "the second agent", func() bool { st, ok := c.hub.Agent("edge"); return ok && st.Since.After(first.Since) })
+	// Callers keeping clients per cluster learn about it: Changed fires and
+	// the endpoint is a new one.
+	select {
+	case <-changed:
+	default:
+		t.Error("Changed did not fire when a connection replaced another")
+	}
+	if cfg, _ := c.hub.RESTConfig("edge"); cfg == nil || cfg.Host == firstCfg.Host {
+		t.Error("a replacing connection kept the old endpoint")
+	}
 	c.hub.mu.Lock()
 	n := len(c.hub.sessions)
 	c.hub.mu.Unlock()

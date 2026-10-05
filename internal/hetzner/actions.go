@@ -2,10 +2,12 @@ package hetzner
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strconv"
 	"time"
 )
@@ -39,6 +41,18 @@ type ActionError struct {
 
 func (e *ActionError) Error() string {
 	return fmt.Sprintf("Hetzner action %s failed: %s (%s)", e.Command, e.Message, e.Code)
+}
+
+// Err is the action's failure, or nil while it runs or after it succeeded.
+func (a Action) Err() error {
+	if a.Status != ActionFailed {
+		return nil
+	}
+	e := &ActionError{Command: a.Command, Code: "action_failed", Message: "the action failed"}
+	if a.Error != nil {
+		e.Code, e.Message = a.Error.Code, a.Error.Message
+	}
+	return e
 }
 
 // ActionPoll is the first wait between polls of a running action; it doubles
@@ -77,12 +91,8 @@ func (c *Client) WaitActions(ctx context.Context, actions ...Action) error {
 			}
 			a = next
 		}
-		if a.Status == ActionFailed {
-			e := &ActionError{Command: a.Command, Code: "action_failed", Message: "the action failed"}
-			if a.Error != nil {
-				e.Code, e.Message = a.Error.Code, a.Error.Message
-			}
-			return e
+		if err := a.Err(); err != nil {
+			return err
 		}
 	}
 	return nil
@@ -110,4 +120,44 @@ func (c *Client) doAction(ctx context.Context, method, path string, in any) erro
 		return err
 	}
 	return c.WaitActions(ctx, body.all()...)
+}
+
+// pagedList reads every page of a Cloud API list (path without query), the
+// items under key: GET /servers answers {"servers": [...], "meta": {...}}.
+func pagedList[T any](ctx context.Context, c *Client, path, key string, q url.Values) ([]T, error) {
+	out := []T{}
+	if q == nil {
+		q = url.Values{}
+	}
+	for page := 1; ; page++ {
+		q.Set("page", strconv.Itoa(page))
+		q.Set("per_page", "50")
+		var body map[string]json.RawMessage
+		if err := c.do(ctx, http.MethodGet, path+"?"+q.Encode(), nil, &body); err != nil {
+			return nil, err
+		}
+		var items []T
+		if raw, ok := body[key]; ok {
+			if err := json.Unmarshal(raw, &items); err != nil {
+				return nil, fmt.Errorf("Hetzner API: %s: %w", key, err)
+			}
+		}
+		out = append(out, items...)
+		var m meta
+		if raw, ok := body["meta"]; ok {
+			_ = json.Unmarshal(raw, &m)
+		}
+		if m.Pagination.NextPage == nil || len(items) == 0 {
+			return out, nil
+		}
+	}
+}
+
+// selector is a query with a label selector, or none when it is empty.
+func selector(labelSelector string) url.Values {
+	q := url.Values{}
+	if labelSelector != "" {
+		q.Set("label_selector", labelSelector)
+	}
+	return q
 }

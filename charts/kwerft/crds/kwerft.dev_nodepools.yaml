@@ -166,6 +166,18 @@ spec:
                   - type
                   type: object
                 type: array
+              desired:
+                description: |-
+                  Desired is how many servers the pool aims for now: spec.count, or
+                  for a builds pool between zero and spec.count with the build load.
+                format: int32
+                type: integer
+              lastBuildAt:
+                description: |-
+                  LastBuildAt is when a builds pool last saw a build running or
+                  queued; it scales to zero ScaleDownAfter later.
+                format: date-time
+                type: string
               nodes:
                 items:
                   description: PoolNode is one server of a NodePool.
@@ -185,6 +197,11 @@ spec:
                     serverID:
                       format: int64
                       type: integer
+                    serverType:
+                      description: |-
+                        ServerType the server runs as (differs from the pool's while it is
+                        being replaced).
+                      type: string
                   required:
                   - name
                   - phase

@@ -11,6 +11,9 @@ type PoolNodeApplyConfiguration struct {
 	ServerID  *int64  `json:"serverID,omitempty"`
 	PublicIP  *string `json:"publicIP,omitempty"`
 	PrivateIP *string `json:"privateIP,omitempty"`
+	// ServerType the server runs as (differs from the pool's while it is
+	// being replaced).
+	ServerType *string `json:"serverType,omitempty"`
 	// Phase: Creating, Joining, Ready, Draining, Deleting, Failed.
 	Phase   *string `json:"phase,omitempty"`
 	Message *string `json:"message,omitempty"`
@@ -51,6 +54,14 @@ func (b *PoolNodeApplyConfiguration) WithPublicIP(value string) *PoolNodeApplyCo
 // If called multiple times, the PrivateIP field is set to the value of the last call.
 func (b *PoolNodeApplyConfiguration) WithPrivateIP(value string) *PoolNodeApplyConfiguration {
 	b.PrivateIP = &value
+	return b
+}
+
+// WithServerType sets the ServerType field in the declarative configuration to the given value
+// and returns the receiver, so that objects can be built by chaining "With" function invocations.
+// If called multiple times, the ServerType field is set to the value of the last call.
+func (b *PoolNodeApplyConfiguration) WithServerType(value string) *PoolNodeApplyConfiguration {
+	b.ServerType = &value
 	return b
 }
 

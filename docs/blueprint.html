@@ -486,6 +486,7 @@ pre.mermaid{background:var(--surface);border:1px solid var(--line);border-radius
             <button data-screen="overview" aria-current="page"><svg><use href="#i-grid"/></svg>Overview</button>
             <button data-screen="apps"><svg><use href="#i-box"/></svg>Apps<span class="count bad">1</span></button>
             <button data-screen="jobs"><svg><use href="#i-clock"/></svg>Jobs<span class="count bad">1</span></button>
+            <button data-screen="secrets"><svg><use href="#i-key"/></svg>Secrets</button>
             <button data-screen="monitoring"><svg><use href="#i-pulse"/></svg>Monitoring<span class="count bad">2</span></button>
             <span class="grp">Infrastructure</span>
             <button data-screen="clusters"><svg><use href="#i-server"/></svg>Clusters &amp; nodes</button>
@@ -660,11 +661,13 @@ pre.mermaid{background:var(--surface);border:1px solid var(--line);border-radius
               </div>
               <div class="card" style="overflow:hidden"><div class="ch-h"><h3>Environment</h3><button class="btn sm"><svg><use href="#i-plus"/></svg>Add variable</button></div>
                 <table class="t"><thead><tr><th>Name</th><th>Value</th><th>Source</th></tr></thead><tbody>
-                  <tr><td class="mono">DATABASE_URL</td><td class="mono dim">•••••••••••••••• <button class="btn ghost sm">Reveal</button></td><td><span class="tag">secret · api-db</span></td></tr>
+                  <tr><td class="mono">DATABASE_URL</td><td class="mono dim">•••••••••••••••• <button class="btn ghost sm">Reveal</button></td><td><span class="tag" data-go="secrets" style="cursor:pointer">secret · postgres-main</span></td></tr>
                   <tr><td class="mono">REDIS_HOST</td><td class="mono">redis.storefront.svc</td><td><span class="tag">plain</span></td></tr>
                   <tr><td class="mono">LOG_LEVEL</td><td class="mono">info</td><td><span class="tag">plain</span></td></tr>
-                  <tr><td class="mono">STRIPE_KEY</td><td class="mono dim">•••••••••••••••• <button class="btn ghost sm">Reveal</button></td><td><span class="tag">secret · payments</span></td></tr>
+                  <tr><td class="mono">STRIPE_KEY</td><td class="mono dim">•••••••••••••••• <button class="btn ghost sm">Reveal</button></td><td><span class="tag" data-go="secrets" style="cursor:pointer">secret · payments</span></td></tr>
+                  <tr><td class="mono">SESSION_SECRET</td><td class="mono dim">•••••••••••••••• <button class="btn ghost sm">Reveal</button></td><td><span class="tag">secret · this app</span></td></tr>
                 </tbody></table>
+                <p class="dim" style="font-size:12px;margin:0;padding:10px 16px;border-top:1px solid var(--line-2)">Secret values are write-only for developers; Reveal is for owners and admins, after their password, and is audited. Changing a value rolls the app without a new revision.</p>
               </div>
               <div class="banner info"><svg><use href="#i-rocket"/></svg><span>Saving creates <b>revision 43</b> and rolls out one replica at a time. Health check <code>GET /healthz :8080</code> must pass before traffic moves.</span><button class="btn pri sm">Save &amp; deploy</button></div>
             </div>
@@ -712,7 +715,7 @@ pre.mermaid{background:var(--surface);border:1px solid var(--line);border-radius
                 <div class="field"><label for="d-rep">Replicas</label><input class="input" id="d-rep" value="2"><span class="hint">Spread across nodes when possible</span></div>
                 <div class="field"><label for="d-hc">Health check</label><input class="input mono" id="d-hc" value="HTTP GET /health :3000"></div>
                 <div class="field full"><label for="d-env">Environment (KEY=value, one per line)</label><textarea class="input mono" id="d-env" rows="3">PDF_TIMEOUT=30s
-S3_BUCKET=acme-invoices</textarea><span class="hint">Mark a variable as secret to store it encrypted and hide it in the UI</span></div>
+S3_BUCKET=acme-invoices</textarea><span class="hint">Mark a variable as secret to keep it write-only in the app's own secret set, or pick a key from a shared set such as <code>payments</code></span></div>
               </div></div>
               <div class="acts" style="justify-content:space-between"><button class="btn" data-next="src">Back</button><button class="btn pri" data-next="netw">Continue</button></div>
             </div>
@@ -805,6 +808,30 @@ S3_BUCKET=acme-invoices</textarea><span class="hint">Mark a variable as secret t
                 <div class="field"><label for="j-re">Retries</label><input class="input mono" id="j-re" value="0"></div>
                 <div class="field full"><label>On success</label><span class="toggle on"><i></i>Restart api once the task succeeds</span></div>
                 <div class="field full"><button class="btn pri">Run now</button><span class="hint">Runs as you; recorded in the audit log</span></div>
+              </div></div>
+            </div>
+          </section>
+
+          <!-- SECRETS -->
+          <section class="view" data-view="secrets" hidden>
+            <div class="ph"><div><h2>Secrets</h2><p class="sub">Project storefront · values are encrypted at rest and write-only · apps reference them by set and key</p></div><div class="acts"><div class="seg" data-seg><button aria-pressed="true">storefront</button><button>internal</button></div><button class="btn pri"><svg><use href="#i-plus"/></svg>New secret set</button></div></div>
+            <div class="banner info"><svg><use href="#i-key"/></svg><span><b>STRIPE_KEY was changed 4 min ago.</b> api and checkout-worker rolled out with the new value; the nightly search-reindex picks it up at its next run.</span></div>
+            <div class="g2">
+              <div class="card" style="overflow:hidden"><div class="ch-h"><h3>Secret sets</h3><span class="dim" style="font-weight:400;font-size:12px">Shared by every app and job in the project</span></div>
+                <table class="t"><thead><tr><th>Set</th><th>Keys</th><th>Used by</th><th>Updated</th></tr></thead><tbody>
+                  <tr><td><span class="nm">payments</span><span class="sub">Stripe live account</span></td><td class="mono">STRIPE_KEY<br>STRIPE_WEBHOOK</td><td>api, checkout-worker</td><td><span class="dim">4 min ago</span><span class="sub">Jonas Petrov</span></td></tr>
+                  <tr><td><span class="nm">postgres-main</span><span class="sub">generated by the PostgreSQL template</span></td><td class="mono">PASSWORD<br>DATABASE_URL</td><td>postgres-main, api, search-reindex</td><td><span class="dim">12 d ago</span><span class="sub">template</span></td></tr>
+                  <tr><td><span class="nm">s3</span><span class="sub">Hetzner Object Storage</span></td><td class="mono">ACCESS_KEY<br>SECRET_KEY</td><td>invoice-renderer, db-backup</td><td><span class="dim">2 mo ago</span><span class="sub">Mara Lindqvist</span></td></tr>
+                  <tr><td><span class="nm">api-env</span><span class="sub">api's own · deleted with the app</span></td><td class="mono">SESSION_SECRET</td><td>api</td><td><span class="dim">3 d ago</span><span class="sub">Jonas Petrov</span></td></tr>
+                  <tr><td><span class="nm">mailer</span><span class="sub"><span class="pill warn">Missing key</span></span></td><td class="mono">SMTP_PASSWORD<br><span class="dim">SMTP_USER — referenced, not set</span></td><td>notifier</td><td><span class="dim">1 h ago</span><span class="sub">Ana Ruiz</span></td></tr>
+                </tbody></table>
+              </div>
+              <div class="card"><h3>payments</h3><div class="bd fields">
+                <div class="field full"><label>STRIPE_KEY</label><input class="input mono" value="••••••••••••••••••••" aria-label="STRIPE_KEY value, hidden"><span class="hint">Set 4 min ago by Jonas Petrov · <button class="btn ghost sm">Reveal</button> owners and admins, after their password, audited</span></div>
+                <div class="field full"><label>STRIPE_WEBHOOK</label><input class="input mono" value="••••••••••••••••••••" aria-label="STRIPE_WEBHOOK value, hidden"><span class="hint">Set 3 mo ago by Mara Lindqvist</span></div>
+                <div class="field full"><label for="sec-new">Add key</label><input class="input mono" id="sec-new" placeholder="NAME"><span class="hint">Type a value or let Kwerft generate one — nobody sees it after saving</span></div>
+                <div class="field full"><label>When a value changes</label><span class="toggle on"><i></i>Roll out apps that use it, one replica at a time</span></div>
+                <div class="field full"><button class="btn pri">Save</button><span class="hint">Recorded in the audit log by set and key, never the value</span></div>
               </div></div>
             </div>
           </section>
@@ -956,7 +983,8 @@ S3_BUCKET=acme-invoices</textarea><span class="hint">Mark a variable as secret t
                   <tr><td>View apps, metrics and logs</td><td class="c yes">✓</td><td class="c yes">✓</td><td class="c yes">✓</td><td class="c yes">✓</td></tr>
                   <tr><td>Deploy, scale, restart apps</td><td class="c yes">✓</td><td class="c yes">✓</td><td class="c yes">✓</td><td class="c no">—</td></tr>
                   <tr><td>Open a shell in a container</td><td class="c yes">✓</td><td class="c yes">✓</td><td class="c part">own projects, recorded</td><td class="c no">—</td></tr>
-                  <tr><td>Read and change secrets</td><td class="c yes">✓</td><td class="c yes">✓</td><td class="c part">write-only</td><td class="c no">—</td></tr>
+                  <tr><td>Set and use secrets</td><td class="c yes">✓</td><td class="c yes">✓</td><td class="c part">within project, write-only</td><td class="c part">key names only</td></tr>
+                  <tr><td>Reveal a secret value</td><td class="c yes">✓</td><td class="c yes">✓</td><td class="c no">—</td><td class="c no">—</td></tr>
                   <tr><td>Edit traffic rules</td><td class="c yes">✓</td><td class="c yes">✓</td><td class="c part">within project</td><td class="c no">—</td></tr>
                   <tr><td>Server firewall, domains, TLS</td><td class="c yes">✓</td><td class="c yes">✓</td><td class="c no">—</td><td class="c no">—</td></tr>
                   <tr><td>Add, drain, remove nodes and clusters</td><td class="c yes">✓</td><td class="c yes">✓</td><td class="c no">—</td><td class="c no">—</td></tr>
@@ -1144,6 +1172,7 @@ curl -fsSL https://get.kwerft.dev | sudo bash -s -- --config /root/kwerft.yaml -
             <tr><td>App</td><td>Deployment or StatefulSet, Service, HTTPRoute, PVCs, HPA, CiliumNetworkPolicy</td><td>Source is an image or a Git repository. Stores revisions for one-click rollback. Compose import creates one App per service.</td></tr>
             <tr><td>Task</td><td>Job</td><td>A one-off run with an App's source, command, env, volumes and resources. “Run now” with env overrides; timeout, retries, and apps to restart once it succeeds, done by the reconciler so the job needs no RBAC.</td></tr>
             <tr><td>Schedule</td><td>CronJob creating Tasks</td><td>Cron expression, time zone, suspend, no overlapping runs by default, history. Last success and failure times become metrics, so a stale schedule can alert.</td></tr>
+            <tr><td>SecretSet</td><td>Secret, plus a Role with <code>patch</code> on exactly the managed Secrets</td><td>Shared values of a project, or one app's own. Status lists keys, who changed them and which apps use them — never values. Changing a value rolls the apps using it.</td></tr>
             <tr><td>Build</td><td>Job running rootless BuildKit, image in the zot registry</td><td>Created by push webhooks or “Build now”; success creates a new App revision. Reports status back to the commit.</td></tr>
             <tr><td>Domain</td><td>Certificate, DNS record (when DNS-01), Gateway listener</td><td>Redirects, HSTS, rate limits, optional SSO gate (forward-auth to Kwerft).</td></tr>
             <tr><td>TrafficRule</td><td>CiliumNetworkPolicy</td><td>Expressed in app/project terms; the UI shows Hubble hit and drop counts per rule.</td></tr>
@@ -1161,7 +1190,7 @@ curl -fsSL https://get.kwerft.dev | sudo bash -s -- --config /root/kwerft.yaml -
             <li><b>Bootstrap:</b> the console is unusable until someone presents the setup token from the server's disk. No default passwords anywhere.</li>
             <li><b>Authorization:</b> Kwerft roles map to Kubernetes ClusterRoles bound per project namespace. The API impersonates the signed-in user, so a bug in Kwerft's own checks cannot exceed that user's Kubernetes rights.</li>
             <li><b>Kubernetes API:</b> bound to the private network only; external <code>kubectl</code> goes through Kwerft's authenticating proxy with short-lived, scoped kubeconfigs.</li>
-            <li><b>Secrets:</b> k3s secrets encryption at rest; developers can write but not read secrets unless granted; values never appear in audit entries or logs.</li>
+            <li><b>Secrets:</b> k3s secrets encryption at rest; secret sets are project-scoped and write-only for developers; owners and admins reveal a value after their password, audited; values never appear in audit entries, logs, YAML exports or pushes between instances.</li>
             <li><b>Shell access:</b> exec sessions are role-gated, time-limited and recorded (asciinema format) for review.</li>
             <li><b>Network:</b> default-deny between projects, WireGuard between nodes, host firewall managed as code, Hetzner Cloud Firewall mirrored for cloud nodes.</li>
             <li><b>API tokens:</b> scoped to projects and verbs, always expiring, shown once, stored hashed.</li>
@@ -1201,7 +1230,7 @@ curl -fsSL https://get.kwerft.dev | sudo bash -s -- --config /root/kwerft.yaml -
               <ul><li>Monorepo, CI, release pipeline, Helm chart skeleton, CRD scaffolding (kubebuilder).</li><li>Installer stages 1–4 on a Hetzner Cloud server <em>and</em> a dedicated server; measure the memory budget.</li><li>Design tokens and component library in the web app.</li></ul>
               <div class="exit"><b>Exit:</b> a nightly CI job creates a Hetzner Cloud server, runs the script, gets a healthy k3s + Cilium, and destroys the server; a weekly job does the same on a dedicated test server reset through the Robot API.</div></div>
             <div class="phase"><div class="h"><b>Phase 1 · Installer &amp; deploy MVP</b><span>weeks 3–8</span></div>
-              <ul><li>Full installer incl. platform detection, TLS and setup token; first-run wizard; owner account with passkey/TOTP.</li><li>Project and App reconcilers; deploy from image; env and secrets; domains with automatic TLS.</li><li>Task and Schedule reconcilers: one-off and cron jobs from the same spec as an App, “run now”, restart apps on success, jobs in a lower priority class than apps.</li><li>Apps list, app detail, Jobs screen, live logs, shell, restart/scale/rollback; YAML export.</li></ul>
+              <ul><li>Full installer incl. platform detection, TLS and setup token; first-run wizard; owner account with passkey/TOTP.</li><li>Project and App reconcilers; deploy from image; env and secret references; domains with automatic TLS.</li><li>Task and Schedule reconcilers: one-off and cron jobs from the same spec as an App, “run now”, restart apps on success, jobs in a lower priority class than apps.</li><li>Apps list, app detail, Jobs screen, live logs, shell, restart/scale/rollback; YAML export.</li></ul>
               <div class="exit"><b>Exit:</b> fresh server → app on a public HTTPS domain in under 10 minutes, without a terminal after the install command; a scheduled job runs and restarts an app on success.</div></div>
             <div class="phase"><div class="h"><b>Phase 2 · Builds from Git</b><span>weeks 9–12</span></div>
               <ul><li>Git connections: GitHub App, GitLab, Gitea/Forgejo, or any Git URL with a deploy key; push webhooks.</li><li>Build resource and controller: rootless BuildKit Jobs, Dockerfile or Railpack, layer cache on a volume, live build logs.</li><li>In-cluster zot registry with per-app retention; auto-deploy on push; build status reported back to the commit.</li></ul>
@@ -1216,7 +1245,7 @@ curl -fsSL https://get.kwerft.dev | sudo bash -s -- --config /root/kwerft.yaml -
               <ul><li>Add/drain/remove nodes via Cloud API and join script; hcloud CSI and LB integration; vSwitch ↔ Cloud Network coupling for mixed clusters.</li><li>Optional build node pool: a Cloud server created for builds and deleted after.</li><li>3-node HA control plane; kwerft-agent tunnel; create and adopt clusters.</li></ul>
               <div class="exit"><b>Exit:</b> a mixed dedicated + cloud cluster loses a node while apps stay reachable; a second cluster is managed from the same console.</div></div>
             <div class="phase"><div class="h"><b>Phase 6 · Backups, upgrades, beta</b><span>weeks 25–28</span></div>
-              <ul><li>BackupPlans to Object Storage with tested restore; etcd snapshot schedule.</li><li>One-click Kwerft and k3s upgrades with automatic rollback; Docker Compose import; templates.</li><li>Docs site, security review, load test of the console with 200 apps; license decided.</li></ul>
+              <ul><li>BackupPlans to Object Storage with tested restore; etcd snapshot schedule.</li><li>One-click Kwerft and k3s upgrades with automatic rollback; Docker Compose import; templates.</li><li>Secret store: project-scoped, write-only secret sets on Kubernetes Secrets, generated values for templates, reveal for owners and admins, apps roll when a value changes.</li><li>Docs site, security review, load test of the console with 200 apps; license decided.</li></ul>
               <div class="exit"><b>Exit:</b> restore a full cluster from Object Storage onto a brand-new server with one script flag. <b>Milestone: public beta.</b></div></div>
             <div class="phase"><div class="h"><b>Phase 7 · Kwerft for Mac</b><span>weeks 29–36</span></div>
               <ul><li>Spike done (4 Oct 2026): k3s in a persistent <code>container machine</code>, set up by the unmodified installer, runs the production stack and survives restarts with its volumes; a <code>container k8s</code> cluster cannot come back after a stop.</li><li>Kwerft's own kernel, built in CI from Apple's config plus a small fragment (<code>xt_socket</code>, legacy iptables, eBPF JIT, BTF): neither kernel <code>container</code> offers runs Cilium.</li><li>Installer <code>--platform mac</code> and a <code>local</code> profile: built-in modules, a stable node address, a local CA for <code>*.kwerft.test</code>, lite observability, Hetzner-only resources off. Same binary, same resources.</li><li>SwiftUI app around the existing console: menu bar, local cluster lifecycle and sizing, the console in a web view, remote instances with tokens in the Keychain. Drives <code>container</code> through its CLI and JSON output.</li><li>Push and pull a Project between instances: export the Kwerft resources, apply the target's Environment overrides, show a diff, apply through the remote API as the signed-in user. Secrets travel by name only; Mac-built images are rebuilt for amd64 and pushed to the server's registry.</li></ul>
@@ -1264,6 +1293,7 @@ curl -fsSL https://get.kwerft.dev | sudo bash -s -- --config /root/kwerft.yaml -
             <li><b>Upstream churn.</b> k3s, Cilium and Gateway API move quickly; pin versions in a release manifest and test upgrades from N-1 and N-2.</li>
           <li><b>Apple <code>container</code> is young.</b> Its Kubernetes plugin is experimental and cannot survive a restart, <code>container machine run</code> loses argument quoting, and the XPC API is not a public contract. The Mac app pins a supported version, talks only to the CLI's JSON output and keeps desired state outside the local cluster.</li>
           <li><b>Owning a kernel.</b> Kwerft for Mac ships its own kernel. Building it takes three minutes; tracking Apple's config and kernel security releases is a standing cost, reduced by upstreaming the missing options to Apple.</li>
+          <li><b>Backups carry secret values.</b> k3s encrypts Secrets only inside etcd; Velero writes them to Object Storage as they are. Backups are encrypted before secret sets ship.</li>
           <li><b>Builds and jobs compete with apps for memory.</b> Builds run as Jobs with limits and queue one at a time on small nodes; Tasks run in a lower priority class, so a job goes before a service; heavy users add a build node pool.</li>
           </ul>
           <h3>Decisions, 4 Oct 2026</h3>
@@ -1274,6 +1304,7 @@ curl -fsSL https://get.kwerft.dev | sudo bash -s -- --config /root/kwerft.yaml -
             <div class="q"><b>One-off and scheduled jobs in v1</b><span>Task and Schedule join Phase 1. Real workloads are more than services: the first pilot runs eight cron jobs and a dozen manual ones beside six services.</span></div>
             <div class="q"><b>Kwerft for Mac after the beta</b><span>A native app on Apple's <code>container</code> runs the same Kwerft locally, so dev workloads move to a Hetzner instance with one push. Re-implementing Kwerft on bare containers was rejected: it would drift from production.</span></div>
             <div class="q"><b>Kwerft for Mac runs k3s in a container machine</b><span>Decided by the spike: the unmodified installer sets up the production stack in a persistent machine that survives restarts with its volumes. Apple's <code>container k8s</code> cannot come back after a stop. Both need Kwerft's own kernel.</span></div>
+            <div class="q"><b>Secrets stay in Kubernetes, managed by Kwerft (5 Oct)</b><span>Project-scoped secret sets on encrypted Kubernetes Secrets, write-only for developers. A separate vault was rejected: one more stateful service to unseal and back up on a small server. External stores can plug in later.</span></div>
             <div class="q"><b>License: to be decided before the public beta</b><span>Every dependency chosen so far is Apache-2.0 or MIT, so all options stay open.</span></div>
           </div>
         </section>
@@ -1310,12 +1341,13 @@ curl -fsSL https://get.kwerft.dev | sudo bash -s -- --config /root/kwerft.yaml -
     app:['App detail','Everything about one app: live replicas, domains, revisions with rollback, streaming logs, Git builds with their logs, and an editable settings form that creates a new revision.','/apps/storefront/api'],
     deploy:['Deploy wizard','Start from a registry image or a Git repository that Kwerft builds in-cluster. Five short steps produce one App resource. Networking defaults to deny-all with explicit sources, and the review step shows exactly which Kubernetes objects will be created.','/deploy'],
     jobs:['Jobs','Scheduled and one-off runs that share an app\'s image, env and volumes. A failed run surfaces like a crash-loop; “Run now” takes env overrides, runs as the user and can restart an app once it succeeds.','/jobs'],
+    secrets:['Secrets','Shared secret sets per project. Developers set values but never read them; the list shows keys, who changed them and which apps use them. Changing a value rolls those apps.','/projects/storefront/secrets'],
     monitoring:['Monitoring','Firing alerts with one-click fixes, top consumers, and alert rules mapped to notification channels.','/monitoring'],
     clusters:['Clusters & nodes','Clusters as cards, nodes as a table. Add capacity from the Hetzner Cloud API or by running a join command on any existing server.','/clusters/fsn1-prod'],
     network:['Network','Traffic rules phrased as app-to-app, with observed hit and drop counts from Hubble. The server firewall and domains/TLS live in the same place.','/network'],
     access:['Access','Members, roles mapped to Kubernetes RBAC, and an append-only audit log of every change and shell session.','/access']
   };
-  const titles = {overview:'Overview',apps:'Apps',app:'Apps / api',deploy:'Deploy app',jobs:'Jobs',monitoring:'Monitoring',clusters:'Clusters & nodes',network:'Network',access:'Access'};
+  const titles = {overview:'Overview',apps:'Apps',app:'Apps / api',deploy:'Deploy app',jobs:'Jobs',secrets:'Secrets',monitoring:'Monitoring',clusters:'Clusters & nodes',network:'Network',access:'Access'};
   function setNote(key){
     const n = notes[key]; if(!n) return;
     $('#note-t').textContent = n[0];

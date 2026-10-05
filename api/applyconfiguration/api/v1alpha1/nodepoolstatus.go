@@ -3,7 +3,8 @@
 package v1alpha1
 
 import (
-	v1 "k8s.io/client-go/applyconfigurations/meta/v1"
+	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	metav1 "k8s.io/client-go/applyconfigurations/meta/v1"
 )
 
 // NodePoolStatusApplyConfiguration represents a declarative configuration of the NodePoolStatus type for use
@@ -11,10 +12,16 @@ import (
 //
 // NodePoolStatus is written by the node pool reconciler.
 type NodePoolStatusApplyConfiguration struct {
-	ObservedGeneration *int64                           `json:"observedGeneration,omitempty"`
-	Nodes              []PoolNodeApplyConfiguration     `json:"nodes,omitempty"`
-	ReadyNodes         *int32                           `json:"readyNodes,omitempty"`
-	Conditions         []v1.ConditionApplyConfiguration `json:"conditions,omitempty"`
+	ObservedGeneration *int64                       `json:"observedGeneration,omitempty"`
+	Nodes              []PoolNodeApplyConfiguration `json:"nodes,omitempty"`
+	ReadyNodes         *int32                       `json:"readyNodes,omitempty"`
+	// Desired is how many servers the pool aims for now: spec.count, or
+	// for a builds pool between zero and spec.count with the build load.
+	Desired *int32 `json:"desired,omitempty"`
+	// LastBuildAt is when a builds pool last saw a build running or
+	// queued; it scales to zero ScaleDownAfter later.
+	LastBuildAt *v1.Time                             `json:"lastBuildAt,omitempty"`
+	Conditions  []metav1.ConditionApplyConfiguration `json:"conditions,omitempty"`
 }
 
 // NodePoolStatusApplyConfiguration constructs a declarative configuration of the NodePoolStatus type for use with
@@ -52,10 +59,26 @@ func (b *NodePoolStatusApplyConfiguration) WithReadyNodes(value int32) *NodePool
 	return b
 }
 
+// WithDesired sets the Desired field in the declarative configuration to the given value
+// and returns the receiver, so that objects can be built by chaining "With" function invocations.
+// If called multiple times, the Desired field is set to the value of the last call.
+func (b *NodePoolStatusApplyConfiguration) WithDesired(value int32) *NodePoolStatusApplyConfiguration {
+	b.Desired = &value
+	return b
+}
+
+// WithLastBuildAt sets the LastBuildAt field in the declarative configuration to the given value
+// and returns the receiver, so that objects can be built by chaining "With" function invocations.
+// If called multiple times, the LastBuildAt field is set to the value of the last call.
+func (b *NodePoolStatusApplyConfiguration) WithLastBuildAt(value v1.Time) *NodePoolStatusApplyConfiguration {
+	b.LastBuildAt = &value
+	return b
+}
+
 // WithConditions adds the given value to the Conditions field in the declarative configuration
 // and returns the receiver, so that objects can be build by chaining "With" function invocations.
 // If called multiple times, values provided by each call will be appended to the Conditions field.
-func (b *NodePoolStatusApplyConfiguration) WithConditions(values ...*v1.ConditionApplyConfiguration) *NodePoolStatusApplyConfiguration {
+func (b *NodePoolStatusApplyConfiguration) WithConditions(values ...*metav1.ConditionApplyConfiguration) *NodePoolStatusApplyConfiguration {
 	for i := range values {
 		if values[i] == nil {
 			panic("nil value passed to WithConditions")

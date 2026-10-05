@@ -20,6 +20,7 @@ import (
 	"k8s.io/apimachinery/pkg/util/httpstream"
 	"k8s.io/client-go/tools/remotecommand"
 	utilexec "k8s.io/client-go/util/exec"
+	streaming "k8s.io/streaming/pkg/httpstream"
 
 	"github.com/ehilzinger/kwerft/internal/controllers"
 )
@@ -102,8 +103,11 @@ func sameHostOrigin(r *http.Request) bool {
 	return err == nil && u.Host != "" && u.Host == r.Host && (u.Scheme == "https" || u.Scheme == "http")
 }
 
+// shouldFallBack: the WebSocket upgrade was refused, so SPDY may work.
+// client-go 0.37 reports k8s.io/streaming's error type; older code paths
+// apimachinery's.
 func shouldFallBack(err error) bool {
-	return httpstream.IsUpgradeFailure(err) || httpstream.IsHTTPSProxyError(err)
+	return streaming.IsUpgradeFailure(err) || httpstream.IsUpgradeFailure(err) || httpstream.IsHTTPSProxyError(err)
 }
 
 // shellOwner is what a shell's pod belongs to: a replica of an App, or the

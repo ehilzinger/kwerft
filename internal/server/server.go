@@ -160,6 +160,10 @@ type Config struct {
 	// clusterHook lets tests adjust a remote cluster's connection once
 	// built (point its observability at fakes); see clusters.go.
 	clusterHook func(*clusterConn)
+
+	// nodesHook lets tests replace the Hetzner Cloud and Robot endpoints of
+	// the nodes API; see api_nodes.go.
+	nodesHook func(*nodesAPI)
 }
 
 // New returns an http.Server ready to ListenAndServe.

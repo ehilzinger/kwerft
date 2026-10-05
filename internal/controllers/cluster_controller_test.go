@@ -3,6 +3,7 @@ package controllers
 import (
 	"context"
 	"fmt"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -10,12 +11,16 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/envtest"
 
 	kwerftv1 "github.com/ehilzinger/kwerft/api/v1alpha1"
 	"github.com/ehilzinger/kwerft/internal/auth"
+	"github.com/ehilzinger/kwerft/internal/builds"
 	"github.com/ehilzinger/kwerft/internal/clusters"
+	"github.com/ehilzinger/kwerft/internal/observability"
 )
 
 // fakeTunnel stands in for the console's clusters.Hub: tests connect and
@@ -26,9 +31,30 @@ type fakeTunnel struct {
 	hashes       map[string]string // the token hash each agent connected with
 	changed      chan struct{}
 	disconnected []string
+	remotes      map[string]client.Client // clients "through the tunnel", per cluster
 }
 
-var testTunnel = &fakeTunnel{agents: map[string]clusters.AgentStatus{}, hashes: map[string]string{}, changed: make(chan struct{})}
+var testTunnel = &fakeTunnel{agents: map[string]clusters.AgentStatus{}, hashes: map[string]string{}, changed: make(chan struct{}),
+	remotes: map[string]client.Client{}}
+
+// remote is the reconciler's Remote: a client for a connected cluster.
+func (f *fakeTunnel) remote(name string) (client.Client, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if _, ok := f.agents[name]; !ok {
+		return nil, clusters.ErrUnavailable
+	}
+	if c, ok := f.remotes[name]; ok {
+		return c, nil
+	}
+	return nil, clusters.ErrUnavailable
+}
+
+func (f *fakeTunnel) setRemote(name string, c client.Client) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.remotes[name] = c
+}
 
 func (f *fakeTunnel) connect(name, hash string, st clusters.AgentStatus) {
 	f.mu.Lock()
@@ -296,5 +322,176 @@ func TestClusterNamesAreChecked(t *testing.T) {
 	got := waitForCluster(t, c.Name, phaseIs(ClusterFailed))
 	if reason, _ := readyReason(got.Status.Conditions, got.Generation); reason != "InvalidName" {
 		t.Errorf("reason %q", reason)
+	}
+}
+
+// TestClusterMirrorsChannelsAndGitConnections: a connected remote cluster (a
+// second API server) gets copies of the management cluster's notification
+// channels and Git connections with their Secrets, kept current and pruned.
+func TestClusterMirrorsChannelsAndGitConnections(t *testing.T) {
+	requireEnvtest(t)
+	ctx := context.Background()
+	env := &envtest.Environment{CRDDirectoryPaths: []string{filepath.Join("..", "..", "charts", "kwerft", "crds")}, ErrorIfCRDPathMissing: true}
+	cfg, err := env.Start()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = env.Stop() })
+	remote, err := client.New(cfg, client.Options{Scheme: NewScheme()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, ns := range []string{observability.Namespace, builds.Namespace} {
+		if err := remote.Create(ctx, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: ns}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// One of the remote cluster's own, which a copy must not replace.
+	if err := remote.Create(ctx, &kwerftv1.NotificationChannel{ObjectMeta: metav1.ObjectMeta{Name: "mirror-theirs"},
+		Spec: kwerftv1.NotificationChannelSpec{Type: kwerftv1.NotifySlack, Slack: &kwerftv1.SlackSettings{Channel: "#theirs"}}}); err != nil {
+		t.Fatal(err)
+	}
+
+	// In the management cluster: a channel with its webhook URL stored, a
+	// Git connection (its reconciler makes the Secret), and a channel of the
+	// same name as the remote's own.
+	ch := channel(t, "mirror-ops", kwerftv1.NotificationChannelSpec{Type: kwerftv1.NotifySlack, Slack: &kwerftv1.SlackSettings{Channel: "#ops"}})
+	channel(t, "mirror-theirs", kwerftv1.NotificationChannelSpec{Type: kwerftv1.NotifySlack, Slack: &kwerftv1.SlackSettings{Channel: "#ours"}})
+	setURL := func(value string) {
+		t.Helper()
+		eventually(t, func() error {
+			var s corev1.Secret
+			if err := k8s.Get(ctx, client.ObjectKey{Namespace: observability.Namespace, Name: observability.ChannelSecret(ch.Name)}, &s); err != nil {
+				return err
+			}
+			if s.Data == nil {
+				s.Data = map[string][]byte{}
+			}
+			s.Data[observability.KeyURL] = []byte(value)
+			return k8s.Update(ctx, &s)
+		})
+		// As the console does after writing credentials.
+		eventually(t, func() error {
+			var cur kwerftv1.NotificationChannel
+			if err := k8s.Get(ctx, client.ObjectKey{Name: ch.Name}, &cur); err != nil {
+				return err
+			}
+			patch := client.MergeFrom(cur.DeepCopy())
+			if cur.Annotations == nil {
+				cur.Annotations = map[string]string{}
+			}
+			cur.Annotations[AnnotationCredentialsUpdated] = time.Now().UTC().Format(time.RFC3339Nano)
+			return k8s.Patch(ctx, &cur, patch)
+		})
+	}
+	setURL("https://hooks.example.com/one")
+	gc := &kwerftv1.GitConnection{ObjectMeta: metav1.ObjectMeta{Name: "mirror-git"},
+		Spec: kwerftv1.GitConnectionSpec{Provider: kwerftv1.Generic, URL: "https://git.example.invalid", Auth: kwerftv1.GitAuthNone}}
+	if err := k8s.Create(ctx, gc); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = k8s.Delete(context.Background(), gc) })
+	// Its credentials Secret, as the Git connection reconciler (not run in
+	// this suite) and the console write it.
+	gitSecret := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Namespace: builds.Namespace, Name: builds.CredentialsSecret(gc.Name)},
+		Data: map[string][]byte{builds.KeyWebhookSecret: []byte("hook-secret")}}
+	if err := k8s.Create(ctx, gitSecret); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = k8s.Delete(context.Background(), gitSecret) })
+
+	c := &kwerftv1.Cluster{
+		ObjectMeta: metav1.ObjectMeta{Name: "mirror-1", Annotations: map[string]string{clusters.TokenHashAnnotation: "x"}},
+		Spec:       kwerftv1.ClusterSpec{Provider: kwerftv1.ClusterAdopted},
+	}
+	if err := k8s.Create(ctx, c); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = k8s.Delete(context.Background(), c) })
+	testTunnel.setRemote(c.Name, remote)
+	testTunnel.connect(c.Name, "x", clusters.AgentStatus{LastSeen: time.Now()})
+
+	remoteSecret := func(ns, name string) (*corev1.Secret, error) {
+		var s corev1.Secret
+		err := remote.Get(ctx, client.ObjectKey{Namespace: ns, Name: name}, &s)
+		return &s, err
+	}
+	// The copies, labelled, each Secret owned by its copy.
+	var copyCh kwerftv1.NotificationChannel
+	eventually(t, func() error {
+		if err := remote.Get(ctx, client.ObjectKey{Name: "mirror-ops"}, &copyCh); err != nil {
+			return err
+		}
+		s, err := remoteSecret(observability.Namespace, observability.ChannelSecret("mirror-ops"))
+		if err != nil {
+			return err
+		}
+		if string(s.Data[observability.KeyURL]) != "https://hooks.example.com/one" {
+			return fmt.Errorf("secret data %v", s.Data)
+		}
+		if !metav1.IsControlledBy(s, &copyCh) || s.Labels[LabelMirrored] != "true" || s.Labels[LabelNotificationChannel] != "mirror-ops" {
+			return fmt.Errorf("secret meta %v %v", s.Labels, s.OwnerReferences)
+		}
+		return nil
+	})
+	if copyCh.Labels[LabelMirrored] != "true" || copyCh.Spec.Slack == nil || copyCh.Spec.Slack.Channel != "#ops" {
+		t.Errorf("channel copy %+v", copyCh)
+	}
+	eventually(t, func() error {
+		var g kwerftv1.GitConnection
+		if err := remote.Get(ctx, client.ObjectKey{Name: "mirror-git"}, &g); err != nil {
+			return err
+		}
+		s, err := remoteSecret(builds.Namespace, builds.CredentialsSecret("mirror-git"))
+		if err != nil {
+			return err
+		}
+		if len(s.Data[builds.KeyWebhookSecret]) == 0 || !metav1.IsControlledBy(s, &g) {
+			return fmt.Errorf("git secret %v %v", s.Data, s.OwnerReferences)
+		}
+		return nil
+	})
+	// The remote cluster's own channel stays its own, and the cluster says why.
+	var theirs kwerftv1.NotificationChannel
+	if err := remote.Get(ctx, client.ObjectKey{Name: "mirror-theirs"}, &theirs); err != nil || theirs.Spec.Slack.Channel != "#theirs" || theirs.Labels[LabelMirrored] != "" {
+		t.Errorf("the remote's own channel was touched: %+v %v", theirs, err)
+	}
+	waitForCluster(t, c.Name, func(c *kwerftv1.Cluster) error {
+		m := meta.FindStatusCondition(c.Status.Conditions, ConditionMirrored)
+		if m == nil || m.Status != metav1.ConditionFalse || !strings.Contains(m.Message, "mirror-theirs") {
+			return fmt.Errorf("mirrored condition %+v", m)
+		}
+		return nil
+	})
+
+	// New credentials reach the copy.
+	setURL("https://hooks.example.com/two")
+	eventually(t, func() error {
+		s, err := remoteSecret(observability.Namespace, observability.ChannelSecret("mirror-ops"))
+		if err != nil {
+			return err
+		}
+		if got := string(s.Data[observability.KeyURL]); got != "https://hooks.example.com/two" {
+			return fmt.Errorf("remote url %q", got)
+		}
+		return nil
+	})
+
+	// Deleted here, gone there (with its Secret).
+	if err := k8s.Delete(ctx, &kwerftv1.NotificationChannel{ObjectMeta: metav1.ObjectMeta{Name: ch.Name}}); err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, func() error {
+		if err := remote.Get(ctx, client.ObjectKey{Name: "mirror-ops"}, &kwerftv1.NotificationChannel{}); !apierrors.IsNotFound(err) {
+			return fmt.Errorf("copy still there: %v", err)
+		}
+		if _, err := remoteSecret(observability.Namespace, observability.ChannelSecret("mirror-ops")); !apierrors.IsNotFound(err) {
+			return fmt.Errorf("copied secret still there: %v", err)
+		}
+		return nil
+	})
+	// ...but never the remote's own.
+	if err := remote.Get(ctx, client.ObjectKey{Name: "mirror-theirs"}, &theirs); err != nil {
+		t.Errorf("the remote's own channel was deleted: %v", err)
 	}
 }

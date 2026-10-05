@@ -1,0 +1,20 @@
+/* Clusters › Nodes */
+.nodes-pools { display: grid; gap: 12px; margin-bottom: 18px; }
+.nodes-empty { margin-bottom: 18px; }
+.pool-h { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; flex-wrap: wrap; padding: 12px 16px; border-bottom: 1px solid var(--line-2); }
+.pool-h h2 { margin: 0; font-size: 14px; font-weight: 600; display: flex; align-items: center; gap: 8px; }
+.pool-msg { padding: 8px 16px 0; }
+.nodes-h { font-size: 14px; font-weight: 600; margin: 18px 0 8px; display: flex; gap: 10px; align-items: baseline; flex-wrap: wrap; }
+.nodes-h .dim { font-weight: 400; font-size: 12.5px; }
+.join-card { margin-top: 18px; }
+.join-card .bd { display: grid; gap: 10px; }
+.join-form { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+.join-ttl { display: inline-flex; gap: 6px; align-items: center; font-size: 13px; }
+.join-ttl .input { width: auto; padding: 4px 8px; }
+.join-cmd { display: grid; gap: 8px; }
+.join-cmd code { display: block; padding: 10px 12px; border-radius: 7px; background: var(--sunk); border: 1px solid var(--line); overflow-x: auto; white-space: pre; user-select: all; font-size: 12.5px; }
+.nodes-fields { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; align-items: start; }
+@media (max-width: 640px) {
+  .nodes-fields { grid-template-columns: 1fr; }
+  .pool-h .acts { width: 100%; }
+}

@@ -1472,6 +1472,10 @@ func (in *NodePoolStatus) DeepCopyInto(out *NodePoolStatus) {
 		*out = make([]PoolNode, len(*in))
 		copy(*out, *in)
 	}
+	if in.LastBuildAt != nil {
+		in, out := &in.LastBuildAt, &out.LastBuildAt
+		*out = (*in).DeepCopy()
+	}
 	if in.Conditions != nil {
 		in, out := &in.Conditions, &out.Conditions
 		*out = make([]v1.Condition, len(*in))

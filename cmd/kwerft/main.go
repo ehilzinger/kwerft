@@ -192,6 +192,12 @@ func main() {
 			log.Error("cannot start the Hetzner Cloud controller", "err", err)
 			os.Exit(1)
 		}
+		// Node pools (Cloud servers as nodes) of every cluster, reached
+		// through the hub.
+		if err := setupNodes(mgr, namespace, key, hub, consoleURLFunc(*consoleDomain, activeConsoleDomain(mgr, *dev))); err != nil {
+			log.Error("cannot start the node pool reconcilers", "err", err)
+			os.Exit(1)
+		}
 		tokens = &setup.SecretTokenSource{Reader: mgr.GetAPIReader(), Writer: mgr.GetClient(), Namespace: namespace}
 		go waitUntilReady(ctx, log, mgr, &ready)
 		go func() {
@@ -327,7 +333,7 @@ func waitUntilReady(ctx context.Context, log *slog.Logger, mgr ctrl.Manager, rea
 	types := []client.Object{&kwerftv1.Project{}, &kwerftv1.App{}, &kwerftv1.Domain{},
 		&kwerftv1.Volume{}, &kwerftv1.Task{}, &kwerftv1.Schedule{}, &kwerftv1.ConsoleSettings{},
 		&kwerftv1.GitConnection{}, &kwerftv1.Build{}, &kwerftv1.AlertRule{}, &kwerftv1.NotificationChannel{},
-		&kwerftv1.FirewallRule{}, &kwerftv1.Cluster{}}
+		&kwerftv1.FirewallRule{}, &kwerftv1.Cluster{}, &kwerftv1.NodePool{}}
 	for _, obj := range types {
 		for {
 			_, err := mgr.GetCache().GetInformer(ctx, obj, cache.BlockUntilSynced(false))

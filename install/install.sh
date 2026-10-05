@@ -94,6 +94,8 @@ JOIN_TOKEN="${KWERFT_JOIN_TOKEN:-}"
 JOIN_ROLE="${KWERFT_JOIN_ROLE:-worker}"
 CONSOLE_URL="${KWERFT_CONSOLE:-}"         # --agent: the console this cluster connects to
 CLUSTER_TOKEN="${KWERFT_CLUSTER_TOKEN:-}" # --agent: the cluster's agent token (kwag_<cluster>_…)
+NODE_LABELS=()          # --node-label k=v (repeatable): k3s node-label
+NODE_TAINTS=()          # --node-taint k=v:Effect (repeatable): k3s node-taint
 KWERFT_CHART="${KWERFT_CHART:-}"
 IMAGE="${KWERFT_IMAGE:-}"
 IMAGE_ARCHIVE="${KWERFT_IMAGE_ARCHIVE:-}"
@@ -169,6 +171,8 @@ Install:
 Join an existing cluster:
   --join URL --token T   Join the cluster whose console runs at URL
   --role R               worker | control-plane (default: worker)
+  --node-label K=V       Label this node (repeatable; node pools set kwerft.dev/pool)
+  --node-taint K=V:E     Taint this node (repeatable; build pools set kwerft.dev/builds=true:NoSchedule)
 
 Connect a new cluster to a console (agent mode):
   --agent                Install Kwerft without its own console: this cluster is
@@ -202,6 +206,26 @@ EOF
 # ---------------------------------------------------------------------------
 need_arg() { [[ $# -ge 2 && -n "$2" && "$2" != --* ]] || die $EXIT_USAGE "$1 needs a value"; }
 
+# valid_node_label: key=value with a Kubernetes label key (optional DNS
+# prefix) and value. Keeps the k3s config free of anything YAML would read
+# differently.
+valid_node_label() {
+  [[ "$1" =~ ^([a-z0-9]([-a-z0-9.]*[a-z0-9])?/)?[A-Za-z0-9]([-A-Za-z0-9_.]*[A-Za-z0-9])?=([A-Za-z0-9]([-A-Za-z0-9_.]*[A-Za-z0-9])?)?$ ]]
+}
+
+# node_settings prints the node-label and node-taint lists of the k3s
+# config: the platform label, then --node-label and --node-taint.
+node_settings() {
+  local l
+  echo "node-label:"
+  echo "  - kwerft.dev/platform=$PLATFORM"
+  for l in ${NODE_LABELS[@]+"${NODE_LABELS[@]}"}; do echo "  - $l"; done
+  if (( ${#NODE_TAINTS[@]} > 0 )); then
+    echo "node-taint:"
+    for l in "${NODE_TAINTS[@]}"; do echo "  - $l"; done
+  fi
+}
+
 parse_args() {
   while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -219,6 +243,8 @@ parse_args() {
       --agent)          AGENT=1; shift ;;
       --console)        need_arg "$@"; CONSOLE_URL=$2; shift 2 ;;
       --cluster-token)  need_arg "$@"; CLUSTER_TOKEN=$2; shift 2 ;;
+      --node-label)     need_arg "$@"; NODE_LABELS+=("$2"); shift 2 ;;
+      --node-taint)     need_arg "$@"; NODE_TAINTS+=("$2"); shift 2 ;;
       --image)          need_arg "$@"; IMAGE=$2; shift 2 ;;
       --image-archive)  need_arg "$@"; IMAGE_ARCHIVE=$2; shift 2 ;;
       --lite)           LITE=1; shift ;;
@@ -256,6 +282,14 @@ parse_args() {
   case "$CHANNEL" in stable|edge) ;; *) die $EXIT_USAGE "--channel must be stable or edge" ;; esac
   case "$JOIN_ROLE" in worker|control-plane) ;; *) die $EXIT_USAGE "--role must be worker or control-plane" ;; esac
   if [[ "$MODE" == "join" && -z "$JOIN_TOKEN" ]]; then die $EXIT_USAGE "--join needs --token"; fi
+  local l
+  for l in ${NODE_LABELS[@]+"${NODE_LABELS[@]}"}; do
+    valid_node_label "$l" || die $EXIT_USAGE "--node-label must look like key=value (a Kubernetes label), got '$l'"
+  done
+  for l in ${NODE_TAINTS[@]+"${NODE_TAINTS[@]}"}; do
+    [[ "$l" =~ ^[A-Za-z0-9./_-]+(=[A-Za-z0-9._-]*)?:(NoSchedule|PreferNoSchedule|NoExecute)$ ]] \
+      || die $EXIT_USAGE "--node-taint must look like key=value:NoSchedule, got '$l'"
+  done
   if [[ -n "$CONFIG_FILE" && ! -r "$CONFIG_FILE" ]]; then die $EXIT_USAGE "Config file not readable: $CONFIG_FILE"; fi
   [[ "$ACME_SERVER" == staging ]] && ACME_SERVER=$ACME_STAGING_URL
   if [[ -n "$ACME_SERVER" && ! "$ACME_SERVER" =~ ^https://[^[:space:]]+$ ]]; then
@@ -699,11 +733,10 @@ disable:
   - servicelb
 secrets-encryption: true
 write-kubeconfig-mode: "0600"
-node-label:
-  - kwerft.dev/platform=$PLATFORM
 kubelet-arg:
   - max-pods=200
 $(k3s_cloud_provider_config)
+$(node_settings)
 EOF
 }
 
@@ -1833,8 +1866,11 @@ print_summary() {
 # 6443/tcp, 10250/tcp and the Cilium ports on existing nodes for the joiner's
 # public IP before it connects. Today joining assumes a Cloud Network or vSwitch.
 stage_join() {
-  local info server k3s_token
-  info=$(curl -fsS --max-time 20 -H "Authorization: Bearer $JOIN_TOKEN" "${JOIN_URL%/}/api/v1/join?role=$JOIN_ROLE") \
+  local info server k3s_token node
+  # The console binds tokens of servers it created to their hostname.
+  node=$(hostname)
+  info=$(curl -fsS --max-time 20 -H "Authorization: Bearer $JOIN_TOKEN" \
+    "${JOIN_URL%/}/api/v1/join?role=$JOIN_ROLE&node=$node") \
     || die $EXIT_NETWORK "Could not reach $JOIN_URL or the join token was rejected"
   server=$(jq -r .server <<<"$info"); k3s_token=$(jq -r .token <<<"$info")
   # A cluster with the hcloud CCM registers every kubelet with it.
@@ -1850,7 +1886,7 @@ stage_join() {
     echo "token: $k3s_token"
     echo "node-ip: $node_ip"
     echo "node-external-ip: $PUBLIC_IP"
-    echo "node-label: [kwerft.dev/platform=$PLATFORM]"
+    node_settings
     if [[ "$HCLOUD_CCM" == "true" ]]; then echo "kubelet-arg: [cloud-provider=external]"; fi
   } >/etc/rancher/k3s/config.yaml
   chmod 0600 /etc/rancher/k3s/config.yaml
