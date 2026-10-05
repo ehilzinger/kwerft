@@ -88,11 +88,18 @@ var (
 	ErrList   = errors.New("list")
 	ErrWrite  = errors.New("write")
 	ErrDelete = errors.New("delete")
+	// ErrEncrypt: the storage does not encrypt with a customer-provided key
+	// (SSE-C), which Velero's objects need (sse.go).
+	ErrEncrypt = errors.New("encrypt")
 )
+
+// ErrNotEncrypted: an object written with SSE-C could be read without the
+// key, so the storage ignored it and keeps the object unencrypted.
+var ErrNotEncrypted = errors.New("an object written with a customer-provided key (SSE-C) could be read without it: the storage keeps it unencrypted")
 
 // CheckError says which step of the check failed and why.
 type CheckError struct {
-	Step error // ErrList, ErrWrite or ErrDelete
+	Step error // ErrList, ErrWrite, ErrEncrypt or ErrDelete
 	Err  error // an *Error, or a transport error
 }
 
@@ -100,7 +107,10 @@ func (e *CheckError) Error() string { return e.Step.Error() + ": " + e.Err.Error
 func (e *CheckError) Unwrap() error { return e.Err }
 
 // Check lists the prefix, writes a small object below it and deletes it
-// again: Velero needs all three.
+// again: Velero needs all three. The object is written with a random SSE-C
+// key, as Velero's objects are (sse.go), and read back once without it
+// (which must fail: the storage encrypted it) and once with it (which must
+// return what was written). GET, not HEAD: a read must decrypt.
 func (c *Client) Check(ctx context.Context, t Target, cr Credentials) (*CheckResult, error) {
 	keys, err := c.List(ctx, t, cr, prefixDir(t.Prefix), 1)
 	if err != nil {
@@ -110,11 +120,38 @@ func (c *Client) Check(ctx context.Context, t Target, cr Credentials) (*CheckRes
 	b := make([]byte, 6)
 	_, _ = rand.Read(b)
 	key := prefixDir(t.Prefix) + ".kwerft-check-" + hex.EncodeToString(b)
-	if err := c.do(ctx, t, cr, http.MethodPut, key, nil, []byte("kwerft connection check\n"), nil); err != nil {
+	sse := make(http.Header)
+	sseKey := make([]byte, SSEKeyBytes)
+	_, _ = rand.Read(sseKey)
+	SetSSEC(sse, sseKey)
+	content := []byte("kwerft connection check\n")
+	if err := c.do(ctx, t, cr, http.MethodPut, key, nil, sse, content, nil); err != nil {
+		var se *Error
+		if errors.As(err, &se) && (se.Status == http.StatusBadRequest || se.Status == http.StatusNotImplemented) {
+			// Keys that may write get 403; 400 and 501 are the
+			// storage refusing the encryption headers.
+			return out, &CheckError{Step: ErrEncrypt, Err: err}
+		}
 		return out, &CheckError{Step: ErrWrite, Err: err}
 	}
-	if err := c.do(ctx, t, cr, http.MethodDelete, key, nil, nil, nil); err != nil {
+	var got []byte
+	encErr := c.do(ctx, t, cr, http.MethodGet, key, nil, nil, nil, &got)
+	if encErr == nil {
+		encErr = ErrNotEncrypted
+	} else {
+		var se *Error
+		if errors.As(encErr, &se) && se.Status/100 == 4 {
+			encErr = c.do(ctx, t, cr, http.MethodGet, key, nil, sse, nil, &got)
+			if encErr == nil && !bytes.Equal(got, content) {
+				encErr = errors.New("an object written with a customer-provided key (SSE-C) came back changed")
+			}
+		}
+	}
+	if err := c.do(ctx, t, cr, http.MethodDelete, key, nil, nil, nil, nil); err != nil {
 		return out, &CheckError{Step: ErrDelete, Err: err}
+	}
+	if encErr != nil {
+		return out, &CheckError{Step: ErrEncrypt, Err: encErr}
 	}
 	return out, nil
 }
@@ -130,7 +167,7 @@ func (c *Client) List(ctx context.Context, t Target, cr Credentials, prefix stri
 			Key string `xml:"Key"`
 		} `xml:"Contents"`
 	}
-	if err := c.do(ctx, t, cr, http.MethodGet, "", q, nil, &res); err != nil {
+	if err := c.do(ctx, t, cr, http.MethodGet, "", q, nil, nil, &res); err != nil {
 		return nil, err
 	}
 	keys := make([]string, 0, len(res.Contents))
@@ -148,7 +185,7 @@ func prefixDir(p string) string {
 	return p + "/"
 }
 
-func (c *Client) do(ctx context.Context, t Target, cr Credentials, method, key string, q url.Values, body []byte, into any) error {
+func (c *Client) do(ctx context.Context, t Target, cr Credentials, method, key string, q url.Values, h http.Header, body []byte, into any) error {
 	u, err := url.Parse(strings.TrimRight(t.Endpoint, "/"))
 	if err != nil || u.Host == "" {
 		return fmt.Errorf("invalid endpoint %q", t.Endpoint)
@@ -167,6 +204,9 @@ func (c *Client) do(ctx context.Context, t Target, cr Credentials, method, key s
 	if body != nil {
 		req.Header.Set("Content-Type", "text/plain")
 	}
+	for k, v := range h {
+		req.Header[k] = v
+	}
 	Sign(req, body, cr, RegionFor(t), c.now())
 	resp, err := c.http().Do(req)
 	if err != nil {
@@ -184,6 +224,10 @@ func (c *Client) do(ctx context.Context, t Target, cr Credentials, method, key s
 			e.Code, e.Message = x.Code, x.Message
 		}
 		return e
+	}
+	if b, ok := into.(*[]byte); ok {
+		*b = raw
+		return nil
 	}
 	if into != nil {
 		if err := xml.Unmarshal(raw, into); err != nil {

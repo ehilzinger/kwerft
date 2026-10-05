@@ -36,6 +36,11 @@ type fakeBucket struct {
 	mu      sync.Mutex
 	bucket  string
 	objects map[string]bool
+	// sse: the SSE-C key's MD5 an object was written with; ignoreSSE
+	// plays a store that keeps such objects unencrypted.
+	sse       map[string]string
+	bodies    map[string]string
+	ignoreSSE bool
 }
 
 func (f *fakeBucket) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -78,8 +83,17 @@ func (f *fakeBucket) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		fail(404, "NoSuchBucket")
 		return
 	}
-	switch r.Method {
-	case "GET":
+	switch {
+	case r.Method == "GET" && key != "":
+		switch md5 := r.Header.Get(backups.HeaderSSECKeyMD5); {
+		case !f.objects[key]:
+			fail(404, "NoSuchKey")
+		case f.sse[key] != "" && md5 != f.sse[key]:
+			fail(400, "InvalidRequest")
+		default:
+			_, _ = w.Write([]byte(f.bodies[key]))
+		}
+	case r.Method == "GET":
 		var b strings.Builder
 		b.WriteString("<ListBucketResult>")
 		for k := range f.objects {
@@ -89,9 +103,13 @@ func (f *fakeBucket) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		b.WriteString("</ListBucketResult>")
 		_, _ = w.Write([]byte(b.String()))
-	case "PUT":
+	case r.Method == "PUT":
 		f.objects[key] = true
-	case "DELETE":
+		f.bodies[key] = string(body)
+		if !f.ignoreSSE {
+			f.sse[key] = r.Header.Get(backups.HeaderSSECKeyMD5)
+		}
+	case r.Method == "DELETE":
 		delete(f.objects, key)
 		w.WriteHeader(204)
 	}
@@ -130,7 +148,7 @@ func backupsFixture(t *testing.T) (*fakeBucket, string, func(*Config)) {
 		_ = cluster.admin.DeleteAllOf(context.Background(), &kwerftv1.BackupPlan{})
 		_ = cluster.admin.DeleteAllOf(context.Background(), &kwerftv1.Restore{})
 	})
-	f := &fakeBucket{bucket: "acme-kwerft", objects: map[string]bool{}}
+	f := &fakeBucket{bucket: "acme-kwerft", objects: map[string]bool{}, sse: map[string]string{}, bodies: map[string]string{}}
 	srv := httptest.NewTLSServer(f)
 	t.Cleanup(srv.Close)
 	return f, srv.URL, func(c *Config) {
@@ -157,7 +175,7 @@ type saveAnswer struct {
 }
 
 func TestBackupTargetIsCheckedAndWriteOnly(t *testing.T) {
-	_, endpoint, opt := backupsFixture(t)
+	f, endpoint, opt := backupsFixture(t)
 	c := newConsole(t, opt)
 	target := func(extra map[string]any) map[string]any {
 		m := map[string]any{"endpoint": endpoint, "bucket": "acme-kwerft", "accessKey": testAccessKey, "secretKey": testSecretKey}
@@ -200,6 +218,23 @@ func TestBackupTargetIsCheckedAndWriteOnly(t *testing.T) {
 		if code := c.owner.do(t, "PUT", "/api/v1/settings/backups", bad.body, &e); code != http.StatusBadRequest || e.Field != bad.field {
 			t.Errorf("%v: %d %+v, want field %s", bad.body, code, e, bad.field)
 		}
+	}
+	// A store that ignores SSE-C would keep every Secret of a backup
+	// readable: refused.
+	f.mu.Lock()
+	f.ignoreSSE = true
+	f.mu.Unlock()
+	var e apiError
+	if code := c.owner.do(t, "PUT", "/api/v1/settings/backups", target(nil), &e); code != http.StatusBadRequest || e.Field != "endpoint" ||
+		!strings.Contains(e.Error, "SSE-C") {
+		t.Errorf("a store without SSE-C: %d %+v", code, e)
+	}
+	f.mu.Lock()
+	f.ignoreSSE = false
+	leftover := len(f.objects)
+	f.mu.Unlock()
+	if leftover != 0 {
+		t.Errorf("the check left %d objects", leftover)
 	}
 	if len(storedSecret(t, controllers.BackupCredentialsSecret)) != 0 || len(storedSecret(t, controllers.BackupKeySecret)) != 0 {
 		t.Fatal("a refused target stored keys")
@@ -256,7 +291,7 @@ func TestBackupTargetIsCheckedAndWriteOnly(t *testing.T) {
 	if got := storedSecret(t, controllers.BackupKeySecret); string(got[controllers.BackupKeySecretKey]) != key {
 		t.Error("the recovery key changed")
 	}
-	var e apiError
+	e = apiError{}
 	if code := c.owner.do(t, "PUT", "/api/v1/settings/backups", target(map[string]any{"recoveryKey": backups.NewRecoveryKey()}), &e); code != http.StatusBadRequest || e.Field != "recoveryKey" {
 		t.Errorf("replace the key: %d %+v", code, e)
 	}

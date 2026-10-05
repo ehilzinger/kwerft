@@ -46,6 +46,9 @@ database, shared by upgrades and backups).
     access keys
   - Secret `velero-repo-credentials`, key `repository-password`, from the
     recovery key (Velero's own name)
+  - Secret `kwerft-bsl-encryption`, key `sse-c-key`: the SSE-C key derived
+    from the recovery key, which every other object in the bucket is
+    encrypted with (B3)
   - BackupStorageLocation `kwerft` (default), prefix `<prefix>/velero`
   - and reports `status.backups` (Ready when the BSL is Available).
 - **etcd snapshots** (B1): k3s's own, to the same bucket, folder
@@ -619,13 +622,218 @@ check, earlier key, plans, backups list, restores), `internal/backups`
 - `spec.backups.etcdSnapshots` nil now means "snapshots stay local" (the
   type comment says so; B1 noted the old wording clashed with the
   installer, which schedules local snapshots always).
-- Velero's object tarball (including Secrets) is not encrypted by the
-  recovery key — only volume data is (Kopia). The blueprint's "backups are
-  encrypted before secret sets ship" needs SSE-C or client-side
-  encryption of the bucket (B1's BSL config) before S1 ships.
+- ~~Velero's object tarball (including Secrets) is not encrypted by the
+  recovery key — only volume data is (Kopia).~~ Done by B3: SSE-C with a
+  key derived from the recovery key (As built (B3) below).
 - Restored objects with owner references to objects that get new UIDs
   (App-rendered Deployments, the App objects created after Velero) rely on
   Velero's usual namespace-restore behaviour; E1's restore run should
   confirm the garbage collector leaves them alone.
 - A Domain restored into a new project collides with the original's
   hostname (the restore dialog says so); no rewrite is attempted.
+
+## As built (B3): encrypted backups
+
+Everything Velero writes to the bucket is encrypted, and the recovery key
+stays the only secret a restore needs: volume data by Kopia with the
+recovery key (as before, client side), **every other object** — the
+backups' object tarballs with all Secrets, SecretSet values, the data key
+and tokens, plus logs, resource lists and volume info — by the storage
+with a customer-provided key (**SSE-C**, AES-256) derived from the recovery
+key.
+
+### Decision and evidence
+
+**Hetzner Object Storage supports SSE-C, and only SSE-C.** Its FAQ: "There
+is no default data-at-rest encryption of objects, but you can encrypt your
+data during the upload using SSE-C"
+(docs.hetzner.com/storage/object-storage/faq/general); the list of
+supported actions: bucket encryption "Only this encryption type: SSE-C",
+"Copy of SSE-C encrypted objects: Not supported", CopyObject only within a
+bucket (…/object-storage/supported-actions); the how-to
+(…/howto-protect-objects/encrypt-with-sse-c): a 32-byte key, the service
+does not keep it, SSE-C does not encrypt metadata, a lost key is lost data.
+
+**velero-plugin-for-aws v1.14.4** (`velero-plugin-for-aws/object_store.go`
+at the tag): two BSL config keys, mutually exclusive with each other and
+with `kmsKeyId`:
+- `customerKeyEncryptionFile`: a path in the Velero container; read with a
+  single 32-byte `Read`, only "fewer than 32 bytes" is an error (a longer
+  file, e.g. 64 hex characters, is silently cut to its first 32 bytes).
+- `customerKeyEncryptionSecret`: `"<secret>/<key>"`, read through the
+  in-cluster API from the namespace in `VELERO_NAMESPACE` at every plugin
+  `Init`; the value must be exactly 32 bytes.
+
+The key (base64, plus its MD5) goes on PutObject (the SDK uploader: in
+aws-sdk-go-v2 `feature/s3/manager` v1.22.18 every `UploadPart` of a
+multipart upload carries it too), HeadObject, GetObject and the presigned
+GET of a DownloadRequest; listing and deleting need none. The plugin never
+calls CopyObject, so Hetzner's copy limitation does not matter. **Velero
+v1.18.4's Kopia repository** (`pkg/repository/provider/unified_repo.go`)
+takes only bucket, prefix, region, s3Url and TLS options from the location
+config: Kopia's blobs go without SSE-C, encrypted by Kopia itself.
+**The Velero chart 12.2.0** sets `VELERO_NAMESPACE` from the pod's
+namespace (go-plugin hands the environment to the plugin process) and
+binds Velero's service account to `cluster-admin` (`rbac.clusterAdministrator`).
+
+**`customerKeyEncryptionSecret`, not a mounted file**, because: a Secret
+volume reaches a running pod only with the kubelet's next sync (a minute
+or more), so right after the console (or `--restore`) writes the key the
+location would fail validation ("customerKeyEncryptionFile does not
+exist"), show Error in Settings and delay a restore; the Secret needs no
+change to the Velero pod and no restart; and its length check is exact.
+The price is that Velero's service account must read Secrets in `velero`;
+`velero_values` now states `rbac.clusterAdministrator: true` explicitly
+(the chart's default) and nothing is mounted.
+
+**Why not something else:** Velero has no client-side encryption for its
+own objects (its only options are the plugin's SSE-AES256, SSE-KMS and
+SSE-C; Hetzner has neither SSE-S3 nor KMS). An encrypting S3 proxy would be
+another stateful hop on the data path holding the access keys, to run,
+upgrade and restore before anything else. Kopia only carries volume data.
+
+**What SSE-C protects:** a bucket whose keys leak or that is made public, a
+copied or stolen disk at Hetzner, a second console pointed at the prefix.
+Not: Hetzner itself (it sees the key with every request, over TLS, and is
+trusted not to keep it) or anyone who has the recovery key. Object names,
+sizes and user metadata are not encrypted: backup names
+(`kwerft-<plan>-<timestamp>`) and Kopia's per-namespace folders
+(`<prefix>/velero/kopia/<namespace>/`, i.e. project names) are readable.
+
+### The key
+
+```
+SSE-C key = HKDF-SHA256(secret = the repository password (the recovery key's
+                                 52 characters, upper case, no separators),
+                        salt   = "kwerft.dev/recovery-key",
+                        info   = "kwerft.dev/backups/sse-c/v1", L = 32)
+```
+
+Independent of the Kopia password (a different function of the same key);
+`v1` leaves room for a rotation. Known vector (Go and bats): the key
+`abcd-efgh-ijkl-mnop-qrst-uvwx-yz23-4567-abcd-efgh-ijkl-mnop-qrst` gives
+`be0a7fb9dc10ee8cdbe36ee51a34a723ea6b6ab9c6d87aa824d051b73e4d7e50`.
+
+- Go: `backups.SSECustomerKey` (`internal/backups/sse.go`, `crypto/hkdf`).
+- Bash: `sse_customer_key` (with `hmac_sha256`, `str_hex`, `hex_escapes`).
+  **Not openssl:** the installer neither uses nor installs it (checked), and
+  `openssl dgst -mac HMAC -macopt hexkey:…` / `openssl kdf -kdfopt key:…`
+  take the key as an argument, visible in `/proc/*/cmdline`, which B1's
+  rule for keys forbids. HMAC-SHA256 is built from bash builtins and
+  `sha256sum` (coreutils, already required) on pipes; no key or derived
+  value is ever an argument of an external command.
+
+### Built
+
+- **Console** (`backup_target.go`): Secret `velero/kwerft-bsl-encryption`,
+  key `sse-c-key` = the 32 raw bytes (Opaque, managed-by label), applied
+  after `velero-repo-credentials` and before the location; the location's
+  config gains `customerKeyEncryptionSecret: kwerft-bsl-encryption/sse-c-key`.
+  The `velero` namespace is in no backup, so the derived key never lands
+  next to the data. A console restored by `--restore` adopts the key as
+  before and derives the same Secret.
+- **Project and App restores** (`backup_restore.go`): Velero signs the
+  DownloadRequest URL for the key (the SDK never hoists the SSE-C headers
+  into the query; `X-Amz-SignedHeaders` names them), so the console's GET
+  of the backup contents sends the three headers, with the key read
+  uncached from `velero/kwerft-bsl-encryption` (`backups.PresignedWithSSEC`,
+  `backups.SetSSEC`). The RestoreReconciler gained an `APIReader`.
+- **Connection check** (`internal/backups/s3.go`, Settings › Backups
+  "Check connection" and every save with new keys): the check object is
+  written with a random SSE-C key, read (GET, which must decrypt; a HEAD
+  might not) once without it (must fail with a 4xx: the storage encrypted
+  it) and once with it (must return the content), then deleted. A store that ignores SSE-C (`ErrNotEncrypted`) or answers the
+  PUT with 400/501 is refused: field `endpoint`, "This storage does not
+  encrypt objects with a customer-provided key (SSE-C) …".
+- **Installer:** `write_restore_secrets` also writes
+  `velero/kwerft-bsl-encryption` (`sse-c-key`, 32 raw bytes through the 0700
+  temp dir) before the location; `restore_bsl` carries
+  `customerKeyEncryptionSecret`; `pick_backup`'s "no complete Cluster
+  backup" names the other likely cause: a key file of other backups (Velero
+  lists none it cannot decrypt; its log says why).
+- **Fixed on the way:** `recovery_key` read the whole key file, but the file
+  Settings › Backups offers for download has the key on a line between
+  lines of prose, so `--restore` with that file failed preflight ("does not
+  hold a recovery key"). It now takes the first line that is a key, and
+  falls back to the whole input (a key split over lines).
+- UI copy (Settings › Backups, the recovery key dialog and file): all of a
+  backup is encrypted with the recovery key, not only volume data.
+
+### etcd snapshots
+
+- **k3s cannot encrypt them in the bucket.** v1.37.1+k3s1
+  `pkg/etcd/s3/s3.go` uploads with `minio.PutObjectOptions{NumThreads,
+  UserMetadata, ContentType}` only, and the config Secret has no SSE keys.
+- **What a snapshot holds:** all of etcd. Secret values (SecretSets, the
+  data key, tokens, Helm release state) are encrypted by k3s's secrets
+  encryption (`secrets-encryption: true` in the installer's k3s config;
+  aescbc). Every other object is readable to whoever can read the bucket:
+  ConsoleSettings (domains, the bucket), Projects, Apps **including plain
+  (non-secret) env values**, ConfigMaps, kwerft.dev objects. The console's
+  database (users, password hashes, TOTP seeds, audit log) is on a volume,
+  not in etcd.
+- **The encryption key is in the snapshot, wrapped by the server token:**
+  `encryption-config.json` is part of k3s's bootstrap data
+  (`ControlRuntimeBootstrap.EncryptionConfig`/`EncryptionHash`,
+  `pkg/daemons/config/types.go`), which k3s keeps in etcd itself
+  "encrypted with the join token" (`pkg/cluster/storage.go`), with the
+  cluster CAs. It need not be backed up separately; a restore of a snapshot
+  (`k3s server --cluster-reset --cluster-reset-restore-path=…`) needs
+  `--token` with the **old server's token**, or k3s cannot read its CAs and
+  the Secrets stay unreadable. That token is in
+  `/var/lib/rancher/k3s/server/token` and in Secret
+  `kwerft-system/cluster-local-join` (`token`, `write_join_secret`), which
+  every Cluster backup holds — encrypted now, so the recovery key unlocks
+  it (a Velero restore, or the backup tarball fetched with the derived key:
+  `aws s3api get-object --sse-customer-algorithm AES256 --sse-customer-key
+  <base64 key> …`).
+- **Recommendation (not built, coordinator's call):** the plan's
+  requirement — secret values encrypted before SecretSets ship — holds for
+  the snapshots too. To also hide plain objects: either make the upload
+  opt-in (Settings › Backups says what it holds; today the console writes
+  `kube-system/kwerft-etcd-s3` whenever a target exists, also when
+  `spec.backups.etcdSnapshots` is nil — B2's notes say it is deleted then,
+  the code and its test keep it), or have Kwerft upload k3s's local
+  snapshots itself, encrypted with another key derived from the recovery
+  key, instead of `etcd-s3`.
+
+### Tests
+
+- Go `internal/backups`: `TestSSECustomerKey` (the vector, both key forms,
+  refusal, headers incl. base64 and MD5), `TestPresignedWithSSEC`,
+  `TestCheck` (list, PUT with SSE-C, GET without the key (refused) and with it (same content), DELETE;
+  a store that ignores SSE-C and one that refuses it).
+- envtest `TestBackupTarget`: the Secret holds `SSECustomerKey(key)` (32
+  bytes) and the location names it; restore tests serve the contents only
+  to a GET with the right SSE-C headers, from a URL signed for them.
+- server `TestBackupTargetIsCheckedAndWriteOnly`: a bucket that ignores
+  SSE-C is refused on field `endpoint` and keeps no check object.
+- bats: `sse_customer_key` (the vector; also from the downloaded file
+  format), `hmac_sha256` against RFC 4231 cases 1–2 and RFC 5869 case 1
+  (its PRK has a byte 0x36, a NUL in the inner pad), a cross-check with
+  `openssl kdf … HKDF` (skipped without OpenSSL 3), `stage_restore` (the
+  Secret's 32 bytes, written before the location, never in kubectl's
+  arguments or the log; the location's `customerKeyEncryptionSecret`),
+  `velero_values` (RBAC stated, nothing mounted), `pick_backup`'s hint.
+
+### Open points
+
+- **Not tried against real Hetzner Object Storage** (no real buckets in
+  this work). On the test project: save a target (the check must pass),
+  Back up now, then `aws s3api get-object` of
+  `<prefix>/velero/backups/<b>/velero-backup.json` without the key → 400
+  and with `--sse-customer-algorithm AES256 --sse-customer-key <base64>`
+  → 200; a backup big enough for a multipart upload (> 5 MiB tarball);
+  a project restore through the console (DownloadRequest with the
+  headers); `install.sh --restore` with the downloaded key file, and once
+  with another key (exit 60 with the new hint).
+- Backups written before this change (no SSE-C) cannot be read through the
+  encrypted location (a GET with SSE-C headers of a plain object fails). No
+  release carried B2, so there is no migration; a test bucket with older
+  backups needs a new prefix.
+- `velero backup logs` / `describe --details` fetch DownloadRequest URLs
+  without the SSE-C headers and fail (Velero CLI limitation): read the
+  server's log with `kubectl -n velero logs deploy/velero` instead.
+- Rotating the key means re-encrypting every object (SSE-C has no rekey,
+  and Hetzner cannot copy SSE-C objects): part of the recovery key
+  rotation follow-up.

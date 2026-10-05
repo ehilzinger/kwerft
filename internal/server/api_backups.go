@@ -269,7 +269,17 @@ func (b *backupsAPI) check(w http.ResponseWriter, ctx context.Context, t backups
 			step = "write"
 		case backups.ErrDelete:
 			step = "delete"
+		case backups.ErrEncrypt:
+			step = "read"
 		}
+	}
+	if ce != nil && ce.Step == backups.ErrEncrypt && (!errors.As(err, &se) || se.Code != "AccessDenied") {
+		// Velero's objects are written with a customer-provided key
+		// (SSE-C, derived from the recovery key); a store that refuses or
+		// ignores it would keep every Secret of a backup readable.
+		writeFieldError(w, "endpoint", "This storage does not encrypt objects with a customer-provided key (SSE-C), "+
+			"which Kwerft needs to keep backups encrypted: "+ce.Err.Error()+". Hetzner Object Storage supports it.")
+		return nil, false
 	}
 	if !errors.As(err, &se) {
 		cause := err

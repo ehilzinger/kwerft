@@ -123,8 +123,8 @@ function TargetForm({ t, onKey }: { t: BackupTarget; onKey: (key: string) => voi
         {t.configured && <Link to="/backups" className="end">Plans and backups →</Link>}
       </div>
       <p className="dim note">
-        Velero backs up your projects, their volumes (file by file, encrypted with the recovery key) and Kwerft&apos;s own state to an S3 bucket,
-        such as Hetzner Object Storage. With such a backup and the recovery key, <code>install.sh --restore</code> rebuilds this console on a new server.
+        Velero backs up your projects, their volumes (file by file) and Kwerft&apos;s own state to an S3 bucket, such as Hetzner Object
+        Storage, all of it encrypted with the recovery key. With such a backup and the recovery key, <code>install.sh --restore</code> rebuilds this console on a new server.
       </p>
       <form className="stack tight" onSubmit={save}>
         <div className="fields">
@@ -235,7 +235,8 @@ export function RecoveryKeyDialog({ recoveryKey, host, onDone }: { recoveryKey: 
         <h2 id="rk-title">Store the recovery key</h2>
         <div className="dlg-bd stack">
           <p>
-            Velero encrypts the backed-up volume data with this key. <b>Without it no backup can be read</b>, not even by you: restoring this console on
+            Everything Velero writes to the bucket is encrypted with this key: volume data, apps, settings and secrets. <b>Without it no backup
+            can be read</b>, not even by you: restoring this console on
             a new server asks for it. Kwerft shows it <b>only now</b>.
           </p>
           <div className="recovery-key mono" aria-label="Recovery key">

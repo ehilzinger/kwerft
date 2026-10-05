@@ -77,6 +77,7 @@ func TestBackupTarget(t *testing.T) {
 		bsl.SetName(BackupLocation)
 		_ = k8s.Delete(ctx, bsl)
 		_ = k8s.Delete(ctx, &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Namespace: VeleroNamespace, Name: RepoPasswordSecret}})
+		_ = k8s.Delete(ctx, &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Namespace: VeleroNamespace, Name: BackupEncryptionSecret}})
 	})
 
 	// The reconciler makes the write-only Secrets; the key's stays out of
@@ -133,6 +134,15 @@ func TestBackupTarget(t *testing.T) {
 		if got := string(data[RepoPasswordSecretKey]); got != strings.ReplaceAll(key, "-", "") {
 			return fmt.Errorf("repository password %q, want the 52 characters of %q", got, key)
 		}
+		// The SSE-C key, derived from the recovery key: 32 bytes, as the
+		// AWS plugin reads them.
+		data, _, err = secretData(t, VeleroNamespace, BackupEncryptionSecret)
+		if err != nil {
+			return err
+		}
+		if want, _ := backups.SSECustomerKey(key); len(data[BackupEncryptionSecretKey]) != 32 || !bytes.Equal(data[BackupEncryptionSecretKey], want) {
+			return fmt.Errorf("SSE-C key %x, want %x", data[BackupEncryptionSecretKey], want)
+		}
 		return nil
 	})
 	bsl, err := getVelero(t, VeleroBSLGVK, BackupLocation)
@@ -141,7 +151,8 @@ func TestBackupTarget(t *testing.T) {
 	}
 	if nestedString(bsl, "spec", "objectStorage", "prefix") != "ops.example.com/velero" || nestedString(bsl, "spec", "objectStorage", "bucket") != "acme-kwerft" ||
 		nestedString(bsl, "spec", "config", "region") != "fsn1" || nestedString(bsl, "spec", "config", "s3Url") != "https://fsn1.your-objectstorage.com" ||
-		nestedString(bsl, "spec", "credential", "name") != BackupLocationSecret || nestedString(bsl, "spec", "provider") != "aws" {
+		nestedString(bsl, "spec", "credential", "name") != BackupLocationSecret || nestedString(bsl, "spec", "provider") != "aws" ||
+		nestedString(bsl, "spec", "config", "customerKeyEncryptionSecret") != "kwerft-bsl-encryption/sse-c-key" {
 		t.Errorf("location %v", bsl.Object["spec"])
 	}
 	if def, _, _ := unstructured.NestedBool(bsl.Object, "spec", "default"); !def {
@@ -536,11 +547,28 @@ func waitForRestore(t *testing.T, name string, check func(*kwerftv1.RestoreStatu
 	})
 }
 
-// serveContents plays Velero's DownloadRequest of a restore: a signed URL
-// to the backup's tarball.
+// serveContents plays Velero's DownloadRequest of a restore: a URL to the
+// backup's tarball, signed for the location's SSE-C key, which the GET must
+// send in headers (the storage answers 400 otherwise).
 func serveContents(t *testing.T, restore string, body []byte) {
 	t.Helper()
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write(body) }))
+	key, err := backups.SSECustomerKey(backups.NewRecoveryKey())
+	if err != nil {
+		t.Fatal(err)
+	}
+	putSecret(t, VeleroNamespace, BackupEncryptionSecret, map[string][]byte{BackupEncryptionSecretKey: key})
+	want := http.Header{}
+	backups.SetSSEC(want, key)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		for _, h := range []string{backups.HeaderSSECAlgorithm, backups.HeaderSSECKey, backups.HeaderSSECKeyMD5} {
+			if r.Header.Get(h) != want.Get(h) {
+				w.WriteHeader(http.StatusBadRequest)
+				_, _ = w.Write([]byte("<Error><Code>InvalidRequest</Code></Error>"))
+				return
+			}
+		}
+		_, _ = w.Write(body)
+	}))
 	t.Cleanup(srv.Close)
 	name := VeleroRestoreName(restore) + "-contents"
 	eventually(t, func() error {
@@ -553,8 +581,23 @@ func serveContents(t *testing.T, restore string, body []byte) {
 		}
 		return nil
 	})
-	setVeleroStatus(t, VeleroDownloadRequestGVK, name, map[string]any{"phase": "Processed", "downloadURL": srv.URL + "/contents.tar.gz",
+	setVeleroStatus(t, VeleroDownloadRequestGVK, name, map[string]any{"phase": "Processed", "downloadURL": srv.URL + "/contents.tar.gz?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-SignedHeaders=" +
+		"host%3Bx-amz-server-side-encryption-customer-algorithm%3Bx-amz-server-side-encryption-customer-key%3Bx-amz-server-side-encryption-customer-key-md5",
 		"expiration": time.Now().Add(10 * time.Minute).UTC().Format(time.RFC3339)})
+}
+
+// putSecret creates or replaces a Secret's data.
+func putSecret(t *testing.T, namespace, name string, data map[string][]byte) {
+	t.Helper()
+	eventually(t, func() error {
+		var sec corev1.Secret
+		err := k8s.Get(context.Background(), client.ObjectKey{Namespace: namespace, Name: name}, &sec)
+		if err != nil {
+			return k8s.Create(context.Background(), &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Namespace: namespace, Name: name}, Data: data})
+		}
+		sec.Data = data
+		return k8s.Update(context.Background(), &sec)
+	})
 }
 
 func veleroRestoreOf(t *testing.T, restore string) map[string]any {

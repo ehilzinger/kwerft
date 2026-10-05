@@ -55,7 +55,9 @@ import (
 //     App reconciler then adopts what Velero restored.
 //
 // The backup's contents are read through a Velero DownloadRequest
-// (BackupContents), only when step 1 or 2 needs them.
+// (BackupContents), only when step 1 or 2 needs them. The tarball is
+// encrypted in the bucket (SSE-C): Velero signs the URL for the key, and
+// the GET sends it from velero/kwerft-bsl-encryption.
 
 const (
 	restorePoll = 3 * time.Second
@@ -82,6 +84,9 @@ func RestoreDone(phase string) bool {
 // RestoreReconciler: see above.
 type RestoreReconciler struct {
 	client.Client
+	// APIReader reads the backups' SSE-C key Secret uncached; nil falls
+	// back to the client.
+	APIReader client.Reader
 	// HTTP downloads backup contents from Velero's signed URL; nil uses a
 	// client with a 2-minute timeout.
 	HTTP *http.Client
@@ -91,6 +96,13 @@ type RestoreReconciler struct {
 
 	mu       sync.Mutex
 	contents map[types.UID]*backups.Contents
+}
+
+func (r *RestoreReconciler) reader() client.Reader {
+	if r.APIReader != nil {
+		return r.APIReader
+	}
+	return r.Client
 }
 
 func (r *RestoreReconciler) now() time.Time {
@@ -570,6 +582,19 @@ func (r *RestoreReconciler) download(ctx context.Context, u string) (*backups.Co
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
 	if err != nil {
 		return nil, err
+	}
+	if backups.PresignedWithSSEC(u) {
+		// Velero signed the URL for the location's SSE-C key; the key
+		// itself goes in headers, as the plugin sent it.
+		var sec corev1.Secret
+		if err := r.reader().Get(ctx, client.ObjectKey{Namespace: VeleroNamespace, Name: BackupEncryptionSecret}, &sec); err != nil {
+			return nil, fmt.Errorf("reading the backups' encryption key: %w", err)
+		}
+		key := sec.Data[BackupEncryptionSecretKey]
+		if len(key) != backups.SSEKeyBytes {
+			return nil, errors.New("the backups' encryption key (velero/" + BackupEncryptionSecret + ") is missing")
+		}
+		backups.SetSSEC(req.Header, key)
 	}
 	resp, err := hc.Do(req)
 	if err != nil {
