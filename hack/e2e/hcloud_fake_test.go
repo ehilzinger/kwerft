@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -20,12 +21,19 @@ type fakeCloud struct {
 	t     *testing.T
 	token string
 
-	mu      sync.Mutex
-	nextID  int64
-	servers map[int64]*hServer
-	keys    map[int64]*hSSHKey
-	types   map[string]hServerType
-	images  map[string]bool
+	mu       sync.Mutex
+	nextID   int64
+	servers  map[int64]*hServer
+	keys     map[int64]*hSSHKey
+	networks map[int64]*hNetwork
+	// attached: the networks each server was created in.
+	attached map[int64][]int64
+	// nextIP: the last octet of the next server's address (203.0.113.x).
+	nextIP int
+	// onDelete is called (without the lock) when a server is deleted.
+	onDelete func(ip string)
+	types    map[string]hServerType
+	images   map[string]bool
 	// unavailable "type/location" combinations answer resource_unavailable.
 	unavailable map[string]bool
 	// userData of each created server, by id.
@@ -41,7 +49,8 @@ type fakeCloud struct {
 func newFakeCloud(t *testing.T) *fakeCloud {
 	f := &fakeCloud{
 		t: t, token: "test-token", nextID: 100,
-		servers: map[int64]*hServer{}, keys: map[int64]*hSSHKey{},
+		servers: map[int64]*hServer{}, keys: map[int64]*hSSHKey{}, networks: map[int64]*hNetwork{},
+		attached: map[int64][]int64{}, nextIP: 10,
 		types:       map[string]hServerType{},
 		images:      map[string]bool{"ubuntu-26.04": true, "ubuntu-24.04": true},
 		unavailable: map[string]bool{}, userData: map[int64]string{}, gone: map[int64]int{},
@@ -101,7 +110,13 @@ func (f *fakeCloud) serve(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	f.mu.Lock()
-	defer f.mu.Unlock()
+	var after func() // runs once the lock is released
+	defer func() {
+		f.mu.Unlock()
+		if after != nil {
+			after()
+		}
+	}()
 	f.requests = append(f.requests, r.Method+" "+r.URL.Path)
 	parts := strings.Split(strings.Trim(r.URL.Path, "/"), "/")
 	q := r.URL.Query()
@@ -166,10 +181,24 @@ func (f *fakeCloud) serve(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		}
+		for _, s := range f.servers {
+			if s.Name == in.Name {
+				apiErr(w, 409, "uniqueness_error", "server name is already used")
+				return
+			}
+		}
+		for _, id := range in.Networks {
+			if _, ok := f.networks[id]; !ok {
+				apiErr(w, 400, "invalid_input", "no such network")
+				return
+			}
+		}
 		f.nextID++
 		s := &hServer{ID: f.nextID, Name: in.Name, Status: "initializing", Labels: in.Labels, Created: time.Now()}
-		s.PublicNet.IPv4.IP = "203.0.113.10"
+		s.PublicNet.IPv4.IP = "203.0.113." + strconv.Itoa(f.nextIP)
+		f.nextIP++
 		f.servers[s.ID] = s
+		f.attached[s.ID] = in.Networks
 		f.userData[s.ID] = in.UserData
 		writeJSONTest(w, 201, map[string]any{"server": s, "action": map[string]any{"id": 1}})
 	case parts[0] == "servers" && len(parts) == 1 && r.Method == "GET":
@@ -210,8 +239,55 @@ func (f *fakeCloud) serve(w http.ResponseWriter, r *http.Request) {
 			if f.pollsUntilGone == 0 {
 				delete(f.servers, id)
 			}
+			delete(f.attached, id)
+			if hook := f.onDelete; hook != nil {
+				ip := s.PublicNet.IPv4.IP
+				after = func() { hook(ip) }
+			}
 			writeJSONTest(w, 200, map[string]any{"action": map[string]any{"id": 2}})
 		}
+	case parts[0] == "networks" && len(parts) == 1 && r.Method == "POST":
+		var in struct {
+			Name    string            `json:"name"`
+			IPRange string            `json:"ip_range"`
+			Labels  map[string]string `json:"labels"`
+			Subnets []struct {
+				Type        string `json:"type"`
+				IPRange     string `json:"ip_range"`
+				NetworkZone string `json:"network_zone"`
+			} `json:"subnets"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&in)
+		if in.IPRange == "" || len(in.Subnets) != 1 || in.Subnets[0].NetworkZone == "" {
+			apiErr(w, 400, "invalid_input", "a network needs an ip_range and a subnet")
+			return
+		}
+		f.nextID++
+		n := &hNetwork{ID: f.nextID, Name: in.Name, IPRange: in.IPRange, Labels: in.Labels, Created: time.Now()}
+		f.networks[n.ID] = n
+		writeJSONTest(w, 201, map[string]any{"network": n})
+	case parts[0] == "networks" && len(parts) == 1 && r.Method == "GET":
+		out := []hNetwork{}
+		for _, n := range f.networks {
+			if matches(q.Get("label_selector"), n.Labels) {
+				out = append(out, *n)
+			}
+		}
+		writeJSONTest(w, 200, map[string]any{"networks": out, "meta": map[string]any{"pagination": map[string]any{"next_page": nil}}})
+	case parts[0] == "networks" && len(parts) == 2 && r.Method == "DELETE":
+		id, _ := strconv.ParseInt(parts[1], 10, 64)
+		if _, ok := f.networks[id]; !ok {
+			apiErr(w, 404, "not_found", "no network")
+			return
+		}
+		for _, nets := range f.attached {
+			if slices.Contains(nets, id) {
+				apiErr(w, 409, "conflict", "the network is still in use")
+				return
+			}
+		}
+		delete(f.networks, id)
+		writeJSONTest(w, 200, map[string]any{"action": map[string]any{"id": 3}})
 	default:
 		apiErr(w, 404, "not_found", "no route "+r.Method+" "+r.URL.Path)
 	}
@@ -221,4 +297,22 @@ func (f *fakeCloud) counts() (servers, keys int) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return len(f.servers), len(f.keys)
+}
+
+func (f *fakeCloud) networkCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return len(f.networks)
+}
+
+// serverByIP is the name of the server with that address, "" if none.
+func (f *fakeCloud) serverByIP(ip string) string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, s := range f.servers {
+		if s.PublicNet.IPv4.IP == ip {
+			return s.Name
+		}
+	}
+	return ""
 }

@@ -39,9 +39,11 @@ type report struct {
 
 	Server      string // "cx33 in nbg1, ubuntu-26.04 (id 123, 203.0.113.10)"
 	PriceHourly string // gross EUR per hour, from the API
-	Cleanup     []string
-	CleanupOK   bool
-	Notes       []string
+	// Billing: every server of the run; when set, the cost is their sum.
+	Billing   []billed
+	Cleanup   []string
+	CleanupOK bool
+	Notes     []string
 	// Log is the tail of the installer output or diagnostics of a failure.
 	Log string
 }
@@ -73,14 +75,36 @@ func (r *report) passed() bool {
 	return len(r.Results) > 0
 }
 
-// cost estimates the bill: Hetzner charges each started hour.
+// billed is one server's lifetime and price (gross EUR per hour).
+type billed struct {
+	Price      string
+	Start, End time.Time
+}
+
+// cost estimates the bill: Hetzner charges each started hour, per server.
 func (r *report) cost() string {
-	p, err := strconv.ParseFloat(r.PriceHourly, 64)
-	if err != nil || r.Finished.IsZero() {
-		return ""
+	if len(r.Billing) == 0 {
+		p, err := strconv.ParseFloat(r.PriceHourly, 64)
+		if err != nil || r.Finished.IsZero() {
+			return ""
+		}
+		hours := math.Max(1, math.Ceil(r.Finished.Sub(r.Started).Hours()))
+		return fmt.Sprintf("€%.4f (%.0f started hour(s) at €%.4f/h incl. VAT, plus the IPv4 address)", p*hours, hours, p)
 	}
-	hours := math.Max(1, math.Ceil(r.Finished.Sub(r.Started).Hours()))
-	return fmt.Sprintf("€%.4f (%.0f started hour(s) at €%.4f/h incl. VAT, plus the IPv4 address)", p*hours, hours, p)
+	total, hours := 0.0, 0.0
+	for _, b := range r.Billing {
+		p, err := strconv.ParseFloat(b.Price, 64)
+		if err != nil {
+			return ""
+		}
+		h := math.Max(1, math.Ceil(b.End.Sub(b.Start).Hours()))
+		total += p * h
+		hours += h
+	}
+	if len(r.Billing) == 1 {
+		return fmt.Sprintf("€%.4f (%.0f started hour(s) at €%.4f/h incl. VAT, plus the IPv4 address)", total, hours, total/hours)
+	}
+	return fmt.Sprintf("€%.4f (%d servers, %.0f started server-hour(s) incl. VAT, plus their IPv4 addresses)", total, len(r.Billing), hours)
 }
 
 func fmtDuration(d time.Duration) string {

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
@@ -79,7 +80,16 @@ type remote interface {
 	// returns its exit status; err is for anything other than a non-zero
 	// exit (connection lost, cancelled).
 	run(ctx context.Context, cmd string, stdout, stderr io.Writer) (int, error)
+	// upload writes data to path (mode 0600, its directory 0700) through
+	// the command's stdin, so secrets never appear in a command line.
+	upload(ctx context.Context, path string, data []byte) error
 	close() error
+}
+
+// uploadCmd writes stdin to path, readable by root only.
+func uploadCmd(path string) string {
+	dir := path[:strings.LastIndex(path, "/")+1]
+	return "umask 077 && mkdir -p " + shellQuote(dir) + " && cat >" + shellQuote(path)
 }
 
 // dialer opens a remote to addr ("ip:22").
@@ -157,6 +167,28 @@ func (r *sshRemote) run(ctx context.Context, cmd string, stdout, stderr io.Write
 		default:
 			return -1, err
 		}
+	}
+}
+
+func (r *sshRemote) upload(ctx context.Context, path string, data []byte) error {
+	s, err := r.c.NewSession()
+	if err != nil {
+		return err
+	}
+	defer s.Close()
+	var out bytes.Buffer
+	s.Stdin, s.Stdout, s.Stderr = bytes.NewReader(data), &out, &out
+	done := make(chan error, 1)
+	go func() { done <- s.Run(uploadCmd(path)) }()
+	select {
+	case <-ctx.Done():
+		_ = s.Signal(ssh.SIGKILL)
+		return ctx.Err()
+	case err := <-done:
+		if err != nil {
+			return fmt.Errorf("write %s: %w %s", path, err, strings.TrimSpace(out.String()))
+		}
+		return nil
 	}
 }
 

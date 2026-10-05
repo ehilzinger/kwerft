@@ -1475,3 +1475,200 @@ finished, the AutoPatch password, phone width). Nothing ran on a server.
   first.
 - A held member's hold can be removed by hand in its cluster (U4); an
   owner can also cancel a single member from its row.
+
+## As built (E1): e2e runs for upgrades and restore
+
+W7 plus the backup exit criterion (`docs/phase6.md` › Full restore). Files:
+`hack/e2e/` — `modes.go` (the four runs), `console_api.go` (upgrades and
+their event stream, nodes and join commands, backups, volumes, secret
+sets), `prober.go` (App availability), `s3.go` (the bucket prefix), networks
+in `hcloud.go` and `sweep.go`, servers as a list in `run.go` (several per
+run, created and deleted mid-run), the suite moved to `suite.go`;
+`.github/workflows/e2e.yml`; `RELEASING.md` › e2e install runs. Nothing in
+the product changed.
+
+### The runs
+
+| Flag | What it does | Servers | Takes | Costs (cx33, €0.0136/h) |
+|---|---|---|---|---|
+| `-from N-1 -via-console` | install N-1, owner, App `hello`; `POST /api/v1/upgrades` (Kwerft N, the owner's password), follow `/events` to `Succeeded`; then the console reports N, the owner signs in, `hello` answers and runs; then the usual checks | 1 | 35–45 min | 1 server-hour, ≈ €0.014 |
+| `-from N-1 -fault` | as above with `e2e.faults`, the Upgrade annotated `kwerft.dev/e2e-fault: install`: it must end `RolledBack`, the console reports N-1 again, `hello` answers from the same pods with the same restart counts. No suite afterwards | 1 | 25–35 min | 1 server-hour |
+| `-k3s [-k3s-from V] [-k3s-to V] [-workers 2]` | a Cloud Network and 3 servers; install N with `KWERFT_K3S_VERSION` one patch behind the release's `K3S_VERSION`; two workers join with join tokens from `POST /api/v1/clusters/local/join-command` and `install.sh --join`; App `hello` with 2 replicas; `POST /api/v1/upgrades` (Kubernetes, the pin), per-node progress from the events; all nodes on the target, Ready, schedulable; then the usual checks | 3 | 50–75 min | 3–6 server-hours, ≈ €0.04–0.08 |
+| `-restore` | install N, owner; Settings › Backups with the run's bucket, prefix `<run id>`; data: Volume `data` with a marker file a Task wrote (served by App `files`), SecretSet `e2e` with a random value whose SHA-256 App `secret` answers; Back up now on plan `cluster`, `Completed`; delete the server; a new one; `install.sh --config kwerft.yaml --restore latest`; checks | 2, one after the other | 45–60 min | 2 server-hours, ≈ €0.03, plus a few MB in the bucket for an hour |
+
+During both console upgrades the harness requests `https://hello.<ip>.sslip.io/`
+every 2 s (`-probe-every`) and reports the longest time without an answer
+as its own result, "App availability during the upgrade" (`-max-gap D`
+fails the run beyond D; by default it only reports, and a gap over 30 s
+gets a note).
+
+**Following an upgrade.** `POST /api/v1/upgrades` is retried for 5 min on
+5xx/429/network errors (a 409 naming the same version's Upgrade is taken as
+the earlier attempt's); other 4xx fail with the console's message (a
+blocked preflight shows its checks' messages). The event stream is read
+with no client timeout; a broken stream (the console restarts) is opened
+again after `-poll`, a `{reason: session}` end signs in again, `gone`
+fails. The result shows the phases seen (`Pending → Preflight → Backup →
+Running → Verifying → Succeeded`), the installer stages done, how often the
+stream reconnected; a run that ends elsewhere than expected puts the tail
+of `GET …/log` into the summary.
+
+**Fault injection.** `e2e.faults` exists only as a chart value, so the run
+sets it on the installed N-1 with `helm upgrade kwerft
+oci://ghcr.io/ehilzinger/charts/kwerft --version N-1 --reuse-values --set
+e2e.faults=true --wait` (`-chart` overrides the chart) and checks that the
+console Deployment then carries `--upgrade-faults`; N-1's chart must know
+the value (U3). The installer of N resets it; the runner of N-1 has the
+flag by then. The annotation must be on the Upgrade before the controller
+creates the runner Job, but the API creates the Upgrade without it, so the
+run annotates it right after the POST over SSH and then makes sure the
+Job's args carry `--fault=install`: a Job created before the annotation is
+deleted (`--cascade=foreground`) and the controller creates it again
+("created again and resumes from the status", U3). The same `helm
+--reuse-values` step sets `upgrades.installBaseURL` when the run's
+installers come from another install repository than the console's
+default (a fork's `INSTALL_REPO`).
+
+**Kubernetes run.** Joining needs a private network (`install.sh`
+stage_join's TODO), so the run creates a Cloud Network (10.0.0.0/16,
+subnet 10.0.0.0/24 in the zone of the first location; only locations of
+that zone are tried) and attaches every server at creation; workers prefer
+the control plane's location. Workers fetch their join material from the
+console over HTTPS with curl, which does not trust the Let's Encrypt
+staging certificate, so the run installs Let's Encrypt's staging roots
+(`letsencrypt.org/certs/staging/letsencrypt-stg-root-x{1,2}.pem`,
+`-staging-roots`) into each worker's trust store first. Every installer run
+(server and workers) gets `KWERFT_K3S_VERSION`; the nodes must report it
+before the upgrade (an installer that ignored it fails there). The default
+versions come from the installer of N on the server (`K3S_VERSION`): the
+target is the pin, the start its previous patch (`v1.37.1+k3s1` →
+`v1.37.0+k3s1`; a pin with patch 0 needs `-k3s-from`). For a **minor**
+upgrade give both (`-k3s-from v1.36.x+k3s1 -k3s-to v1.37.y+k3s1`): the
+request carries `confirmVersion` always. Per-node assertions: every node
+in `status.nodes` reaches `Done`, the control plane is the first to leave
+`Waiting`; the states each node went through are in the result. Two nodes
+seen draining or upgrading at once is a note, not a failure (a finished
+node's kubelet may report the target a poll later).
+
+**Restore run.** Before anything is written the prefix `<run id>/` must be
+empty (otherwise the run fails and leaves it alone); from then on the
+cleanup deletes every object under it, also after a failure, timeout or
+cancel, retrying failed deletions (SSE-C objects need no key to be listed
+or deleted). The recovery key from the `PUT /api/v1/settings/backups`
+answer is masked in the log and kept in memory only. The new server gets
+`/root/kwerft-e2e/{kwerft.yaml,s3.access,s3.secret,recovery.key}` (0600,
+written through SSH's stdin, never in a command line); `kwerft.yaml` holds
+only the `backups` block (endpoint, region if set, bucket, prefix and the
+three files). The installer runs with `--version N --acme-server staging
+--yes --config … --restore latest`, without `--domain`: the console keeps
+the old server's `<old ip>.sslip.io` names, which still point at the
+deleted server, so the checks afterwards connect to the new address with
+the old names (as DNS would once moved; TLS checks the restored
+certificates). Checks: version N, setup complete, the owner signs in with
+the same password; Apps `files` and `secret` run; the marker file is back;
+the set still has `E2E_SECRET` and `secret` answers the SHA-256 of the
+value from before (neither value nor hash is printed); "Domain and DNS"
+reports the names kept, where they point and the installer's DNS lines,
+with a note for consoles on their own domain.
+
+### Running them by hand
+
+On GitHub: Actions → e2e → Run workflow (`workflow_dispatch` inputs
+`version`, `fresh`, `upgrade`, `console_upgrade` auto|yes|no, `fault`,
+`k3s`, `k3s_from`, `k3s_to`, `restore`), each run a job of its own:
+
+```bash
+gh workflow run e2e.yml -R ehilzinger/kwerft -f version=0.7.0 \
+  -f fresh=false -f upgrade=false -f console_upgrade=yes -f fault=true
+gh workflow run e2e.yml -R ehilzinger/kwerft -f version=0.7.0 -f fresh=false -f upgrade=false -f console_upgrade=no -f k3s=true
+gh workflow run e2e.yml -R ehilzinger/kwerft -f version=0.7.0 -f fresh=false -f upgrade=false -f console_upgrade=no -f restore=true
+```
+
+Locally (real servers, deleted at the end; Ctrl-C deletes them too;
+`-dry-run` prints the plan without a token):
+
+```bash
+HCLOUD_TOKEN=… go run ./hack/e2e run -version 0.7.0 -from 0.6.0 -via-console
+HCLOUD_TOKEN=… go run ./hack/e2e run -version 0.7.0 -from 0.6.0 -fault
+HCLOUD_TOKEN=… go run ./hack/e2e run -version 0.7.0 -k3s [-k3s-from v1.37.0+k3s1 -k3s-to v1.37.1+k3s1]
+HCLOUD_TOKEN=… E2E_S3_ENDPOINT=https://fsn1.your-objectstorage.com E2E_S3_BUCKET=kwerft-e2e \
+  E2E_S3_ACCESS_KEY=… E2E_S3_SECRET_KEY=… go run ./hack/e2e run -version 0.7.0 -restore
+HCLOUD_TOKEN=… E2E_S3_…=… go run ./hack/e2e sweep -run <run id> -s3   # what a killed run left
+```
+
+**Needs:** `HCLOUD_TOKEN` (as before); the project's server limit must allow
+3 servers for `-k3s`. For `-restore`: `E2E_S3_ACCESS_KEY` and
+`E2E_S3_SECRET_KEY` (secrets), `E2E_S3_ENDPOINT` and `E2E_S3_BUCKET`
+(secrets or variables), `E2E_S3_REGION` (optional; Hetzner endpoints imply
+it): one bucket for all runs (RELEASING.md › One-time setup, step 5). The
+console-upgrade runs need N-1 to be a release with U2 (`install.env`) and
+U3/U5 (runner, API); the first possible pair is the Phase 6 release and the
+one after it.
+
+**Release and nightly runs** keep the fresh install and the installer
+upgrade and add `-via-console` automatically once N-1's published installer
+contains `INSTALL_ENV_FILE=` (the `resolve` job checks; a notice
+otherwise). The forced failure, `-k3s` and `-restore` run only by hand.
+The job's last step deletes what a killed harness left: servers, networks
+and keys of the run, and with the bucket configured the prefix
+(`sweep -run <id> -s3`).
+
+### Tests
+
+All against fakes (`go test ./hack/e2e`, also with `-race`): the fake
+console (`console_fake_test.go`) now plays upgrades through their phases
+(one step per event; the stream breaks once when "the console restarts";
+`RollingBack → RolledBack` when the fault annotation reached it, or on
+`failUpgrade`), a blocked preflight, nodes, join tokens, per-node k3s
+progress (the control plane's restart makes `hello` fail twice), backup
+settings with a recovery key, a backup that writes Velero-like objects into
+the fake bucket, volumes written by Tasks, secret sets and Apps that serve
+a file or a hash. The fake servers (`run_test.go`) run the installer's
+modes (`--join` only after the staging roots were trusted and with a token
+the console issued; `--restore` only with the uploaded config, keys and
+recovery key matching the backup and objects under the prefix, never with
+`--domain`), the helm values script (or refuse it like an old chart), the
+fault script. The fake cloud has networks (deletion refused while a server
+is attached), one address per server and an `onDelete` hook (the console
+goes down with its server). The fake bucket (`s3_fake_test.go`) checks
+every request's SigV4 signature, pages lists and can fail deletions.
+Covered: each run passing; the fault without the chart value; a rollback
+that touched the App; an unexpected rollback (log in the summary); a
+blocked preflight; a gap over `-max-gap`; a failed join (everything still
+deleted, network included); a failed restore (prefix still emptied); a
+prefix that was not empty (left alone); event-stream parsing; the prober's
+gaps; `previousPatch`; the scripts; host pinning; the bucket's paging,
+retries and refusal to delete everything; the sweeper's networks and
+bucket; config validation and every mode's `-dry-run` plan;
+`TestProductNames` keeps the harness's copies of `kwerft.dev/e2e-fault`,
+`RunnerJobName` and the default install base equal to the product's. The
+workflow's `resolve` step was run with stubbed `gh`, `go` and `curl` for
+nightly (with and without U2 in N-1), the by-hand runs, a missing bucket
+and an empty selection, and its scripts pass shellcheck. Nothing ran
+against Hetzner, a real console or a real bucket.
+
+### Open
+
+- **Never run for real.** First real runs, in this order: `-via-console`
+  and `-fault` once a release after the Phase 6 release exists (or by hand
+  between two Phase 6 release candidates), then `-k3s`, then `-restore`.
+  Things only a real run shows: whether a runner Job deleted mid-`Backup`
+  really resumes cleanly; Hetzner's answer when a network is deleted right
+  after its servers (handled: 409/423 retried for 2 min); whether the
+  workers' trust of the staging roots is enough for every curl the join
+  makes; whether Velero restores the App-rendered workloads without the
+  garbage collector removing them (B2's open question).
+- **Agent cluster in the 3-node run.** Exit criterion 1 also wants an agent
+  cluster upgraded after the console on the 3-node cluster; E1 does not
+  create one (a fourth server with `install.sh --agent` and the console's
+  adopt flow would be the next step).
+- **k3s minor upgrade** works with `-k3s-from`/`-k3s-to` but is not a
+  default job: the console only offers a minor from a Kwerft release that
+  pins the next minor, so it needs a matching pair of versions.
+- **AutoPatch** (exit criterion 4) is not covered: it needs a window that
+  opens during the run and a newer patch release on the channel.
+- **Stale bucket prefixes.** The scheduled sweeper does not look at the
+  bucket; a prefix survives only if both the harness and the job's last
+  step failed, and the summary names it.
+- **Probing** measures from the runner, through Traefik on the server's
+  public address; a gap there may also be the runner's network.

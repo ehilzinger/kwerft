@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"regexp"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -15,19 +16,31 @@ import (
 	"golang.org/x/crypto/ssh"
 )
 
-// fakeRemote plays the server: cloud-init, the installer (which "installs"
-// a version into the fake console), the setup token.
+// fakeRemote plays a server: cloud-init, the installer (which "installs"
+// a version into the fake console, joins a node, or restores), the setup
+// token, and the scripts the runs send.
 type fakeRemote struct {
-	mu       sync.Mutex
-	console  *fakeConsole
-	cmds     []string
-	exit     map[string]int  // installer exit code by version
-	noStage  map[string]bool // versions whose installer lacks --acme-server
-	hang     bool            // the installer never finishes
-	versions []string        // installed, in order
+	mu          sync.Mutex
+	console     *fakeConsole
+	name        string // the server's name, its hostname
+	cmds        []string
+	exit        map[string]int  // installer exit code by version
+	noStage     map[string]bool // versions whose installer lacks --acme-server
+	hang        bool            // the installer never finishes
+	versions    []string        // installed, in order
+	pin         string          // the installer's K3S_VERSION
+	noFaults    bool            // the chart has no e2e.faults
+	trusted     bool            // Let's Encrypt staging is trusted
+	restoreFail bool            // --restore cannot read the backups
+	uploads     map[string]string
 }
 
-var installCmd = regexp.MustCompile(`^bash '/root/kwerft-install-([^']+)\.sh'(.*)$`)
+var (
+	installCmd = regexp.MustCompile(`^((?:[A-Z0-9_]+='[^']*' )*)bash '/root/kwerft-install-([^']+)\.sh'(.*)$`)
+	envRE      = regexp.MustCompile(`([A-Z0-9_]+)='([^']*)'`)
+	quotedRE   = regexp.MustCompile(`'([^']*)'`)
+	annotateRE = regexp.MustCompile(`annotate upgrades\.kwerft\.dev '([^']+)'`)
+)
 
 func (f *fakeRemote) run(ctx context.Context, cmd string, stdout, stderr io.Writer) (int, error) {
 	f.mu.Lock()
@@ -42,25 +55,150 @@ func (f *fakeRemote) run(ctx context.Context, cmd string, stdout, stderr io.Writ
 		if f.noStage[v] {
 			return 1, nil
 		}
+	case strings.HasPrefix(cmd, "sed -n 's/^K3S_VERSION="):
+		fmt.Fprintln(stdout, f.pin)
 	case installCmd.MatchString(cmd):
-		v := installCmd.FindStringSubmatch(cmd)[1]
-		if f.hang {
-			<-ctx.Done()
-			return -1, ctx.Err()
-		}
-		fmt.Fprintf(stdout, "▸ Kwerft installer %s\n✓ Preflight\n", v)
-		if code := f.exit[v]; code != 0 {
-			fmt.Fprintf(stderr, "✗ Stage \"Kubernetes\" failed\n")
-			return code, nil
-		}
-		f.mu.Lock()
-		f.versions = append(f.versions, v)
-		f.mu.Unlock()
-		f.console.installed(v)
+		return f.install(ctx, cmd, stdout, stderr)
 	case cmd == "cat /etc/kwerft/setup-token":
 		fmt.Fprintln(stdout, f.console.token)
+	case strings.Contains(cmd, "helm upgrade kwerft"):
+		if f.noFaults && strings.Contains(cmd, "e2e.faults=true") {
+			fmt.Fprintln(stderr, "the console runs without --upgrade-faults: the chart of 0.5.0 does not have this value")
+			return 1, nil
+		}
+		f.console.mu.Lock()
+		f.console.faults = f.console.faults || strings.Contains(cmd, "e2e.faults=true")
+		if m := regexp.MustCompile(`'upgrades\.installBaseURL=([^']+)'`).FindStringSubmatch(cmd); m != nil {
+			f.console.installBase = m[1]
+		}
+		f.console.mu.Unlock()
+	case strings.Contains(cmd, "kwerft.dev/e2e-fault="):
+		m := annotateRE.FindStringSubmatch(cmd)
+		if m == nil {
+			return 1, nil
+		}
+		if err := f.console.setFault(m[1], faultInstall); err != nil {
+			fmt.Fprintln(stderr, err)
+			return 1, nil
+		}
+		fmt.Fprintf(stdout, "runner %s carries --fault=install\n", runnerJobName(m[1]))
+	case strings.Contains(cmd, "update-ca-certificates"):
+		f.mu.Lock()
+		f.trusted = true
+		f.mu.Unlock()
 	}
 	return 0, nil
+}
+
+func (f *fakeRemote) install(ctx context.Context, cmd string, stdout, stderr io.Writer) (int, error) {
+	m := installCmd.FindStringSubmatch(cmd)
+	env := map[string]string{}
+	for _, kv := range envRE.FindAllStringSubmatch(m[1], -1) {
+		env[kv[1]] = kv[2]
+	}
+	v := m[2]
+	var args []string
+	for _, q := range quotedRE.FindAllStringSubmatch(m[3], -1) {
+		args = append(args, q[1])
+	}
+	value := func(flag string) string {
+		if i := slices.Index(args, flag); i >= 0 && i+1 < len(args) {
+			return args[i+1]
+		}
+		return ""
+	}
+	if f.hang {
+		<-ctx.Done()
+		return -1, ctx.Err()
+	}
+	fmt.Fprintf(stdout, "▸ Kwerft installer %s\n✓ Preflight\n", v)
+	if code := f.exit[v]; code != 0 {
+		fmt.Fprintf(stderr, "✗ Stage \"Kubernetes\" failed\n")
+		return code, nil
+	}
+	k3s := cmpOr(env["KWERFT_K3S_VERSION"], f.pin)
+	switch {
+	case slices.Contains(args, "--join"):
+		f.mu.Lock()
+		trusted := f.trusted
+		f.mu.Unlock()
+		if !trusted {
+			fmt.Fprintln(stderr, "curl: (60) SSL certificate problem: unable to get local issuer certificate")
+			return 20, nil
+		}
+		if value("--join") != "https://"+f.console.domain || !f.console.spendJoinToken(value("--token")) {
+			fmt.Fprintln(stderr, "✗ Could not reach the console or the join token was rejected")
+			return 20, nil
+		}
+		f.console.addNode(f.name, "worker", k3s)
+		fmt.Fprintf(stdout, "✓ Join · k3s %s agent joined\n", k3s)
+	case slices.Contains(args, "--restore"):
+		if slices.Contains(args, "--domain") {
+			fmt.Fprintln(stderr, "--domain would move the console off the backup's hostname")
+			return 2, nil
+		}
+		if err := f.checkRestore(value("--config")); err != nil {
+			fmt.Fprintln(stderr, "✗ Restore: "+err.Error())
+			return 60, nil
+		}
+		f.console.restored(v)
+		fmt.Fprintf(stdout, "✓ Restore · kwerft-cluster restored\n  DNS         point %s and the apps hostnames at this server: 203.0.113.11\n", f.console.domain)
+	default:
+		f.console.installed(v)
+		f.console.addNode(f.name, "control-plane", k3s)
+	}
+	f.mu.Lock()
+	f.versions = append(f.versions, v)
+	f.mu.Unlock()
+	return 0, nil
+}
+
+// checkRestore is what install.sh --restore needs: the config's backups
+// block, the key files it names, and a backup under the prefix.
+func (f *fakeRemote) checkRestore(config string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.restoreFail {
+		return errors.New("Cannot read the backups")
+	}
+	y, ok := f.uploads[config]
+	if !ok {
+		return fmt.Errorf("--config %s not readable", config)
+	}
+	field := func(k string) string {
+		m := regexp.MustCompile(`(?m)^  ` + k + `: (.*)$`).FindStringSubmatch(y)
+		if m == nil {
+			return ""
+		}
+		return m[1]
+	}
+	c := f.console
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	switch {
+	case c.target == nil:
+		return errors.New("no backups were ever configured")
+	case field("endpoint") != c.target.Endpoint || field("bucket") != c.target.Bucket || field("prefix") != c.target.Prefix:
+		return fmt.Errorf("another bucket or prefix than the backups': %q", y)
+	case strings.TrimSpace(f.uploads[field("accessKeyFile")]) != c.s3.creds.AccessKey || strings.TrimSpace(f.uploads[field("secretKeyFile")]) != c.s3.creds.SecretKey:
+		return errors.New("the access keys do not open the bucket")
+	case strings.TrimSpace(f.uploads[field("recoveryKeyFile")]) != c.recoveryKey:
+		return errors.New("no complete Cluster backup readable with this recovery key")
+	case len(c.s3.keys(c.target.Prefix+"/velero/backups/")) == 0:
+		return errors.New("there are no backups under the prefix")
+	}
+	return nil
+}
+
+func (f *fakeRemote) upload(_ context.Context, path string, data []byte) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.cmds = append(f.cmds, "upload "+path)
+	if f.uploads == nil {
+		f.uploads = map[string]string{}
+	}
+	f.uploads[path] = string(data)
+	return nil
 }
 
 func (f *fakeRemote) close() error { return nil }
@@ -74,23 +212,41 @@ func (f *fakeRemote) commands() []string {
 type harness struct {
 	cloud   *fakeCloud
 	console *fakeConsole
-	remote  *fakeRemote
+	remote  *fakeRemote // the first server's
 	runner  *runner
 	log     *bytes.Buffer
 	dials   int
 	masked  []string
+
+	mu      sync.Mutex
+	remotes map[string]*fakeRemote // by address
 }
 
 func newHarness(t *testing.T, version, from string) *harness {
 	t.Helper()
-	h := &harness{cloud: newFakeCloud(t), log: &bytes.Buffer{}}
+	return newHarnessWith(t, config{Version: version, From: from})
+}
+
+// newHarnessWith runs base (version, from and the mode's fields) against
+// the fakes.
+func newHarnessWith(t *testing.T, base config) *harness {
+	t.Helper()
+	h := &harness{cloud: newFakeCloud(t), log: &bytes.Buffer{}, remotes: map[string]*fakeRemote{}}
 	h.console = newFakeConsole(t, newTestCA(t, "(STAGING) Let's Encrypt"), "203.0.113.10")
-	h.remote = &fakeRemote{console: h.console, exit: map[string]int{}, noStage: map[string]bool{}}
-	cfg := config{
-		Token: "test-token", Version: version, From: from, RunID: "42-1-fresh",
-		ServerTypes: []string{"cx33", "cx43"}, Locations: []string{"nbg1", "fsn1"}, Images: []string{"ubuntu-26.04", "ubuntu-24.04"},
-		InstallerURL: "https://example.test/v{version}/install.sh", GitRepo: "https://github.com/traefik/whoami", GitBranch: "master",
-		Timeout: time.Minute, InstallTimeout: 10 * time.Second, Poll: time.Millisecond,
+	h.remote = h.remoteFor("203.0.113.10")
+	h.cloud.onDelete = func(ip string) {
+		if ip == "203.0.113.10" {
+			h.console.gone()
+		}
+	}
+	cfg := base
+	cfg.Token, cfg.RunID = "test-token", cmpOr(base.RunID, "42-1-fresh")
+	cfg.ServerTypes, cfg.Locations, cfg.Images = []string{"cx33", "cx43"}, []string{"nbg1", "fsn1"}, []string{"ubuntu-26.04", "ubuntu-24.04"}
+	cfg.InstallerURL, cfg.GitRepo, cfg.GitBranch = "https://example.test/v{version}/install.sh", "https://github.com/traefik/whoami", "master"
+	cfg.ChartRef, cfg.StagingRoots = defaultChartRef, defaultStagingRoots
+	cfg.Timeout, cfg.InstallTimeout, cfg.Poll = time.Minute, 10*time.Second, time.Millisecond
+	if cfg.K3s && cfg.Workers == 0 {
+		cfg.Workers = 2
 	}
 	if err := cfg.validate(); err != nil {
 		t.Fatal(err)
@@ -98,22 +254,44 @@ func newHarness(t *testing.T, version, from string) *harness {
 	h.runner = &runner{
 		cfg: cfg, cloud: h.cloud.client(),
 		dial: func(_ context.Context, addr string, k *runKeys) (remote, error) {
+			h.mu.Lock()
 			h.dials++
-			if addr != "203.0.113.10:22" {
+			dials := h.dials
+			h.mu.Unlock()
+			ip, port, _ := strings.Cut(addr, ":")
+			if !strings.HasPrefix(ip, "203.0.113.") || port != "22" {
 				return nil, fmt.Errorf("dialled %s", addr)
 			}
-			if h.dials < 3 {
+			if dials < 3 {
 				return nil, errors.New("connection refused")
 			}
-			return h.remote, nil
+			rem := h.remoteFor(ip)
+			rem.mu.Lock()
+			if rem.name == "" {
+				rem.name = h.cloud.serverByIP(ip)
+			}
+			rem.mu.Unlock()
+			return rem, nil
 		},
 		transport: h.console.client,
 		log:       h.log,
 		now:       time.Now,
-		mask:      func(s string) { h.masked = append(h.masked, s) },
+		mask:      func(s string) { h.mu.Lock(); h.masked = append(h.masked, s); h.mu.Unlock() },
 		rep:       &report{Title: "Kwerft e2e"},
 	}
 	return h
+}
+
+// remoteFor is the fake server at ip.
+func (h *harness) remoteFor(ip string) *fakeRemote {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if r, ok := h.remotes[ip]; ok {
+		return r
+	}
+	r := &fakeRemote{console: h.console, exit: map[string]int{}, noStage: map[string]bool{}, pin: "v1.37.1+k3s1", uploads: map[string]string{}}
+	h.remotes[ip] = r
+	return r
 }
 
 func (h *harness) markdown() string {
@@ -126,6 +304,9 @@ func (h *harness) assertCleanedUp(t *testing.T) {
 	t.Helper()
 	if s, k := h.cloud.counts(); s != 0 || k != 0 {
 		t.Errorf("left behind: %d server(s), %d SSH key(s)", s, k)
+	}
+	if n := h.cloud.networkCount(); n != 0 {
+		t.Errorf("left behind: %d network(s)", n)
 	}
 	if !h.runner.rep.CleanupOK {
 		t.Errorf("cleanup not reported OK: %v", h.runner.rep.Cleanup)

@@ -328,10 +328,24 @@ fake Hetzner API, a fake server and a fake console).
 
 | When | What |
 |---|---|
-| A release tag, after publishing (`release.yml` › `e2e`) | that version: a fresh install, and an upgrade from the newest stable release before it |
-| Nightly, 02:17 UTC | the latest stable release, fresh and as an upgrade |
-| By hand: Actions → e2e → Run workflow | any published version (empty: the latest), upgrade optional |
+| A release tag, after publishing (`release.yml` › `e2e`) | that version: a fresh install, and an upgrade from the newest stable release before it (installer re-run), plus the same upgrade **through the console** once that release has console upgrades (below) |
+| Nightly, 02:17 UTC | the latest stable release, the same three runs |
+| By hand: Actions → e2e → Run workflow | any published version (empty: the latest); pick the runs: fresh, installer upgrade, console upgrade (auto/yes/no), forced failure, Kubernetes on 3 nodes, backup restore |
 | Every 3 hours (and nightly) | the sweeper |
+
+**Console upgrades in release runs are conditional.** The console can only
+upgrade a server whose installer remembers its settings in
+`/var/lib/kwerft/install.env` (Phase 6, U2). The `resolve` job downloads the
+published installer of the release before and adds the `-via-console` run
+only when it contains `INSTALL_ENV_FILE=`; otherwise the run summary carries
+a notice ("v… predates upgrades from the console"). So the first release
+after the Phase 6 release is the first one tested this way, without anyone
+flipping a switch. Asking for it by hand (`console_upgrade: yes`, or
+`fault`) against such an old release is an error instead.
+
+The forced failure, the Kubernetes run and the restore run are by hand only
+(they cost more and the restore needs a bucket); what they do, what they
+need and what they cost: `docs/phase6-upgrades.md` › As built (E1).
 
 Each scenario gets its own server, in parallel. A run:
 
@@ -396,8 +410,25 @@ certificates are untrusted; the harness accepts them only if the issuer says
    gh variable set E2E_LOCATIONS --body nbg1,fsn1,hel1 -R ehilzinger/kwerft
    ```
 
-The project's server limit must allow two servers at a time (fresh and
-upgrade run in parallel); new Hetzner accounts start with a small limit.
+The project's server limit must allow three servers at a time (fresh,
+installer upgrade and console upgrade run in parallel; the Kubernetes run
+alone needs three, and with everything selected by hand it is up to eight);
+new Hetzner accounts start with a small limit.
+
+5. Only for the restore run: a bucket in Hetzner Object Storage (any
+   location; one bucket for all runs, each uses the prefix `<run id>/` and
+   deletes it at the end) with an access key for it:
+
+   ```bash
+   gh secret set E2E_S3_ACCESS_KEY -R ehilzinger/kwerft
+   gh secret set E2E_S3_SECRET_KEY -R ehilzinger/kwerft
+   gh variable set E2E_S3_ENDPOINT --body https://fsn1.your-objectstorage.com -R ehilzinger/kwerft
+   gh variable set E2E_S3_BUCKET --body kwerft-e2e -R ehilzinger/kwerft
+   # optional: gh variable set E2E_S3_REGION --body fsn1 -R ehilzinger/kwerft
+   ```
+
+   Endpoint and bucket may be secrets instead of variables. Without them a
+   restore run asked for by hand fails in `resolve`, before any server.
 
 ### Costs
 
@@ -405,7 +436,9 @@ upgrade run in parallel); new Hetzner accounts start with a small limit.
 the IPv4 address (prices from 15 June 2026, excl. VAT); Hetzner bills each
 started hour. A run takes about 25–40 minutes, so each scenario costs one
 server-hour: about €0.03 per release tag (two servers) and the same per
-night, roughly €1 a month. The run summary shows the price the API reported.
+night, roughly €1 a month; the console upgrade run adds one more server-hour
+each time (about €0.045 for three). The run summary shows the price the API
+reported, summed over every server of a run.
 
 `cx23` (the successor of `cx22`: 2 vCPU, 4 GB, €0.0088/h) is cheaper but
 below the recommended 8 GB: the platform takes about 2.5 GB and a Git build
@@ -418,6 +451,8 @@ below the recommended 8 GB: the platform takes about 2.5 GB and a Git build
 
   ```bash
   gh workflow run e2e.yml -R ehilzinger/kwerft -f version=0.4.0
+  gh workflow run e2e.yml -R ehilzinger/kwerft -f version=0.7.0 -f fresh=false -f upgrade=false \
+    -f console_upgrade=no -f fault=true -f k3s=true -f restore=true   # the Phase 6 runs
   gh run watch -R ehilzinger/kwerft
   ```
 
@@ -436,8 +471,12 @@ below the recommended 8 GB: the platform takes about 2.5 GB and a Git build
   one-time GitHub setup, then re-run.
 - **No server could be created** — every type/location was unavailable or the
   project is at its server limit; the summary lists what was tried.
-- **Cleanup incomplete** — the summary says which server or key is left. The
-  sweeper deletes it within 3 hours, or delete it in the Hetzner Console.
+- **Cleanup incomplete** — the summary says which server, network or key is
+  left. The sweeper deletes it within 3 hours, or delete it in the Hetzner
+  Console. A restore run's bucket prefix that was not emptied (the summary
+  names it) is deleted by the job's last step (`e2e sweep -run <id> -s3`);
+  if that failed too, delete `<run id>/` in the bucket by hand. The
+  scheduled sweeper does not look at the bucket.
 - The job log has the installer's full output and, after a failed install,
   the tail of `/var/log/kwerft/install.log` and the pods that are not running.
 

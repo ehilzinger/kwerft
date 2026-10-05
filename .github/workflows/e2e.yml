@@ -1,17 +1,26 @@
 # End-to-end install runs on fresh Hetzner Cloud servers: the published
 # installer of a release, a fresh install and an upgrade from the release
 # before it, checked the way a user would use Kwerft; the servers are always
-# deleted again. See RELEASING.md › "e2e install runs".
+# deleted again. See RELEASING.md › "e2e install runs" and
+# docs/phase6-upgrades.md › "As built (E1)".
 #
 # - release.yml calls it after a tag is published (a failed run does not
 #   unpublish anything).
 # - Nightly: the latest stable release, fresh and as an upgrade.
-# - By hand: Actions → e2e → Run workflow, with a version.
-# - The sweeper deletes e2e servers and SSH keys older than 3 h.
+# - Release and nightly runs also upgrade through the console (-via-console)
+#   once the release before has console upgrades (its installer writes
+#   install.env, Phase 6 U2); before that the run is skipped with a notice.
+# - By hand: Actions → e2e → Run workflow, with a version and the runs to do:
+#   the forced failure (rollback), the Kubernetes upgrade on 3 nodes, and
+#   the backup restored onto a new server.
+# - The sweeper deletes e2e servers, networks and SSH keys older than 3 h.
 #
 # Needs the secret HCLOUD_TOKEN (a Hetzner Cloud project used only for this);
-# without it every job skips with a notice. Results go to the run summary;
-# no workflow artifacts (they count against the private repository's quota).
+# without it every job skips with a notice. The restore run also needs a
+# bucket: E2E_S3_ACCESS_KEY and E2E_S3_SECRET_KEY (secrets), E2E_S3_ENDPOINT
+# and E2E_S3_BUCKET (secrets or variables), E2E_S3_REGION (optional). Results
+# go to the run summary; no workflow artifacts (they count against the
+# private repository's quota).
 name: e2e
 
 on:
@@ -28,6 +37,16 @@ on:
     secrets:
       HCLOUD_TOKEN:
         required: false
+      # Only for workflow_dispatch's restore run; declared so the calls
+      # below resolve.
+      E2E_S3_ENDPOINT:
+        required: false
+      E2E_S3_BUCKET:
+        required: false
+      E2E_S3_ACCESS_KEY:
+        required: false
+      E2E_S3_SECRET_KEY:
+        required: false
   schedule:
     - cron: "17 2 * * *"    # nightly e2e (and a sweep)
     - cron: "47 */3 * * *"  # sweep only
@@ -37,10 +56,39 @@ on:
         description: Release to test (empty = the latest stable release)
         required: false
         default: ""
-      upgrade:
-        description: Also test the upgrade from the release before it
+      fresh:
+        description: Fresh install
         type: boolean
         default: true
+      upgrade:
+        description: Upgrade from the release before it by re-running the installer
+        type: boolean
+        default: true
+      console_upgrade:
+        description: "Upgrade from the release before it through the console (auto: when that release has console upgrades)"
+        type: choice
+        options: [auto, "yes", "no"]
+        default: auto
+      fault:
+        description: "Forced failure: the console's upgrade fails after the Kwerft stage and must roll back"
+        type: boolean
+        default: false
+      k3s:
+        description: Kubernetes patch upgrade through the console on 3 nodes (one control plane, two workers)
+        type: boolean
+        default: false
+      k3s_from:
+        description: "k3s to install for the Kubernetes run (empty: one patch behind the release's pin)"
+        required: false
+        default: ""
+      k3s_to:
+        description: "k3s to upgrade to (empty: the release's pin)"
+        required: false
+        default: ""
+      restore:
+        description: "Backup to the E2E_S3_* bucket, delete the server, install.sh --restore on a new one"
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -49,8 +97,8 @@ env:
   INSTALL_REPO: ${{ vars.INSTALL_REPO || 'ehilzinger/kwerft-install' }}
 
 jobs:
-  # Decides what to run: the version, the release to upgrade from, and
-  # whether there is a token at all.
+  # Decides what to run: the version, the release to upgrade from, the runs,
+  # and whether there is a token at all.
   resolve:
     if: github.event_name != 'schedule' || github.event.schedule == '17 2 * * *'
     runs-on: ubuntu-latest
@@ -81,7 +129,16 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ inputs.version }}
+          DISPATCH: ${{ github.event_name == 'workflow_dispatch' }}
+          FRESH: ${{ github.event_name != 'workflow_dispatch' || inputs.fresh }}
           UPGRADE: ${{ github.event_name != 'workflow_dispatch' || inputs.upgrade }}
+          CONSOLE_UPGRADE: ${{ github.event_name == 'workflow_dispatch' && inputs.console_upgrade || 'auto' }}
+          FAULT: ${{ github.event_name == 'workflow_dispatch' && inputs.fault }}
+          K3S: ${{ github.event_name == 'workflow_dispatch' && inputs.k3s }}
+          K3S_FROM: ${{ inputs.k3s_from }}
+          K3S_TO: ${{ inputs.k3s_to }}
+          RESTORE: ${{ github.event_name == 'workflow_dispatch' && inputs.restore }}
+          HAS_S3: ${{ secrets.E2E_S3_ACCESS_KEY != '' && secrets.E2E_S3_SECRET_KEY != '' && (secrets.E2E_S3_ENDPOINT || vars.E2E_S3_ENDPOINT) != '' && (secrets.E2E_S3_BUCKET || vars.E2E_S3_BUCKET) != '' }}
         run: |
           set -o pipefail
           gh release list -R "$GITHUB_REPOSITORY" --limit 100 --json tagName,isDraft \
@@ -91,23 +148,72 @@ jobs:
             [[ -n "$VERSION" ]] || { echo "::error::No stable release to test."; exit 1; }
           fi
           VERSION=${VERSION#v}
+          want_from=false
+          [[ "$UPGRADE" == true || "$CONSOLE_UPGRADE" != no || "$FAULT" == true ]] && want_from=true
           FROM=""
-          if [[ "$UPGRADE" == true ]]; then
+          if [[ "$want_from" == true ]]; then
             FROM=$(go run ./hack/e2e previous -version "$VERSION" <"$RUNNER_TEMP/tags")
             [[ -n "$FROM" ]] || echo "::notice title=No upgrade run::There is no stable release before v$VERSION to upgrade from."
           fi
           # The published installers must exist before a server is paid for.
           for v in "$VERSION" ${FROM:+"$FROM"}; do
             url="https://raw.githubusercontent.com/$INSTALL_REPO/main/v$v/install.sh"
-            if ! curl -fsSIL --retry 3 -o /dev/null "$url"; then
+            if ! curl -fsSL --retry 3 -o "$RUNNER_TEMP/install-$v.sh" "$url"; then
               echo "::error title=Installer not published::$url is missing. Was the install-repo job of the v$v release skipped (INSTALL_REPO_TOKEN)? See RELEASING.md."
               exit 1
             fi
           done
-          matrix=$(jq -cn --arg from "$FROM" \
-            '[{name: "fresh", from: ""}] + (if $from == "" then [] else [{name: "upgrade", from: $from}] end)')
+          # A console upgrades itself from the first release whose installer
+          # remembers its settings in install.env (Phase 6, U2); older ones
+          # are refused by the console's own check.
+          from_upgradable=false
+          if [[ -n "$FROM" ]] && grep -q 'INSTALL_ENV_FILE=' "$RUNNER_TEMP/install-$FROM.sh"; then
+            from_upgradable=true
+          fi
+
+          matrix='[]'
+          add() {  # name title from args
+            matrix=$(jq -c --arg name "$1" --arg title "$2" --arg from "$3" --arg args "$4" \
+              '. + [{name: $name, title: $title, from: $from, args: $args}]' <<<"$matrix")
+          }
+          [[ "$FRESH" == true ]] && add fresh "fresh install" "" ""
+          if [[ -n "$FROM" ]]; then
+            [[ "$UPGRADE" == true ]] && add upgrade "upgrade from v$FROM" "$FROM" ""
+            if [[ "$CONSOLE_UPGRADE" != no || "$FAULT" == true ]] && [[ "$from_upgradable" != true ]]; then
+              msg="v$FROM predates upgrades from the console (its installer has no install.env, Phase 6 U2), so no console upgrade run."
+              if [[ "$CONSOLE_UPGRADE" == yes || "$FAULT" == true ]]; then
+                echo "::error title=No console upgrade from v$FROM::$msg"
+                exit 1
+              fi
+              echo "::notice title=No console upgrade run::$msg"
+            elif [[ "$from_upgradable" == true ]]; then
+              [[ "$CONSOLE_UPGRADE" != no ]] && add console "upgrade from v$FROM through the console" "$FROM" "-via-console"
+              [[ "$FAULT" == true ]] && add fault "failed upgrade from v$FROM, rolled back" "$FROM" "-fault"
+            fi
+          elif [[ "$CONSOLE_UPGRADE" == yes || "$FAULT" == true ]]; then
+            echo "::error::A console upgrade run needs a stable release before v$VERSION."
+            exit 1
+          fi
+          if [[ "$K3S" == true ]]; then
+            for k in "$K3S_FROM" "$K3S_TO"; do
+              [[ -z "$k" || "$k" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-rc[0-9]+)?\+k3s[0-9]+$ ]] || { echo "::error::$k is not a k3s version like v1.37.1+k3s1."; exit 1; }
+            done
+            add k3s "Kubernetes upgrade on 3 nodes" "" "-k3s${K3S_FROM:+ -k3s-from $K3S_FROM}${K3S_TO:+ -k3s-to $K3S_TO}"
+          fi
+          if [[ "$RESTORE" == true ]]; then
+            if [[ "$HAS_S3" != true ]]; then
+              echo "::error title=No bucket::The restore run needs E2E_S3_ACCESS_KEY, E2E_S3_SECRET_KEY, E2E_S3_ENDPOINT and E2E_S3_BUCKET (RELEASING.md › e2e install runs)."
+              exit 1
+            fi
+            add restore "backup restored onto a new server" "" "-restore"
+          fi
+          run=true
+          if [[ "$matrix" == "[]" ]]; then
+            echo "::notice title=Nothing to run::No e2e run was selected."
+            run=false
+          fi
           {
-            echo "run=true"
+            echo "run=$run"
             echo "version=$VERSION"
             echo "matrix=$matrix"
           } | tee -a "$GITHUB_OUTPUT"
@@ -115,10 +221,11 @@ jobs:
   install:
     needs: resolve
     if: needs.resolve.outputs.run == 'true'
-    name: ${{ matrix.name == 'fresh' && 'fresh install' || format('upgrade from v{0}', matrix.from) }}
+    name: ${{ matrix.title }}
     runs-on: ubuntu-latest
-    # The harness gives up after 80 min and then deletes the server.
-    timeout-minutes: 100
+    # The harness gives up after 80 min (120 min for k3s and restore) and then
+    # deletes what it created.
+    timeout-minutes: ${{ (matrix.name == 'k3s' || matrix.name == 'restore') && 150 || 100 }}
     strategy:
       fail-fast: false
       matrix:
@@ -131,8 +238,15 @@ jobs:
       RUN_ID: ${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.name }}
       VERSION: ${{ needs.resolve.outputs.version }}
       FROM: ${{ matrix.from }}
+      ARGS: ${{ matrix.args }}
       E2E_SERVER_TYPES: ${{ vars.E2E_SERVER_TYPES }}
       E2E_LOCATIONS: ${{ vars.E2E_LOCATIONS }}
+      # The bucket only for the restore run.
+      E2E_S3_ENDPOINT: ${{ matrix.name == 'restore' && (secrets.E2E_S3_ENDPOINT || vars.E2E_S3_ENDPOINT) || '' }}
+      E2E_S3_BUCKET: ${{ matrix.name == 'restore' && (secrets.E2E_S3_BUCKET || vars.E2E_S3_BUCKET) || '' }}
+      E2E_S3_REGION: ${{ matrix.name == 'restore' && vars.E2E_S3_REGION || '' }}
+      E2E_S3_ACCESS_KEY: ${{ matrix.name == 'restore' && secrets.E2E_S3_ACCESS_KEY || '' }}
+      E2E_S3_SECRET_KEY: ${{ matrix.name == 'restore' && secrets.E2E_S3_SECRET_KEY || '' }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -142,7 +256,8 @@ jobs:
         run: go build -o "$RUNNER_TEMP/e2e" ./hack/e2e
       - name: Install, check, destroy
         run: |
-          "$RUNNER_TEMP/e2e" run -version "$VERSION" ${FROM:+-from "$FROM"} -run-id "$RUN_ID" \
+          read -ra extra <<<"$ARGS"
+          "$RUNNER_TEMP/e2e" run -version "$VERSION" ${FROM:+-from "$FROM"} ${extra[@]+"${extra[@]}"} -run-id "$RUN_ID" \
             -installer-url "https://raw.githubusercontent.com/$INSTALL_REPO/main/v{version}/install.sh"
       # The harness deletes what it created, also when it fails. This catches
       # a harness that was killed (job timeout, cancel) before it could.
@@ -150,7 +265,9 @@ jobs:
         if: always()
         run: |
           if [[ -x "$RUNNER_TEMP/e2e" ]]; then
-            "$RUNNER_TEMP/e2e" sweep -run "$RUN_ID" -summary ""
+            s3=()
+            [[ -n "$E2E_S3_ACCESS_KEY" ]] && s3=(-s3)
+            "$RUNNER_TEMP/e2e" sweep -run "$RUN_ID" ${s3[@]+"${s3[@]}"} -summary ""
           fi
       - name: Note for the release
         if: failure() && inputs.release
@@ -161,8 +278,9 @@ jobs:
             echo "Fix forward with a new tag, or mark the GitHub Release as a pre-release / remove the top-level installer in $INSTALL_REPO by hand."
           } >>"$GITHUB_STEP_SUMMARY"
 
-  # Deletes e2e servers and SSH keys older than 3 h: whatever a run could not
-  # clean up (a runner lost mid-run). Only resources labelled kwerft-e2e=true.
+  # Deletes e2e servers, networks and SSH keys older than 3 h: whatever a run
+  # could not clean up (a runner lost mid-run). Only resources labelled
+  # kwerft-e2e=true.
   sweep:
     if: github.event_name == 'schedule'
     runs-on: ubuntu-latest

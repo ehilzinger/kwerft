@@ -15,6 +15,7 @@ import (
 	"net/http"
 	"net/http/cookiejar"
 	"net/url"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -114,7 +115,24 @@ type console struct {
 // httpError is a non-2xx answer.
 type httpError struct {
 	Status int
-	Body   string
+	Body   string // shortened, for messages
+	Raw    string // the whole answer
+}
+
+var errorFieldRE = regexp.MustCompile(`"error"\s*:\s*"((?:[^"\\]|\\.)*)"`)
+
+// message is the answer's "error" field, else its shortened body.
+func (e *httpError) message() string {
+	var v struct {
+		Error string `json:"error"`
+	}
+	if json.Unmarshal([]byte(e.Raw), &v) == nil && v.Error != "" {
+		return v.Error
+	}
+	if m := errorFieldRE.FindStringSubmatch(e.Body); m != nil {
+		return m[1]
+	}
+	return strings.TrimSpace(e.Body)
 }
 
 func (e *httpError) Error() string {
@@ -148,7 +166,7 @@ func (c *console) do(ctx context.Context, method, path string, in, out any) erro
 		return err
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return &httpError{Status: resp.StatusCode, Body: truncate(string(data), 300)}
+		return &httpError{Status: resp.StatusCode, Body: truncate(string(data), 300), Raw: string(data)}
 	}
 	if out != nil && len(data) > 0 {
 		return json.Unmarshal(data, out)
