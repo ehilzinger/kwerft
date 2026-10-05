@@ -67,6 +67,9 @@ type UpgradeChecks struct {
 	// Cluster is this cluster's name for NodePools ("local" for the
 	// console's).
 	Cluster string
+	// APIServer answers the Kubernetes preflight's etcd and deprecated-API
+	// questions (k3s_preflight.go); nil fails those checks.
+	APIServer upgrades.APIServerInfo
 }
 
 // Facts the checks gathered, for the controller.

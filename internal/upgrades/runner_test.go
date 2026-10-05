@@ -545,10 +545,69 @@ func TestParseSums(t *testing.T) {
 	}
 }
 
-func TestRunnerRefusesKubernetesUpgrades(t *testing.T) {
-	e := newRunnerEnv(t, kwerftv1.UpgradeBackingUp)
-	e.cluster.u.Spec.Component = kwerftv1.UpgradeKubernetes
-	if err := e.r.Run(context.Background()); err == nil {
-		t.Fatal("ran a Kubernetes upgrade")
+func kubernetesRunnerEnv(t *testing.T, phase kwerftv1.UpgradePhase) *runnerEnv {
+	t.Helper()
+	e := newRunnerEnv(t, phase)
+	e.cluster.u.Name = "kubernetes-v1-38-1-k3s1-ab"
+	e.cluster.u.Spec = kwerftv1.UpgradeSpec{Component: kwerftv1.UpgradeKubernetes, Version: "v1.38.1+k3s1"}
+	e.cluster.u.Status.Backup = nil
+	e.r.Name = e.cluster.u.Name
+	return e
+}
+
+// A Kubernetes upgrade's runner only takes the etcd snapshot; the
+// controller does the rest.
+func TestRunnerTakesTheSnapshotOfAKubernetesUpgrade(t *testing.T) {
+	e := kubernetesRunnerEnv(t, kwerftv1.UpgradeBackingUp)
+	u := e.run(t)
+	if u.Status.Phase != kwerftv1.UpgradeBackingUp || u.Status.Backup == nil || u.Status.Backup.EtcdSnapshot != "pre-kubernetes-v1-38-1-k3s1-ab" {
+		t.Fatalf("status = %s %+v", u.Status.Phase, u.Status.Backup)
+	}
+	want := [][]string{{HostK3s, "etcd-snapshot", "save", "--name", "pre-kubernetes-v1-38-1-k3s1-ab"}}
+	if runs := e.host.runs; len(runs) != 1 || !slices.Equal(runs[0], want[0]) {
+		t.Errorf("ran %v", runs)
+	}
+	if len(e.host.started) != 0 {
+		t.Error("started an installer")
+	}
+	// Run again (a retried pod): nothing more.
+	e.run(t)
+	if len(e.host.runs) != 1 {
+		t.Errorf("snapshot taken twice: %v", e.host.runs)
+	}
+	// The cluster restored from the snapshot: the Upgrade is in Backup
+	// again without it. It is not repeated.
+	e.cluster.u.Status.Backup = nil
+	u = e.run(t)
+	if u.Status.Phase != kwerftv1.UpgradeFailed || !strings.Contains(u.Status.Message, "restored from this upgrade's etcd snapshot") || len(e.host.runs) != 1 {
+		t.Errorf("after a restore: %s %q, ran %v", u.Status.Phase, u.Status.Message, e.host.runs)
+	}
+}
+
+func TestRunnerKubernetesSnapshotFailures(t *testing.T) {
+	e := kubernetesRunnerEnv(t, kwerftv1.UpgradeBackingUp)
+	e.host.snapshotE = errors.New("exit status 1")
+	if u := e.run(t); u.Status.Phase != kwerftv1.UpgradeFailed || u.Status.Reason != "Backup" ||
+		!strings.Contains(u.Status.Message, "etcd datastore disabled") || !strings.Contains(u.Status.Message, "Nothing was changed") {
+		t.Errorf("snapshot failed: %s %s %q", u.Status.Phase, u.Status.Reason, u.Status.Message)
+	}
+
+	e = kubernetesRunnerEnv(t, kwerftv1.UpgradeBackingUp)
+	e.host.free = 1 << 30
+	if u := e.run(t); u.Status.Phase != kwerftv1.UpgradeFailed || !strings.Contains(u.Status.Message, "1.0 GiB free") || len(e.host.runs) != 0 {
+		t.Errorf("disk: %s %q, ran %v", u.Status.Phase, u.Status.Message, e.host.runs)
+	}
+
+	// Cancelled, or past Backup: nothing to do.
+	for _, phase := range []kwerftv1.UpgradePhase{kwerftv1.UpgradeRunning, kwerftv1.UpgradeSucceeded} {
+		e = kubernetesRunnerEnv(t, phase)
+		if u := e.run(t); u.Status.Phase != phase || len(e.host.runs) != 0 {
+			t.Errorf("%s: %s, ran %v", phase, u.Status.Phase, e.host.runs)
+		}
+	}
+	e = kubernetesRunnerEnv(t, kwerftv1.UpgradeBackingUp)
+	e.cluster.u.Annotations = map[string]string{kwerftv1.AnnotationCancelRequested: "alice@example.com"}
+	if e.run(t); len(e.host.runs) != 0 {
+		t.Errorf("cancelled: ran %v", e.host.runs)
 	}
 }

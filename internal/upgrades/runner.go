@@ -130,6 +130,9 @@ const (
 	fileProgress  = "progress.jsonl"
 	fileApps      = "apps-before.json"
 	fileStarted   = "started"
+	// fileSnapshotRecorded: a Kubernetes upgrade's etcd snapshot is in its
+	// status (written after the status update).
+	fileSnapshotRecorded = "snapshot-recorded"
 )
 
 var errPhaseMoved = errors.New("the upgrade moved on")
@@ -175,8 +178,12 @@ func (r *Runner) Run(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
-		if u.Spec.Component != kwerftv1.UpgradeKwerft {
-			return fmt.Errorf("upgrade %s is a %s upgrade; the runner upgrades Kwerft", u.Name, u.Spec.Component)
+		switch u.Spec.Component {
+		case kwerftv1.UpgradeKubernetes:
+			return r.snapshot(ctx, u)
+		case kwerftv1.UpgradeKwerft:
+		default:
+			return fmt.Errorf("upgrade %s is a %s upgrade; the runner upgrades Kwerft and backs up Kubernetes", u.Name, u.Spec.Component)
 		}
 		phase := u.Status.Phase
 		r.log().Info("upgrade runner", "upgrade", u.Name, "phase", phase)
@@ -302,6 +309,57 @@ func (r *Runner) prepare(ctx context.Context, u *kwerftv1.Upgrade) error {
 		u.Status.Phase = kwerftv1.UpgradeRunning
 		u.Status.Message = "Running the installer of " + u.Spec.Version + "."
 	})
+}
+
+// snapshot is all the runner does for a Kubernetes upgrade: the etcd
+// snapshot of its Backup phase, on the installer node. The Upgrade
+// controller (internal/controllers/k3s_upgrade.go) moves the phase on and
+// drives the nodes through system-upgrade-controller; a cancel in Backup is
+// its too.
+func (r *Runner) snapshot(ctx context.Context, u *kwerftv1.Upgrade) error {
+	if u.Status.Phase != kwerftv1.UpgradeBackingUp || (u.Status.Backup != nil && u.Status.Backup.EtcdSnapshot != "") ||
+		u.Annotations[kwerftv1.AnnotationCancelRequested] != "" {
+		r.log().Info("nothing to back up", "upgrade", u.Name, "phase", u.Status.Phase)
+		return nil
+	}
+	name := SnapshotName(u.Name)
+	// The snapshot is taken while the Upgrade is in Backup, so a cluster
+	// restored from it has the Upgrade in Backup again, without the
+	// snapshot recorded. The marker on the host (which the restore does not
+	// reset) tells that from a retried runner, and the upgrade is not
+	// repeated.
+	marker := filepath.Join(r.Dir, fileSnapshotRecorded)
+	if _, err := os.Stat(marker); err == nil {
+		return r.move(ctx, kwerftv1.UpgradeBackingUp, func(u *kwerftv1.Upgrade) {
+			r.finished(u, kwerftv1.UpgradeFailed)
+			u.Status.Reason = "Backup"
+			u.Status.Message = "This cluster was restored from this upgrade's etcd snapshot " + name +
+				": the upgrade is not repeated. Start a new one when the cause is fixed."
+		})
+	}
+	if free, err := r.Host.FreeBytes("/var/lib"); err != nil {
+		return fmt.Errorf("free disk space: %w", err)
+	} else if free < MinFreeBytesKubernetes {
+		return r.failBefore(ctx, "Preflight", fmt.Sprintf("Only %s free in /var/lib of the installer node; %s needed for the etcd snapshot.",
+			gib(free), gib(MinFreeBytesKubernetes)))
+	}
+	if out, err := r.Host.Run(ctx, Command{Unit: UnitName(u.Name) + "-snapshot",
+		Args: []string{HostK3s, "etcd-snapshot", "save", "--name", name}}); err != nil {
+		return r.failBefore(ctx, "Backup", "The etcd snapshot failed: "+lastLine(out, err))
+	}
+	r.log().Info("etcd snapshot taken", "upgrade", u.Name, "snapshot", name)
+	if err := r.move(ctx, kwerftv1.UpgradeBackingUp, func(u *kwerftv1.Upgrade) {
+		if u.Status.Backup == nil {
+			u.Status.Backup = &kwerftv1.UpgradeBackup{}
+		}
+		u.Status.Backup.EtcdSnapshot = name
+	}); err != nil {
+		return err
+	}
+	if err := os.MkdirAll(r.Dir, 0o700); err != nil {
+		return err
+	}
+	return writeFile(marker, []byte(name+"\n"), 0o600)
 }
 
 func cancelled(u *kwerftv1.Upgrade, by string, now time.Time) {

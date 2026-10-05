@@ -173,12 +173,13 @@ func TestAutoPatchInstallsPatchesInTheWindow(t *testing.T) {
 func TestAutoPatchPauseAndResume(t *testing.T) {
 	e := newUpdatesEnv(t, &kwerftv1.UpdateSettings{Policy: kwerftv1.UpdatesAutoPatch, Window: openWindow()})
 	e.reconcile(t)
-	// The Upgrade reconciler pauses AutoPatch after a failed auto-update.
+	// The Upgrade reconciler pauses AutoPatch after an auto-update that
+	// changed something and rolled back (a failed preflight would not).
 	ups := autoUpgrades(t)
 	if len(ups) != 1 {
 		t.Fatalf("auto upgrades = %d", len(ups))
 	}
-	setUpgradePhase(t, ups[0].Name, kwerftv1.UpgradeFailed)
+	setUpgradePhase(t, ups[0].Name, kwerftv1.UpgradeRolledBack)
 	ur := &UpgradeReconciler{Client: k8s, APIReader: k8s, Namespace: GatewayNamespace}
 	eventually(t, func() error {
 		if _, err := ur.Reconcile(context.Background(), ctrl.Request{NamespacedName: client.ObjectKey{Name: ups[0].Name}}); err != nil {

@@ -9,9 +9,11 @@ import (
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/client-go/discovery"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
+	"github.com/ehilzinger/kwerft/internal/clusters"
 	"github.com/ehilzinger/kwerft/internal/controllers"
 	"github.com/ehilzinger/kwerft/internal/upgrades"
 	"github.com/ehilzinger/kwerft/internal/version"
@@ -37,21 +39,30 @@ type upgradeOptions struct {
 func setupUpgrades(mgr ctrl.Manager, opt upgradeOptions) error {
 	source := &upgrades.HTTPSource{BaseURL: opt.installBaseURL}
 	self := selfImage(mgr.GetAPIReader(), opt.namespace)
+	disco, err := discovery.NewDiscoveryClientForConfig(mgr.GetConfig())
+	if err != nil {
+		return err
+	}
 	checks := &controllers.UpgradeChecks{
-		Reader:   mgr.GetClient(),
-		Releases: source,
-		Registry: &upgrades.OCIRegistry{},
-		Version:  strings.TrimPrefix(version.Version, "v"),
-		Self:     self,
-		Cluster:  opt.cluster,
+		Reader:    mgr.GetClient(),
+		Releases:  source,
+		Registry:  &upgrades.OCIRegistry{},
+		Version:   strings.TrimPrefix(version.Version, "v"),
+		Self:      self,
+		Cluster:   opt.cluster,
+		APIServer: &upgrades.APIServer{REST: disco.RESTClient()},
 	}
 	r := &controllers.UpgradeReconciler{
 		Client: mgr.GetClient(), APIReader: mgr.GetAPIReader(), Namespace: opt.namespace,
-		Checks:         checks,
-		RunnerImage:    runnerImage(self),
-		InstallBaseURL: opt.installBaseURL,
-		Faults:         opt.faults,
+		Checks:                checks,
+		RunnerImage:           runnerImage(self),
+		KubernetesRunnerImage: snapshotRunnerImage(self),
+		InstallBaseURL:        opt.installBaseURL,
+		Faults:                opt.faults,
 	}
+	// Kubernetes (k3s) upgrades through system-upgrade-controller; the
+	// runner takes their etcd snapshot.
+	r.Kubernetes = &controllers.KubernetesUpgrader{Client: mgr.GetClient(), Checks: checks, Runner: r, Namespace: opt.namespace}
 	if opt.console && opt.database != nil {
 		r.Database, r.DataDir = opt.database, opt.dataDir
 		checks.DataDir = opt.dataDir
@@ -106,6 +117,33 @@ func runnerImage(self func(context.Context) (controllers.SelfImage, error)) func
 		}
 		return upgrades.DigestRef(s.Image, s.ImageID)
 	}
+}
+
+// snapshotRunnerImage is the runner's image for a Kubernetes upgrade's
+// etcd snapshot: pinned by digest when the node pulled one, else the image
+// as the Deployment names it (a development install's imported image,
+// present on the installer node it was imported to).
+func snapshotRunnerImage(self func(context.Context) (controllers.SelfImage, error)) func(context.Context) (string, error) {
+	return func(ctx context.Context) (string, error) {
+		s, err := self(ctx)
+		if err != nil {
+			return "", err
+		}
+		if ref, err := upgrades.DigestRef(s.Image, s.ImageID); err == nil {
+			return ref, nil
+		}
+		return s.Image, nil
+	}
+}
+
+// setupAgentUpgrades starts agent clusters' upgrades of an "Upgrade all"
+// one after another (console only; controllers.AgentUpgradesReconciler).
+func setupAgentUpgrades(mgr ctrl.Manager, registry clusters.Registry) error {
+	return (&controllers.AgentUpgradesReconciler{
+		Client:   mgr.GetClient(),
+		Clusters: &controllers.RegistryClients{Registry: registry, Scheme: mgr.GetScheme()},
+		Version:  strings.TrimPrefix(version.Version, "v"),
+	}).SetupWithManager(mgr)
 }
 
 // restoreDatabase puts the pre-upgrade copy back when a rollback asked

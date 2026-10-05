@@ -425,3 +425,74 @@ func TestNodePoolsWaitForAnActiveUpgrade(t *testing.T) {
 		t.Fatalf("active = %q %v", name, err)
 	}
 }
+
+// An agent cluster's Upgrade of an "Upgrade all" waits while held, and does
+// not hold the cluster's other Upgrades.
+func TestHeldUpgradeWaitsWithoutBlocking(t *testing.T) {
+	e := newUpgradeEnv(t)
+	ctx := context.Background()
+	createUpgrade(t, "kwerft-0.6.0-held", "0.6.0", map[string]string{kwerftv1.AnnotationHold: "Waiting for the console's upgrade kwerft-0.6.0-x."})
+	createUpgrade(t, "kwerft-0.6.0-next", "0.6.0", nil)
+	if u, _ := e.settle(t, "kwerft-0.6.0-held"); u.Status.Phase != kwerftv1.UpgradeQueued || u.Status.Message != "Waiting for the console's upgrade kwerft-0.6.0-x." {
+		t.Fatalf("held = %s %q", u.Status.Phase, u.Status.Message)
+	}
+	if u, _ := e.settle(t, "kwerft-0.6.0-next"); u.Status.Phase != kwerftv1.UpgradeBackingUp {
+		t.Fatalf("next = %s %q", u.Status.Phase, u.Status.Message)
+	}
+	setUpgradePhase(t, "kwerft-0.6.0-next", kwerftv1.UpgradeSucceeded)
+	e.settle(t, "kwerft-0.6.0-next")
+	// Released: it starts.
+	u := getUpgrade(t, "kwerft-0.6.0-held")
+	delete(u.Annotations, kwerftv1.AnnotationHold)
+	if err := k8s.Update(ctx, u); err != nil {
+		t.Fatal(err)
+	}
+	if u, _ := e.settle(t, "kwerft-0.6.0-held"); u.Status.Phase != kwerftv1.UpgradeBackingUp {
+		t.Fatalf("released = %s %q", u.Status.Phase, u.Status.Message)
+	}
+}
+
+// AutoPatch pauses only for an auto-update that changed something: one
+// that failed its preflight leaves it on.
+func TestAutoPatchIgnoresAFailedPreflight(t *testing.T) {
+	e := newUpgradeEnv(t)
+	ctx := context.Background()
+	start := time.Now().UTC().Add(-30 * time.Minute)
+	useSettings(t, kwerftv1.ConsoleSettingsSpec{Updates: &kwerftv1.UpdateSettings{Policy: kwerftv1.UpdatesAutoPatch,
+		Window: &kwerftv1.MaintenanceWindow{Start: start.Format("15:04"), Duration: &metav1.Duration{Duration: 2 * time.Hour}}}})
+	e.r.Checks.Version = "0.1.0-dev" // the preflight fails
+	createUpgrade(t, "kwerft-0.5.1-auto", "0.6.0", map[string]string{kwerftv1.AnnotationRequestedBy: kwerftv1.RequestedByAutoUpdate})
+	u, _ := e.settle(t, "kwerft-0.5.1-auto")
+	if u.Status.Phase != kwerftv1.UpgradeFailed || u.Status.Reason != "Preflight" {
+		t.Fatalf("status = %s %s", u.Status.Phase, u.Status.Reason)
+	}
+	u, _ = e.settle(t, "kwerft-0.5.1-auto")
+	if meta.IsStatusConditionTrue(u.Status.Conditions, ConditionAutoPatchPaused) {
+		t.Error("a failed preflight paused AutoPatch")
+	}
+	var s kwerftv1.ConsoleSettings
+	if err := k8s.Get(ctx, client.ObjectKey{Name: kwerftv1.ConsoleSettingsName}, &s); err != nil {
+		t.Fatal(err)
+	}
+	if s.Status.Updates != nil && s.Status.Updates.AutoPatchPausedBy != "" {
+		t.Errorf("paused by %s", s.Status.Updates.AutoPatchPausedBy)
+	}
+
+	// Failed after Running (the installer's steps): paused.
+	createUpgrade(t, "kwerft-0.5.1-auto2", "0.6.0", map[string]string{kwerftv1.AnnotationRequestedBy: kwerftv1.RequestedByAutoUpdate})
+	u = getUpgrade(t, "kwerft-0.5.1-auto2")
+	u.Status.Phase = kwerftv1.UpgradeFailed
+	u.Status.Reason = "Runner"
+	u.Status.Steps = []kwerftv1.UpgradeStep{{ID: "kwerft", Label: "Kwerft", State: "Running"}}
+	u.Status.FinishedAt = &metav1.Time{Time: time.Now()}
+	if err := k8s.Status().Update(ctx, u); err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, func() error {
+		u, _ := e.settle(t, "kwerft-0.5.1-auto2")
+		if !meta.IsStatusConditionTrue(u.Status.Conditions, ConditionAutoPatchPaused) {
+			return fmt.Errorf("conditions %+v", u.Status.Conditions)
+		}
+		return nil
+	})
+}
