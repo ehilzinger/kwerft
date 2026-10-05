@@ -499,6 +499,22 @@ func TestMatchCloudNodesByProviderID(t *testing.T) {
 	}
 }
 
+// TestMatchCloudNodesIgnoresPrivateAddresses: a server of the token's
+// project with the same private address in another Cloud Network is not
+// this cluster's node.
+func TestMatchCloudNodesIgnoresPrivateAddresses(t *testing.T) {
+	n := node("kwerft-dev-test", "cloud", "198.51.100.20")
+	n.Status.Addresses = append(n.Status.Addresses, corev1.NodeAddress{Type: corev1.NodeInternalIP, Address: "10.0.0.2"})
+	elsewhere := hetznertest.NewServerSummary(9, "production-1", "fsn1", "203.0.113.50", "2001:db8:9::/64", 77, "10.0.0.2", nil)
+	if got := MatchCloudNodes([]corev1.Node{*n}, []hetzner.ServerSummary{elsewhere}, "local"); len(got) != 0 {
+		t.Fatalf("matched by private address: %+v", got)
+	}
+	self := hetznertest.NewServerSummary(10, "kwerft-dev-test", "nbg1", "198.51.100.20", "2001:db8:10::/64", 78, "10.0.0.2", nil)
+	if got := MatchCloudNodes([]corev1.Node{*n}, []hetzner.ServerSummary{elsewhere, self}, "local"); len(got) != 1 || got[0].Server.ID != 10 {
+		t.Fatalf("got %+v", got)
+	}
+}
+
 func TestRemoteClusterUsesTheCSISecret(t *testing.T) {
 	// A remote Cloud cluster has only kube-system/hcloud (from the console).
 	csi := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Namespace: HCloudSystemNamespace, Name: HCloudSystemSecret},

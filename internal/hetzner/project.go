@@ -39,8 +39,11 @@ type PrivateNetRef struct {
 	IP      string `json:"ip"`
 }
 
-// HasAddress reports whether addr is one of the server's addresses: its
-// public IPv4, inside its public IPv6 network, or a private IP.
+// HasAddress reports whether addr is one of the server's public addresses:
+// its IPv4, or inside its IPv6 network. Private addresses do not count:
+// every Cloud Network of a project can hand out the same ones (10.0.0.2 in
+// each), so they name no server (a test cluster once matched a production
+// server of the token's project that way).
 func (s ServerSummary) HasAddress(addr netip.Addr) bool {
 	addr = addr.Unmap()
 	if s.PublicNet.IPv4 != nil {
@@ -50,11 +53,6 @@ func (s ServerSummary) HasAddress(addr netip.Addr) bool {
 	}
 	if s.PublicNet.IPv6 != nil {
 		if p, err := netip.ParsePrefix(s.PublicNet.IPv6.IP); err == nil && p.Contains(addr) {
-			return true
-		}
-	}
-	for _, n := range s.PrivateNet {
-		if a, err := netip.ParseAddr(n.IP); err == nil && a == addr {
 			return true
 		}
 	}

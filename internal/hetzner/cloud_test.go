@@ -141,7 +141,7 @@ func TestServerSummaries(t *testing.T) {
 		t.Fatalf("selected = %+v, %v", pool, err)
 	}
 	s := all[0]
-	for addr, want := range map[string]bool{"203.0.113.10": true, "10.0.0.2": true, "2001:db8:1::1": true, "203.0.113.11": false, "::ffff:203.0.113.10": true} {
+	for addr, want := range map[string]bool{"203.0.113.10": true, "10.0.0.2": false, "2001:db8:1::1": true, "203.0.113.11": false, "::ffff:203.0.113.10": true} {
 		if got := s.HasAddress(netip.MustParseAddr(addr)); got != want {
 			t.Errorf("HasAddress(%s) = %v", addr, got)
 		}
