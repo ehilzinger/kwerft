@@ -372,10 +372,10 @@ export function Deploy() {
                   : <span id="d-env-note" className="hint">Stored in the App resource, readable by everyone with access. Secrets as encrypted references come later.</span>}
               </div>
               <div className="field full">
-                <label>Shared volumes</label>
+                <label>Shared volumes and secrets</label>
                 <VolumeMounts project={project} mounts={f.mounts} onChange={(v) => set("mounts", v)} idPrefix="d-vol"
                   errorAt={mountErr ? [Number(mountErr[1]), problem!.message] : undefined} />
-                <span className="hint">Volumes of the project that other apps and jobs can mount too. The app stays a Deployment; its pods run on the volume's node.</span>
+                <span className="hint">Volumes of the project that other apps and jobs can mount too, and Secrets as read-only files, one per key. The app stays a Deployment; its pods run on the volume's node.</span>
               </div>
             </div></div>
           </>

@@ -46,6 +46,22 @@ func TestCELRejectsInvalidSpecs(t *testing.T) {
 		err := k8s.Create(ctx, app("no-form", kwerftv1.AppVolume{Path: "/d"}))
 		expectInvalid(t, err, "set exactly one of size")
 	})
+	t.Run("app volume with a volume and a secret", func(t *testing.T) {
+		err := k8s.Create(ctx, app("vol-and-secret", kwerftv1.AppVolume{Path: "/d", Volume: "data", Secret: "ssh-key"}))
+		expectInvalid(t, err, "set exactly one of size")
+	})
+	t.Run("class on a secret", func(t *testing.T) {
+		err := k8s.Create(ctx, app("class-secret", kwerftv1.AppVolume{Path: "/d", Secret: "ssh-key", Class: "local-nvme"}))
+		expectInvalid(t, err, "class applies to size")
+	})
+	t.Run("mode on a shared volume", func(t *testing.T) {
+		err := k8s.Create(ctx, app("mode-shared", kwerftv1.AppVolume{Path: "/d", Volume: "data", Mode: ptr.To[int32](0o400)}))
+		expectInvalid(t, err, "mode applies to secret")
+	})
+	t.Run("mode beyond 0777", func(t *testing.T) {
+		err := k8s.Create(ctx, app("mode-big", kwerftv1.AppVolume{Path: "/d", Secret: "ssh-key", Mode: ptr.To[int32](0o1000)}))
+		expectInvalid(t, err, "mode")
+	})
 	t.Run("class on a shared volume", func(t *testing.T) {
 		err := k8s.Create(ctx, app("class-shared", kwerftv1.AppVolume{Path: "/d", Volume: "data", Class: "hcloud-volume"}))
 		expectInvalid(t, err, "class applies to size")
@@ -55,8 +71,9 @@ func TestCELRejectsInvalidSpecs(t *testing.T) {
 		a.Spec.DrainSeconds = ptr.To[int32](301)
 		expectInvalid(t, k8s.Create(ctx, a), "drainSeconds")
 	})
-	t.Run("both app volume forms are accepted", func(t *testing.T) {
-		a := app("mixed", kwerftv1.AppVolume{Path: "/own", Size: resource.MustParse("1Gi")}, kwerftv1.AppVolume{Path: "/shared", Volume: "data"})
+	t.Run("all app volume forms are accepted", func(t *testing.T) {
+		a := app("mixed", kwerftv1.AppVolume{Path: "/own", Size: resource.MustParse("1Gi")}, kwerftv1.AppVolume{Path: "/shared", Volume: "data"},
+			kwerftv1.AppVolume{Path: "/keys", Secret: "ssh-key", Mode: ptr.To[int32](0o400)})
 		if err := k8s.Create(ctx, a); err != nil {
 			t.Fatal(err)
 		}
@@ -98,6 +115,13 @@ func TestCELRejectsInvalidSpecs(t *testing.T) {
 		spec := imageTask("busybox")
 		spec.Volumes = []kwerftv1.AppVolume{{Path: "/d", Size: resource.MustParse("1Gi")}}
 		expectInvalid(t, k8s.Create(ctx, task("own-disk", spec)), "a Task can only mount shared Volumes")
+	})
+	t.Run("task with a secret", func(t *testing.T) {
+		spec := imageTask("busybox")
+		spec.Volumes = []kwerftv1.AppVolume{{Path: "/keys", Secret: "ssh-key"}}
+		if err := k8s.Create(ctx, task("secret", spec)); err != nil {
+			t.Fatal(err)
+		}
 	})
 	t.Run("task with a zero timeout", func(t *testing.T) {
 		spec := imageTask("busybox")

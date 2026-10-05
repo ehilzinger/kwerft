@@ -156,7 +156,7 @@ func startTestCluster() (_ *testCluster, _ func(), err error) {
 	if err := (&controllers.ProjectReconciler{Client: mgr.GetClient()}).SetupWithManager(mgr); err != nil {
 		return fail("project reconciler", err)
 	}
-	if err := (&controllers.AppReconciler{Client: mgr.GetClient()}).SetupWithManager(mgr); err != nil {
+	if err := (&controllers.AppReconciler{Client: mgr.GetClient(), APIReader: mgr.GetAPIReader()}).SetupWithManager(mgr); err != nil {
 		return fail("app reconciler", err)
 	}
 	// Traffic rules (traffic_test.go).
@@ -667,6 +667,14 @@ func TestValidationErrorsNameTheField(t *testing.T) {
 			"source": map[string]any{"image": map[string]any{"ref": "nginx"}}, "ports": []map[string]any{{"container": 80, "public": "a.example.com"}, {"container": 80, "public": "a.example.com"}}}}, "spec.ports[1].container"},
 		{"hostname on two ports", map[string]any{"name": "two-ports", "spec": map[string]any{
 			"source": map[string]any{"image": map[string]any{"ref": "nginx"}}, "ports": []map[string]any{{"container": 80, "public": "a.example.com"}, {"container": 81, "public": "a.example.com"}}}}, "spec.ports[1].public"},
+		{"bad secret name", map[string]any{"name": "bad-secret", "spec": map[string]any{
+			"source": map[string]any{"image": map[string]any{"ref": "nginx"}}, "volumes": []map[string]any{{"path": "/keys", "secret": "-ssh"}}}}, "spec.volumes[0].secret"},
+		{"path mounted twice", map[string]any{"name": "twice-path", "spec": map[string]any{
+			"source": map[string]any{"image": map[string]any{"ref": "nginx"}}, "volumes": []map[string]any{{"path": "/keys", "secret": "ssh-key"}, {"path": "/keys", "volume": "data"}}}}, "spec.volumes[1].path"},
+		{"secret and volume", map[string]any{"name": "two-forms", "spec": map[string]any{
+			"source": map[string]any{"image": map[string]any{"ref": "nginx"}}, "volumes": []map[string]any{{"path": "/keys", "secret": "ssh-key", "volume": "data"}}}}, "spec.volumes[0]"},
+		{"mode on a volume", map[string]any{"name": "vol-mode", "spec": map[string]any{
+			"source": map[string]any{"image": map[string]any{"ref": "nginx"}}, "volumes": []map[string]any{{"path": "/data", "volume": "data", "mode": 256}}}}, "spec.volumes[0]"},
 	} {
 		var e apiError
 		code := c.dev.do(t, "POST", "/api/v1/projects/checks/apps", tc.body, &e)
@@ -681,6 +689,16 @@ func TestValidationErrorsNameTheField(t *testing.T) {
 		"ports":  []map[string]any{{"container": 80, "public": "a.example.com"}, {"container": 80, "public": "b.example.com"}}}}
 	if code := c.dev.do(t, "POST", "/api/v1/projects/checks/apps", twoNames, nil); code != http.StatusCreated {
 		t.Errorf("one port, two hostnames: %d, want 201", code)
+	}
+	// A Secret as files need not exist yet, and keeps the App a Deployment.
+	withSecret := map[string]any{"name": "with-secret", "spec": map[string]any{
+		"source":  map[string]any{"image": map[string]any{"ref": "nginx"}},
+		"volumes": []map[string]any{{"path": "/keys", "secret": "ssh-key"}}}}
+	var created kwerftv1.App
+	if code := c.dev.do(t, "POST", "/api/v1/projects/checks/apps", withSecret, &created); code != http.StatusCreated {
+		t.Errorf("app with a secret: %d, want 201", code)
+	} else if appSummary(&created).Stateful {
+		t.Error("an App that mounts only a Secret is not stateful")
 	}
 	var e apiError
 	if code := c.dev.do(t, "POST", "/api/v1/projects/checks/apps", map[string]any{"name": "x", "spec": map[string]any{"imagee": 1}}, &e); code != http.StatusBadRequest {

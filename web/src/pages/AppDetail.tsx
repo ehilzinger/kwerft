@@ -7,6 +7,7 @@ import { Dialog } from "../components/Dialog";
 import { Field } from "../components/Field";
 import { Icon } from "../components/Icon";
 import { Replicas } from "../components/Replicas";
+import { describeMount } from "../mounts";
 import { abilities, ago, sizes, workloads, type App, type Phase, type Revision } from "../workloads";
 import { repoLabel, shortSha } from "../builds";
 import { BuildStatus } from "../components/BuildStatus";
@@ -228,7 +229,7 @@ function Overview({ app, canDeploy, onRollback }: { app: App; canDeploy: boolean
             <dt>Health check</dt><dd>{hc ? (hc.http ? <code>HTTP GET {hc.http} :{hc.port}</code> : <code>TCP :{hc.port}</code>) : <span className="dim">None. A replica counts as ready once it starts.</span>}</dd>
             <dt>Environment</dt><dd>{app.spec.env?.length ? `${app.spec.env.length} variable${app.spec.env.length > 1 ? "s" : ""}` : <span className="dim">None</span>}</dd>
             <dt>Outbound</dt><dd>{{ none: "No internet access", https: "HTTPS to the internet", all: "Unrestricted" }[app.spec.egress ?? "https"]}</dd>
-            {(app.spec.volumes?.length ?? 0) > 0 && <><dt>Volumes</dt><dd>{app.spec.volumes!.map((v) => (v.volume ? `${v.path} ← volume ${v.volume}${v.readOnly ? " (read-only)" : ""}` : `${v.path} (${v.size})`)).join(", ")}</dd></>}
+            {(app.spec.volumes?.length ?? 0) > 0 && <><dt>Volumes</dt><dd>{app.spec.volumes!.map(describeMount).join(", ")}</dd></>}
           </dl>
         </div>
       </div>
@@ -314,7 +315,7 @@ function DeleteDialog({ app, onClose, onDone }: { app: App; onClose: () => void;
         <button type="button" className="btn" onClick={onClose}>Cancel</button>
         <button className="btn pri danger" disabled={confirm !== name || del.isPending}>{del.isPending ? "Deleting…" : "Delete app"}</button>
       </>}>
-      <p style={{ margin: 0 }}>This stops every replica and removes the app's service, routes and network policy.{(app.spec.volumes?.length ?? 0) > 0 ? " Its volumes are kept." : ""}</p>
+      <p style={{ margin: 0 }}>This stops every replica and removes the app's service, routes and network policy.{app.spec.volumes?.some((v) => !v.secret) ? " Its volumes are kept." : ""}</p>
       <Field id="delete-confirm" label={`Type ${name} to confirm`} className="mono" value={confirm} onChange={(e) => setConfirm(e.target.value)} autoFocus autoComplete="off"
         error={del.isError ? errorText(del.error) : undefined} />
     </Dialog>

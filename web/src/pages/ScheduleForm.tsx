@@ -8,6 +8,7 @@ import { EnvRows, envOf, type EnvRow } from "../components/EnvRows";
 import { Field } from "../components/Field";
 import { Icon } from "../components/Icon";
 import { VolumeMounts, checkMounts, mountsOf, volumesOf, type Mount } from "../components/VolumeMounts";
+import { ownDisks } from "../mounts";
 import { describeCron, jobs, prettyDuration, timeZones, when, type Concurrency, type Schedule, type ScheduleSpec, type TaskSpec } from "../jobs";
 import { NAME_RE, abilities, sizes, toYAML, workloads, type Size } from "../workloads";
 import { CommandSyntaxError, formatCommand, splitCommand } from "../shellwords";
@@ -121,7 +122,7 @@ function specOf(f: Form, base: ScheduleSpec): ScheduleSpec {
   else delete t.command;
   t.env = [...envOf(f.env).vars, ...(base.task.env ?? []).filter((e) => e.valueFrom)];
   if (t.env.length === 0) delete t.env;
-  const keptDisks = (base.task.volumes ?? []).filter((v) => !v.volume);
+  const keptDisks = ownDisks(base.task.volumes);
   t.volumes = [...keptDisks, ...volumesOf(f.mounts)];
   if (t.volumes.length === 0) delete t.volumes;
   if (f.timeout.trim()) t.timeout = f.timeout.trim();
@@ -418,7 +419,7 @@ function ScheduleForm({ schedule, initial: start }: { schedule?: Schedule; initi
                   <EnvRows rows={f.env} onChange={(v) => set("env", v)} label="Variable" errorAt={envErr ? { index: envErr[0], message: envErr[1] } : undefined} />
                 </div>
                 <div className="field full">
-                  <label>Shared volumes{f.source === "app" ? " (besides the app's)" : ""}</label>
+                  <label>Shared volumes and secrets{f.source === "app" ? " (besides the app's)" : ""}</label>
                   <VolumeMounts project={project} mounts={f.mounts} onChange={(v) => set("mounts", v)} errorAt={indexed("mounts")} idPrefix="s-vol" />
                 </div>
               </div>

@@ -6,6 +6,7 @@ import { Dialog } from "../components/Dialog";
 import { Icon } from "../components/Icon";
 import { TaskStatus, phaseOfTask } from "../components/TaskStatus";
 import { duration, jobs, prettyDuration, type Task } from "../jobs";
+import { describeMount } from "../mounts";
 import { podsApi, type Replicas } from "../pods";
 import { abilities, ago, sizes, words, workloads, type EnvVar } from "../workloads";
 import { errorText } from "./Apps";
@@ -123,7 +124,7 @@ export function TaskDetail() {
               <dt>Size</dt><dd>{size ? `${size.label} · ${size.note}` : spec.size === "custom" ? "Custom" : spec.fromApp ? `Same as ${spec.fromApp}` : "Small"}</dd>
               <dt>Timeout</dt><dd>{spec.timeout ? prettyDuration(spec.timeout) : <span className="dim">none</span>}</dd>
               <dt>Retries</dt><dd>{spec.retries ?? 0}</dd>
-              {(spec.volumes?.length ?? 0) > 0 && <><dt>Volumes</dt><dd>{spec.volumes!.map((v) => `${v.path} ← ${v.volume}${v.readOnly ? " (read-only)" : ""}`).join(", ")}</dd></>}
+              {(spec.volumes?.length ?? 0) > 0 && <><dt>Volumes</dt><dd>{spec.volumes!.map(describeMount).join(", ")}</dd></>}
               <dt>On success</dt>
               <dd>
                 {spec.onSuccess?.restart?.length ? <>restart {spec.onSuccess.restart.join(", ")}</> : <span className="dim">nothing</span>}

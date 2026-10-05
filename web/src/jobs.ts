@@ -28,8 +28,12 @@ export type Volume = {
 /** Answer to deleting a Volume that is still mounted: deletion waits for these. */
 export type VolumeInUse = { usedBy: string[]; reason: "InUse"; message: string };
 
-/** A mount in an App or Task: a disk per replica (size) or a shared Volume (volume). */
-export type AppVolume = { path: string; size?: string; class?: VolumeClass; volume?: string; readOnly?: boolean };
+/**
+ * A mount in an App or Task: a disk per replica (size), a shared Volume
+ * (volume), or a Secret as read-only files (secret, with mode their
+ * permission as a number; unset is 0444).
+ */
+export type AppVolume = { path: string; size?: string; class?: VolumeClass; volume?: string; readOnly?: boolean; secret?: string; mode?: number };
 
 // ---- tasks -----------------------------------------------------------------
 

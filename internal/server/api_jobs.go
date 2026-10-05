@@ -459,8 +459,9 @@ func (a *api) taskGet(w http.ResponseWriter, r *http.Request) {
 }
 
 // validateTaskSpec catches what the CRD lets through but the reconciler
-// would wait on forever or trip over: bad variable names and references to
-// Apps or Volumes that do not exist. prefix is the spec's field path.
+// would wait on forever or trip over: bad variable names and mounts, and
+// references to Apps or Volumes that do not exist. A missing Secret is left
+// to the pod, which waits for it. prefix is the spec's field path.
 func validateTaskSpec(ctx context.Context, w http.ResponseWriter, c client.Client, project, prefix string, spec *kwerftv1.TaskSpec) bool {
 	for _, list := range []struct {
 		name string
@@ -472,6 +473,9 @@ func validateTaskSpec(ctx context.Context, w http.ResponseWriter, c client.Clien
 				return false
 			}
 		}
+	}
+	if !validateVolumes(w, prefix, spec.Volumes) {
+		return false
 	}
 	exists := func(obj client.Object, name string) (bool, error) {
 		err := c.Get(ctx, types.NamespacedName{Namespace: project, Name: name}, obj)

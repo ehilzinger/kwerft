@@ -9,11 +9,14 @@ import (
 // AppVolumeApplyConfiguration represents a declarative configuration of the AppVolume type for use
 // with apply.
 //
-// AppVolume mounts persistent storage at Path, in one of two forms:
+// AppVolume mounts storage at Path, in one of three forms:
 // - Size (and Class): every replica gets its own disk; the App runs as a
 // StatefulSet so each replica keeps it.
 // - Volume: the shared Volume of that name in the same project, which
 // other Apps and Tasks can mount too.
+// - Secret: the Secret of that name in the same namespace, read-only, one
+// file per key (an SSH key, a certificate). Until the Secret exists the
+// pods wait in ContainerCreating, as Kubernetes does.
 type AppVolumeApplyConfiguration struct {
 	Path *string `json:"path,omitempty"`
 	// Size of each replica's own disk.
@@ -23,7 +26,16 @@ type AppVolumeApplyConfiguration struct {
 	Class *string `json:"class,omitempty"`
 	// Volume names a shared Volume in the same project.
 	Volume *string `json:"volume,omitempty"`
-	// ReadOnly mounts the storage read-only.
+	// Secret names a Secret in the same namespace whose keys become files
+	// under Path. It is always mounted read-only.
+	Secret *string `json:"secret,omitempty"`
+	// Mode is the permission of the Secret's files, as a number: 256 is
+	// 0400. Empty means 0444: the files belong to root, so a container that
+	// runs as another user (uid 1000) needs them world-readable, and ssh
+	// accepts such a key because it only checks keys its own user owns. A
+	// container that runs as root and hands the file to ssh needs 0400.
+	Mode *int32 `json:"mode,omitempty"`
+	// ReadOnly mounts the storage read-only. Secrets always are.
 	ReadOnly *bool `json:"readOnly,omitempty"`
 }
 
@@ -62,6 +74,22 @@ func (b *AppVolumeApplyConfiguration) WithClass(value string) *AppVolumeApplyCon
 // If called multiple times, the Volume field is set to the value of the last call.
 func (b *AppVolumeApplyConfiguration) WithVolume(value string) *AppVolumeApplyConfiguration {
 	b.Volume = &value
+	return b
+}
+
+// WithSecret sets the Secret field in the declarative configuration to the given value
+// and returns the receiver, so that objects can be built by chaining "With" function invocations.
+// If called multiple times, the Secret field is set to the value of the last call.
+func (b *AppVolumeApplyConfiguration) WithSecret(value string) *AppVolumeApplyConfiguration {
+	b.Secret = &value
+	return b
+}
+
+// WithMode sets the Mode field in the declarative configuration to the given value
+// and returns the receiver, so that objects can be built by chaining "With" function invocations.
+// If called multiple times, the Mode field is set to the value of the last call.
+func (b *AppVolumeApplyConfiguration) WithMode(value int32) *AppVolumeApplyConfiguration {
+	b.Mode = &value
 	return b
 }
 

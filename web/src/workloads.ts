@@ -82,8 +82,9 @@ export type AppSpec = {
   ports?: AppPort[];
   allowFrom?: string[];
   egress?: "none" | "https" | "all";
-  // A disk per replica (size), or a shared Volume of the project (volume, see jobs.ts).
-  volumes?: { path: string; size?: string; class?: string; volume?: string; readOnly?: boolean }[];
+  // A disk per replica (size), a shared Volume of the project (volume, see
+  // jobs.ts), or a Secret as read-only files (secret; mode unset is 0444).
+  volumes?: { path: string; size?: string; class?: string; volume?: string; readOnly?: boolean; secret?: string; mode?: number }[];
   healthCheck?: HealthCheck;
   /** Seconds a stopping replica keeps serving before SIGTERM (default 5; only Apps with ports). */
   drainSeconds?: number;

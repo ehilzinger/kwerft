@@ -40,7 +40,8 @@ type TaskSpecApplyConfiguration struct {
 	// Egress controls outbound traffic to the internet. Empty means the
 	// App's egress with FromApp, else https.
 	Egress *string `json:"egress,omitempty"`
-	// Volumes mounts shared Volumes. A Task has no disk of its own.
+	// Volumes mounts shared Volumes and Secrets. A Task has no disk of its
+	// own.
 	Volumes []AppVolumeApplyConfiguration `json:"volumes,omitempty"`
 	// Timeout stops the run (all retries together) after this long, e.g. 30m.
 	Timeout *metav1.Duration `json:"timeout,omitempty"`

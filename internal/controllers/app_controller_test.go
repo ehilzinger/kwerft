@@ -3,12 +3,14 @@ package controllers
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/utils/ptr"
@@ -360,6 +362,76 @@ func TestAppWithVolumesRunsAsStatefulSet(t *testing.T) {
 	var routes gwv1.HTTPRouteList
 	if err := k8s.List(ctx, &routes, client.InNamespace("db")); err != nil || len(routes.Items) != 0 {
 		t.Errorf("routes = %d (err=%v), want 0", len(routes.Items), err)
+	}
+}
+
+// podVolume returns the pod volume of that name, or nil.
+func podVolume(spec corev1.PodSpec, name string) *corev1.Volume {
+	for i := range spec.Volumes {
+		if spec.Volumes[i].Name == name {
+			return &spec.Volumes[i]
+		}
+	}
+	return nil
+}
+
+func TestAppMountsSecretsAsFiles(t *testing.T) {
+	requireEnvtest(t)
+	ctx := context.Background()
+	projectNamespace(t, "keys")
+	if err := k8s.Create(ctx, &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Namespace: "keys", Name: "tls"},
+		StringData: map[string]string{"tls.crt": "x", "tls.key": "y"}}); err != nil {
+		t.Fatal(err)
+	}
+	app := createApp(t, "keys", "deployer", kwerftv1.AppSpec{
+		Source: kwerftv1.AppSource{Image: &kwerftv1.ImageSource{Ref: "alpine:3.22"}},
+		Volumes: []kwerftv1.AppVolume{
+			{Path: "/home/app/.ssh", Secret: "ssh-key"}, // does not exist yet
+			{Path: "/etc/tls", Secret: "tls", Mode: ptr.To[int32](0o400)},
+		},
+	})
+	app = waitForApp(t, app, "Progressing")
+	if msg := meta.FindStatusCondition(app.Status.Conditions, ConditionReady).Message; !strings.Contains(msg, `Secret "ssh-key" does not exist`) {
+		t.Errorf("message = %q, want it to name the missing Secret only", msg)
+	}
+
+	var d appsv1.Deployment
+	if err := k8s.Get(ctx, client.ObjectKey{Namespace: "keys", Name: "deployer"}, &d); err != nil {
+		t.Fatalf("an App with only Secrets runs as a Deployment: %v", err)
+	}
+	if err := k8s.Get(ctx, client.ObjectKey{Namespace: "keys", Name: "deployer"}, &appsv1.StatefulSet{}); !apierrors.IsNotFound(err) {
+		t.Errorf("no StatefulSet expected (err=%v)", err)
+	}
+	pod := d.Spec.Template
+	if len(pod.Spec.Volumes) != 2 {
+		t.Fatalf("pod volumes = %+v", pod.Spec.Volumes)
+	}
+	mounts := pod.Spec.Containers[0].VolumeMounts
+	for i, want := range []struct {
+		path, secret string
+		mode         int32
+	}{{"/home/app/.ssh", "ssh-key", 0o444}, {"/etc/tls", "tls", 0o400}} {
+		m := mounts[i]
+		if m.MountPath != want.path || !m.ReadOnly {
+			t.Errorf("mount %d = %+v, want %s read-only", i, m, want.path)
+		}
+		v := podVolume(pod.Spec, m.Name)
+		if v == nil || v.Secret == nil || v.Secret.SecretName != want.secret || v.Secret.DefaultMode == nil || *v.Secret.DefaultMode != want.mode ||
+			(v.Secret.Optional != nil && *v.Secret.Optional) || v.PersistentVolumeClaim != nil {
+			t.Errorf("volume for %s = %+v, want Secret %s with mode %o", want.path, v, want.secret, want.mode)
+		}
+	}
+	for k := range pod.Labels {
+		if strings.HasPrefix(k, LabelVolumePrefix) {
+			t.Errorf("a Secret is not a shared Volume: label %s", k)
+		}
+	}
+	if pod.Spec.Affinity != nil {
+		t.Errorf("affinity = %+v, want none for Secrets", pod.Spec.Affinity)
+	}
+	var claims corev1.PersistentVolumeClaimList
+	if err := k8s.List(ctx, &claims, client.InNamespace("keys")); err != nil || len(claims.Items) != 0 {
+		t.Errorf("claims = %d (err=%v), want none", len(claims.Items), err)
 	}
 }
 

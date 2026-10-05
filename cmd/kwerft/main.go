@@ -388,7 +388,7 @@ func newManager(log *slog.Logger, leaderElect bool, metricsListen, privateNetwor
 	if err := (&controllers.ProjectReconciler{Client: mgr.GetClient()}).SetupWithManager(mgr); err != nil {
 		return nil, err
 	}
-	apps := &controllers.AppReconciler{Client: mgr.GetClient(), Registry: &controllers.RegistryKeeper{URL: controllers.DefaultRegistryURL}}
+	apps := &controllers.AppReconciler{Client: mgr.GetClient(), APIReader: mgr.GetAPIReader(), Registry: &controllers.RegistryKeeper{URL: controllers.DefaultRegistryURL}}
 	if err := apps.SetupWithManager(mgr); err != nil {
 		return nil, err
 	}
