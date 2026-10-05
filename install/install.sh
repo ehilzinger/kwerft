@@ -2259,7 +2259,10 @@ write_restore_secrets() {
   printf '[default]\naws_access_key_id=%s\naws_secret_access_key=%s\n' \
     "$(tr -d '[:space:]' <"$BACKUP_ACCESS_KEY_FILE")" "$(tr -d '[:space:]' <"$BACKUP_SECRET_KEY_FILE")" >"$tmp/cloud"
   recovery_key <"$BACKUP_RECOVERY_KEY_FILE" >"$tmp/password"
-  sse=$(sse_customer_key <"$tmp/password") && [[ "$sse" =~ ^[0-9a-f]{64}$ ]] || { rm -rf "$tmp"; die $EXIT_RESTORE "Could not derive the backups' encryption key from the recovery key"; }
+  if ! sse=$(sse_customer_key <"$tmp/password") || [[ ! "$sse" =~ ^[0-9a-f]{64}$ ]]; then
+    rm -rf "$tmp"
+    die $EXIT_RESTORE "Could not derive the backups' encryption key from the recovery key"
+  fi
   # shellcheck disable=SC2059 # \xNN escapes of the key's bytes
   printf "$(hex_escapes "$sse")" >"$tmp/sse-c-key"
   kc -n "$VELERO_NS" create secret generic velero-repo-credentials --from-file=repository-password="$tmp/password" \
