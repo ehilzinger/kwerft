@@ -217,6 +217,33 @@ secret_expires() { printf '%s' "$1" | base64; }
   [[ "$(<"$BATS_TEST_TMPDIR/out")" == *"Interface eth9 has no IPv4 address"* ]]
 }
 
+@test "detect_addresses: never takes the cluster's own interfaces for the private network" {
+  KWERFT_SOURCED=1 source "$SCRIPT"
+  PRIVATE_IFACE=""
+  ADDRS=""
+  ip() {
+    case "$*" in
+      *"route get"*) echo "1.1.1.1 via 172.31.1.1 dev eth0 src 203.0.113.7 uid 0" ;;
+      *"route show default"*) echo "default via 172.31.1.1 dev eth0 proto dhcp" ;;
+      *"addr show scope global"*) printf '%b' "$ADDRS" ;;
+    esac
+  }
+  # A Cloud server without a Cloud Network, with the cluster running: none.
+  ADDRS="2: eth0    inet 203.0.113.7/32 scope global dynamic eth0\n5: cilium_host    inet 10.42.0.199/32 scope global cilium_host\n7: lxc1234    inet 10.42.0.5/32 scope global lxc1234\n9: kube-ipvs0    inet 10.43.0.1/32 scope global kube-ipvs0\n"
+  detect_addresses
+  [ -z "$PRIVATE_CIDR" ] && [ -z "$PRIVATE_IFACE" ] && [ -z "$PRIVATE_IP" ]
+  # With a Cloud Network, after Cilium's interfaces: that one.
+  ADDRS="2: eth0    inet 203.0.113.7/32 scope global dynamic eth0\n5: cilium_host    inet 10.42.0.199/32 scope global cilium_host\n6: enp7s0    inet 10.0.0.2/32 scope global dynamic enp7s0\n"
+  PRIVATE_IFACE=""
+  detect_addresses
+  [ "$PRIVATE_IFACE" = "enp7s0" ] && [ "$PRIVATE_IP" = "10.0.0.2" ]
+  # A vSwitch VLAN interface on a dedicated server.
+  ADDRS="2: enp0s31f6    inet 203.0.113.7/26 scope global enp0s31f6\n4: enp0s31f6.4000    inet 10.0.64.2/24 scope global enp0s31f6.4000\n"
+  PRIVATE_IFACE=""
+  detect_addresses
+  [ "$PRIVATE_IFACE" = "enp0s31f6.4000" ] && [ "$PRIVATE_CIDR" = "10.0.64.2/24" ]
+}
+
 @test "--version accepts a leading v" {
   run "$SCRIPT" --dry-run --platform cloud --domain ops.example.com --version v0.2.0
   [ "$status" -eq 0 ]

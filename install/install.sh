@@ -487,9 +487,14 @@ detect_addresses() {
   else
     # First RFC 1918 address that is not on the default-route interface:
     # a Hetzner Cloud Network (cloud) or a vSwitch VLAN interface (dedicated).
+    # Never the cluster's own: once it runs, cilium_host carries a pod
+    # address, so CNI and container interfaces and the pod and service
+    # networks are skipped (a re-run on a server without a private network
+    # must not take one).
+    local pod_prefix=${POD_CIDR%.0.0/16}. svc_prefix=${SERVICE_CIDR%.0.0/16}.
     PRIVATE_CIDR=$(ip -4 -o addr show scope global 2>/dev/null \
-      | awk -v d="$default_if" '$2 != d {print $2, $4}' \
-      | awk '$2 ~ /^(10\.|172\.(1[6-9]|2[0-9]|3[01])\.|192\.168\.)/ {print $2; exit}' || true)
+      | awk -v d="$default_if" '$2 != d && $2 !~ /^(cilium|lxc|veth|cni|flannel|kube-|docker|br-|virbr|vxlan|genev)/ {print $2, $4}' \
+      | awk -v p="$pod_prefix" -v s="$svc_prefix" '$2 ~ /^(10\.|172\.(1[6-9]|2[0-9]|3[01])\.|192\.168\.)/ && index($2, p) != 1 && index($2, s) != 1 {print $2; exit}' || true)
     PRIVATE_IFACE=$(ip -4 -o addr show scope global 2>/dev/null | awk -v c="$PRIVATE_CIDR" '$4 == c {print $2; exit}' || true)
   fi
   PRIVATE_IP=${PRIVATE_CIDR%/*}
