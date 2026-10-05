@@ -491,6 +491,8 @@ func alertTarget(l map[string]string) string {
 		return l["hostname"]
 	case l["node"] != "":
 		return l["node"]
+	case l["plan"] != "":
+		return "backup plan " + l["plan"]
 	case l["namespace"] != "":
 		return l["namespace"]
 	}
@@ -512,6 +514,8 @@ func alertLink(l map[string]string, host string) string {
 		return base + "/jobs/" + ns + "/schedules/" + url.PathEscape(l["schedule"])
 	case l["namespace"] != "" && l["persistentvolumeclaim"] != "":
 		return base + "/apps/volumes?project=" + url.QueryEscape(l["namespace"])
+	case l["plan"] != "":
+		return base + "/backups"
 	}
 	return base + "/monitoring"
 }

@@ -15,6 +15,7 @@ import "../styles/settings.css";
 import { GitConnectionsCard } from "./GitConnections";
 import { DataKeyCard, SSOCard } from "./SettingsIdentity";
 import { HCloudCard } from "./SettingsHCloud";
+import { BackupsCard } from "./SettingsBackups";
 
 const unreachable = "The console could not be reached. Check your connection and try again.";
 const errText = (e: unknown) => (e instanceof ApiError ? e.message : unreachable);
@@ -50,7 +51,7 @@ export function Settings() {
       <div className="ph">
         <div>
           <h1>Settings</h1>
-          <p>Where the console and your apps live, how their certificates are issued, access to Git hosts, and sign-in</p>
+          <p>Where the console and your apps live, how their certificates are issued, access to Git hosts, sign-in and backups</p>
         </div>
       </div>
       {!canEdit && session.data && (
@@ -83,6 +84,7 @@ export function Settings() {
           {canEdit && <SSOCard />}
           {session.data?.role === "owner" && <DataKeyCard />}
           <HCloudCard s={settings.data} canEdit={canEdit} />
+          {canEdit && <BackupsCard />}
         </>
       )}
     </section>

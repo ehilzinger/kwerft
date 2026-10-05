@@ -159,7 +159,7 @@ type BackupSettings struct {
 	// +optional
 	Prefix string `json:"prefix,omitempty"`
 	// EtcdSnapshots: k3s's own snapshots of the cluster state, to the same
-	// bucket; nil keeps k3s's defaults (local only).
+	// bucket (the console keeps k3s's S3 Secret); nil: snapshots stay local.
 	// +optional
 	EtcdSnapshots *EtcdSnapshotSettings `json:"etcdSnapshots,omitempty"`
 }

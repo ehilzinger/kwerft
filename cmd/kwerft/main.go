@@ -338,7 +338,7 @@ func waitUntilReady(ctx context.Context, log *slog.Logger, mgr ctrl.Manager, rea
 	types := []client.Object{&kwerftv1.Project{}, &kwerftv1.App{}, &kwerftv1.Domain{},
 		&kwerftv1.Volume{}, &kwerftv1.Task{}, &kwerftv1.Schedule{}, &kwerftv1.ConsoleSettings{},
 		&kwerftv1.GitConnection{}, &kwerftv1.Build{}, &kwerftv1.AlertRule{}, &kwerftv1.NotificationChannel{},
-		&kwerftv1.FirewallRule{}, &kwerftv1.Cluster{}, &kwerftv1.NodePool{}}
+		&kwerftv1.FirewallRule{}, &kwerftv1.Cluster{}, &kwerftv1.NodePool{}, &kwerftv1.BackupPlan{}, &kwerftv1.Restore{}}
 	for _, obj := range types {
 		for {
 			_, err := mgr.GetCache().GetInformer(ctx, obj, cache.BlockUntilSynced(false))
@@ -440,6 +440,16 @@ func newManager(log *slog.Logger, leaderElect bool, metricsListen, privateNetwor
 	}
 	// Server firewall (Phase 4): FirewallRules → the node agents' desired rules.
 	if err := (&controllers.FirewallReconciler{Client: mgr.GetClient(), APIReader: mgr.GetAPIReader(), PrivateNetwork: privateNetwork}).SetupWithManager(mgr); err != nil {
+		return nil, err
+	}
+	// Backups (Phase 6): the target, BackupPlans and Restores → Velero.
+	if err := (&controllers.BackupTargetReconciler{Client: mgr.GetClient(), APIReader: mgr.GetAPIReader(), ConsoleDomain: domains.ConsoleDomain}).SetupWithManager(mgr); err != nil {
+		return nil, err
+	}
+	if err := (&controllers.BackupPlanReconciler{Client: mgr.GetClient()}).SetupWithManager(mgr); err != nil {
+		return nil, err
+	}
+	if err := (&controllers.RestoreReconciler{Client: mgr.GetClient()}).SetupWithManager(mgr); err != nil {
 		return nil, err
 	}
 	return mgr, nil

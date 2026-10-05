@@ -51,6 +51,14 @@ func Describe(spec *kwerftv1.AlertRuleSpec) string {
 		s = "More than " + t + " % of requests fail with 5xx over " + Humanize(e.Window) + forPart
 	case kwerftv1.AlertHTTPLatency:
 		s = "95th percentile latency above " + t + " ms over " + Humanize(e.Window) + forPart
+	case kwerftv1.AlertBackupFailing:
+		s = "A backup plan's latest backup failed" + forPart
+	case kwerftv1.AlertBackupMissing:
+		if e.Window > 0 {
+			s = "A backup plan has not completed a backup within " + Humanize(e.Window) + forPart
+		} else {
+			s = "A backup plan has not completed a backup within twice its interval" + forPart
+		}
 	case kwerftv1.AlertCustom:
 		s = "Custom expression" + forPart
 	}
@@ -172,6 +180,8 @@ func DefaultRules() []DefaultRule {
 		rule("certificate-expiring", kwerftv1.AlertCertificateExpiring),
 		rule("schedule-failing", kwerftv1.AlertScheduleFailing),
 		rule("build-failing", kwerftv1.AlertBuildFailing),
+		rule("backup-failing", kwerftv1.AlertBackupFailing),
+		rule("backup-missing", kwerftv1.AlertBackupMissing),
 	}
 }
 

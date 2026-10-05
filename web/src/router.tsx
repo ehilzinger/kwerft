@@ -26,6 +26,7 @@ import { AccessRecordings, recordingsSearch } from "./pages/AccessRecordings";
 import { AccessAudit, AccessMembers, AccessRoles } from "./pages/Access";
 import { InviteAccept } from "./pages/InviteAccept";
 import { Settings } from "./pages/Settings";
+import { Backups } from "./pages/Backups";
 
 type Context = { queryClient: QueryClient };
 
@@ -121,6 +122,8 @@ const routeTree = root.addChildren([
     // Access › Shell recordings (owners and admins); /access itself is Members.
     createRoute({ getParentRoute: () => authed, path: "/access/recordings", component: AccessRecordings, validateSearch: recordingsSearch }),
     createRoute({ getParentRoute: () => authed, path: "/settings", component: Settings }),
+    // Backups (Phase 6): plans, backups and restores; the target is in Settings.
+    createRoute({ getParentRoute: () => authed, path: "/backups", component: Backups }),
     // Monitoring tabs (Phase 3): Alerts, Metrics, Logs, Alert rules, Channels.
     createRoute({ getParentRoute: () => authed, path: "/monitoring", component: MonitoringAlerts }),
     createRoute({ getParentRoute: () => authed, path: "/monitoring/metrics", component: MonitoringMetrics }),

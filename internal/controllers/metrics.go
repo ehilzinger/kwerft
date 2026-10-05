@@ -40,6 +40,14 @@ var (
 	descRouteInfo = prometheus.NewDesc("kwerft_http_route_info",
 		"Maps Traefik's router names (route label: httproute-<namespace>-<HTTPRoute>) to the App an HTTPRoute serves; value 1.",
 		[]string{"namespace", "app", "route"}, nil)
+	descBackupSuccess = prometheus.NewDesc("kwerft_backup_plan_last_success_timestamp_seconds",
+		"When a backup of the BackupPlan last completed (status.lastSuccessfulAt).", []string{"plan"}, nil)
+	descBackupFailed = prometheus.NewDesc("kwerft_backup_plan_last_backup_failed",
+		"1 when the BackupPlan's latest backup failed (Failed, PartiallyFailed, FailedValidation), 0 otherwise.", []string{"plan"}, nil)
+	descBackupInterval = prometheus.NewDesc("kwerft_backup_plan_interval_seconds",
+		"Time between two scheduled runs of a BackupPlan that is not paused.", []string{"plan"}, nil)
+	descBackupCreated = prometheus.NewDesc("kwerft_backup_plan_created_timestamp_seconds",
+		"When the BackupPlan was created (the age of a plan without a successful backup).", []string{"plan"}, nil)
 	descScrapeError = prometheus.NewDesc("kwerft_metrics_collect_errors",
 		"Kinds that could not be read for this scrape (missing CRD, cache not synced).", []string{"kind"}, nil)
 )
@@ -76,7 +84,8 @@ type MetricsCollector struct {
 
 func (c *MetricsCollector) Describe(ch chan<- *prometheus.Desc) {
 	for _, d := range []*prometheus.Desc{descScheduleSuccess, descScheduleFailure, descBuildFailed,
-		descDomainExpiry, descConsoleExpiry, descRouteInfo, descScrapeError} {
+		descDomainExpiry, descConsoleExpiry, descRouteInfo, descBackupSuccess, descBackupFailed, descBackupInterval,
+		descBackupCreated, descScrapeError} {
 		ch <- d
 	}
 }
@@ -105,6 +114,25 @@ func (c *MetricsCollector) Collect(ch chan<- prometheus.Metric) {
 		}
 		if t := s.Status.LastFailureTime; t != nil {
 			gauge(descScheduleFailure, t.Time, s.Namespace, s.Name)
+		}
+	}
+
+	var plans kwerftv1.BackupPlanList
+	if err := c.Reader.List(ctx, &plans); err != nil {
+		failed("BackupPlan")
+	}
+	for _, p := range plans.Items {
+		gauge(descBackupCreated, p.CreationTimestamp.Time, p.Name)
+		if t := p.Status.LastSuccessfulAt; t != nil {
+			gauge(descBackupSuccess, t.Time, p.Name)
+		}
+		v := 0.0
+		if last := p.Status.LastBackup; last != nil && BackupFailed(last.Phase) {
+			v = 1
+		}
+		ch <- prometheus.MustNewConstMetric(descBackupFailed, prometheus.GaugeValue, v, p.Name)
+		if sched, err := ParseBackupSchedule(p.Spec.Schedule); err == nil && !p.Spec.Paused {
+			ch <- prometheus.MustNewConstMetric(descBackupInterval, prometheus.GaugeValue, BackupInterval(sched, time.Now()).Seconds(), p.Name)
 		}
 	}
 

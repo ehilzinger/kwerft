@@ -18,6 +18,7 @@ const sections: { title?: string; items: NavItem[] }[] = [
   { title: "Infrastructure", items: [
     { to: "/clusters", label: "Clusters & nodes", icon: "server" },
     { to: "/network", label: "Network", icon: "net" },
+    { to: "/backups", label: "Backups", icon: "disk", adminOnly: true },
   ] },
   { title: "Administration", items: [
     { to: "/access", label: "Access", icon: "users" },

@@ -195,3 +195,150 @@ Shared files and who decides: `install.sh`'s main flow and stage list —
 U2 and B1 both add stages; the coordinator merges. `cmd/kwerft/main.go`,
 `internal/server/api.go` registrations, `internal/access`, chart RBAC and
 the web router are touched by several workers in small additive edits.
+
+## As built (B2)
+
+**Velero version:** the CRDs of **v1.18.4** (`config/crd/v1/bases` at tag
+`v1.18.4`, matching B1's `VELERO_VERSION`) are vendored for envtest as
+`internal/controllers/testdata/crds/velero.io_{backups,schedules,restores,
+backupstoragelocations,downloadrequests,podvolumebackups}.yaml`. Velero's
+objects are unstructured (`internal/controllers/backup_velero.go`); the
+reconcilers watch them only when the CRDs exist at start and poll
+otherwise, so a `--lite` cluster runs and reports "Velero is not
+installed".
+
+**Target** (`backup_target.go`, `BackupTargetReconciler`): creates the
+write-only Secrets `kwerft-system/kwerft-backup-credentials`
+(`accessKey`, `secretKey`) and `kwerft-backup-key` (`key`) empty; the key's
+carries `velero.io/exclude-from-backup=true`, so the key is never stored
+next to the data it unlocks. From `spec.backups` and the two Secrets it
+applies, in this order, `velero/kwerft-bsl-credentials` (`cloud`, AWS
+credentials file), `velero/velero-repo-credentials`
+(`repository-password` = the key's 52 characters, upper case, no
+separators — `backups.RepositoryPassword`; written before the location),
+and the BSL `kwerft` (`provider: aws`, `default: true`, `accessMode:
+ReadWrite`, prefix `<prefix>/velero`, `s3Url`, `s3ForcePathStyle: "true"`,
+`checksumAlgorithm: ""`, region from the settings or the endpoint's first
+label). With `spec.backups.etcdSnapshots` set it keeps
+`kube-system/kwerft-etcd-s3` (type `etcd.k3s.cattle.io/s3-config-secret`;
+`etcd-s3-endpoint` host[:port] without scheme, bucket, region, folder
+`<prefix>/etcd`, keys, `etcd-s3-retention` = the retention or 28, insecure
+and skip-verify false, timeout 5m) and deletes Kwerft's when it is nil (k3s
+then keeps its local snapshots only; the schedule is the installer's, see
+B1). `status.backups`: `NotConfigured` (what is missing), `Pending`,
+`Ready` (BSL Available), `Error` (BSL Unavailable with Velero's message,
+or no Velero); `recoveryKeyCreatedAt` from the annotation
+`kwerft.dev/backup-key-created-at`, `lastSuccessfulAt` the newest of the
+plans'. After `install.sh --restore` the key Secret is empty (never backed
+up): the reconciler takes the key back from `velero-repo-credentials` when
+that holds one (Velero's built-in default never parses as a key).
+
+**Plans** (`backup_plan.go`): BackupPlan → `velero/Schedule kwerft-<plan>`
+(controller reference to the plan, `skipImmediately: true`,
+`useOwnerReferencesInBackup: false`, so deleting a plan keeps its backups).
+Template: labels `kwerft.dev/backup-plan`, `kwerft.dev/backup-scope`;
+`ttl` = retention (default 336h); `defaultVolumesToFsBackup` = volumes;
+`snapshotVolumes: false`; `storageLocation: kwerft`; events excluded. A
+Cluster plan names every Project's namespace plus `kwerft-system` and
+`kwerft-builds` explicitly (it follows Projects as they come and go) and
+`includedClusterScopedResources` = Projects, ConsoleSettings, Clusters,
+NodePools, FirewallRules, AlertRules, NotificationChannels,
+GitConnections, BackupPlans (never Restores or Upgrades; a test fails when
+a new cluster-scoped kind is in neither list; CRDs are left to
+`--restore`, which applies them). A Projects plan names its projects and
+`projects.kwerft.dev`. "Back up now": the API annotates
+`kwerft.dev/run-requested=<RFC 3339>` and `kwerft.dev/requested-by`; the
+reconciler creates `Backup kwerft-<plan>-<YYYYMMDDhhmmss>` from the
+template (plus `velero.io/schedule-name`) and records
+`kwerft.dev/run-handled`. Status from the plan's Backups: lastBackup,
+lastSuccessfulAt (kept when backups expire), backups, nextRunAt (cron in
+UTC), Ready (InvalidSchedule, NoVelero, TargetNotReady/TargetPending,
+Paused, Scheduled). Plan names are at most 40 characters (backup names
+stay within 63).
+
+**Restores** (`backup_restore.go`): the Restore must name a Completed or
+PartiallyFailed backup that holds the project. The target Project
+(`targetProject` or the original) is created when missing, annotated
+`kwerft.dev/restored-by`, with the original's spec read from the backup's
+contents (a DownloadRequest `kwerft-<restore>-contents` of kind
+BackupContents; the tarball is read in memory, at most 512 MiB unpacked) —
+or the live original's when the contents cannot be read — and the
+reconciler waits for its namespace. Then `velero/Restore
+kwerft-<restore>` (label `kwerft.dev/restore`): `includedNamespaces:
+[project]`, `namespaceMapping` to the target, `existingResourcePolicy:
+none`, `includeClusterResources: false`, `restorePVs: true`. With `apps`:
+App objects carry no `kwerft.dev/app` label, so before Velero the
+reconciler creates from the contents what the Apps refer to by name
+(shared Volumes, Secrets of env `secretKeyRef`, `volumes[].secret` and the
+image pull secret, SecretSets of those names and `<app>-env`, ConfigMaps),
+Velero restores everything labelled `kwerft.dev/app in (apps)` (workloads,
+pods with their file system restores, own disks, Domains), and the App
+objects follow once Velero is done. Objects are never overwritten; copies
+lose owner references, UIDs and status. Status mirrors Velero (phase,
+warnings, errors, failure reason).
+
+**API** (`internal/server/api_backups.go`, owners and admins, impersonated,
+audited): `GET/PUT /api/v1/settings/backups`, `POST
+/api/v1/settings/backups/check` (body with keys: that target; without:
+the saved target with the stored keys, read with the console's identity),
+`GET /api/v1/backups` (Velero Backups with plan, phase, times, items,
+volume bytes summed from PodVolumeBackups; `velero: false` without
+Velero), `GET/POST /api/v1/backups/plans`, `PUT/DELETE
+/api/v1/backups/plans/{name}`, `POST /api/v1/backups/plans/{name}/run`,
+`GET/POST /api/v1/backups/restores`. The PUT checks new keys against the
+bucket first (own SigV4 client in `internal/backups`: ListObjectsV2 of the
+prefix, PUT and DELETE of `<prefix>/.kwerft-check-<random>`; S3 errors map
+to fields), stores keys by patch only, claims the recovery key with an
+optimistic-lock annotation, stores it in the grouped form and returns it
+only in that answer (`recoveryKey`). An entered key (a console rebuilt by
+hand) is accepted only while none is set; a prefix that already holds
+Velero backups refuses a new key. The first save writes the prefix
+(default: the console hostname) and creates the plan `cluster` (Cluster,
+`0 3 * * *`, 14d, volumes). Audit actions: `settings.backups`,
+`backup.plan_create|update|delete`, `backup.run`, `backup.restore`.
+
+**RBAC:** owners and admins read `velero.io` backups, schedules, restores,
+locations and PodVolumeBackups (cluster roles) and patch the two Secrets
+(Role `kwerft:backup-secrets`); access matrix row `backups`. The
+controller writes `velero.io` locations, schedules, backups, restores and
+downloadrequests and reads podvolumebackups.
+
+**Alerts:** two conditions, `BackupFailing` and `BackupMissing` (enum in
+`alerting_types.go`), default rules `backup-failing` and `backup-missing`
+(critical, platform alerts, link `/backups`). They use Kwerft's own
+metrics, not Velero's (no Velero scrape is needed):
+`kwerft_backup_plan_last_backup_failed`, `…_last_success_timestamp_seconds`,
+`…_created_timestamp_seconds`, `…_interval_seconds` (not for paused
+plans). Missing = no success (or, never, since creation) within twice the
+interval, or within the rule's window.
+
+**UI:** Settings › Backups (`SettingsBackups.tsx`; target, write-only
+keys, "Check connection", the recovery key dialog with copy, download and a
+required "I stored it" before it closes — Escape does not dismiss it; etcd
+snapshots) and the Backups page (`/backups`, nav for owners and admins:
+plans with last/next run, Back up now, edit/delete; backups with size and
+expiry; restore dialog: project, whole or some apps, same or new project;
+restores). Tested in `web/src/backups.test.ts`; checked in the browser
+against the homepage's mock API with demo backup data.
+
+**Tests:** envtest `internal/controllers/backup_test.go` (target, key
+adoption, plans incl. "Back up now" and status, restore under a new name,
+apps restore, refusals, kind coverage), `metrics_test.go`, server
+`backups_test.go` (write-only keys and RBAC, the fake bucket's signature
+check, earlier key, plans, backups list, restores), `internal/backups`
+(AWS SigV4 test vectors, recovery key, tarball reader).
+
+**Open questions:**
+- `spec.backups.etcdSnapshots` nil now means "snapshots stay local" (the
+  type comment says so; B1 noted the old wording clashed with the
+  installer, which schedules local snapshots always).
+- Velero's object tarball (including Secrets) is not encrypted by the
+  recovery key — only volume data is (Kopia). The blueprint's "backups are
+  encrypted before secret sets ship" needs SSE-C or client-side
+  encryption of the bucket (B1's BSL config) before S1 ships.
+- Restored objects with owner references to objects that get new UIDs
+  (App-rendered Deployments, the App objects created after Velero) rely on
+  Velero's usual namespace-restore behaviour; E1's restore run should
+  confirm the garbage collector leaves them alone.
+- A Domain restored into a new project collides with the original's
+  hostname (the restore dialog says so); no rewrite is attempted.

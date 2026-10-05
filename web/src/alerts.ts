@@ -41,7 +41,7 @@ export type SilenceInput = { fingerprint: string; duration: string; comment: str
 
 export type AlertCondition =
   | "CrashLooping" | "Restarts" | "MemoryHigh" | "CPUHigh" | "VolumeFillingUp" | "NodeMemoryPressure" | "NodeDiskPressure"
-  | "CertificateExpiring" | "ScheduleFailing" | "BuildFailing" | "HTTPErrorRate" | "HTTPLatency" | "Custom";
+  | "CertificateExpiring" | "ScheduleFailing" | "BuildFailing" | "HTTPErrorRate" | "HTTPLatency" | "BackupFailing" | "BackupMissing" | "Custom";
 
 export type AlertScope = { projects: string[]; apps: string[] };
 
@@ -282,6 +282,13 @@ export const conditions: Record<AlertCondition, ConditionInfo> = {
     threshold: { unit: "ms", default: 1000, label: "Slower than", suffix: "ms" }, window: { default: "5m", label: "Over" },
     for: { default: "10m", label: "For" },
   },
+  BackupFailing: {
+    label: "Backup failing", hint: "A backup plan's latest backup failed", scope: "none", everything: "All backup plans", severity: "critical",
+  },
+  BackupMissing: {
+    label: "Backup missing", hint: "A backup plan has not completed a backup in time", scope: "none", everything: "All backup plans", severity: "critical",
+    window: { default: "", label: "Or no success within (empty: twice the plan's interval)" },
+  },
   Custom: {
     label: "Custom expression", hint: "A MetricsQL expression; each result is an alert", scope: "none", everything: "What the expression returns", severity: "warning",
     for: { default: "", label: "For" },
@@ -323,6 +330,8 @@ export function describeCondition(r: Measured): string {
     case "BuildFailing": return "An app's latest build failed";
     case "HTTPErrorRate": return `More than ${n} % of requests fail (5xx) over ${humanDuration(w)}`;
     case "HTTPLatency": return `95th percentile response time above ${n} ms over ${humanDuration(w)}`;
+    case "BackupFailing": return `A backup plan's latest backup failed${forText}`;
+    case "BackupMissing": return `A backup plan has not completed a backup within ${w ? humanDuration(w) : "twice its interval"}${forText}`;
     case "Custom": return `Custom expression${forText}`;
   }
 }
