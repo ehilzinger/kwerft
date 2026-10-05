@@ -161,6 +161,7 @@ var tokenProjectless = []string{
 	"GET /api/v1/logs", "GET /api/v1/logs/tail",
 	"GET /api/v1/alerts", "GET /api/v1/alerts/silences", "GET /api/v1/alerts/rules",
 	"GET /api/v1/recordings", "GET /api/v1/traffic/drops", "GET /api/v1/cluster-status",
+	"GET /api/v1/templates",
 }
 
 // tokenMayUse applies the token rules above to the matched route. It answers

@@ -1,0 +1,106 @@
+# Every key Kwerft does not map, on one service, and services it cannot
+# import as they are.
+version: "3.9"
+services:
+  Legacy_App:
+    image: nginx
+    build: ./app
+    container_name: legacy
+    hostname: legacy-host
+    network_mode: host
+    privileged: true
+    cap_add: [NET_ADMIN, SYS_TIME]
+    cap_drop: [ALL]
+    devices: ["/dev/fuse:/dev/fuse"]
+    pid: host
+    ipc: host
+    user: "1000:1000"
+    working_dir: /srv
+    security_opt: ["seccomp:unconfined"]
+    sysctls:
+      net.core.somaxconn: 1024
+    ulimits:
+      nofile: 65535
+    shm_size: 1gb
+    extra_hosts: ["db.local:10.0.0.5"]
+    dns: [1.1.1.1]
+    tmpfs: [/run]
+    volumes_from: [other]
+    secrets: [api_key]
+    configs: [nginx_conf]
+    env_file: [.env, prod.env]
+    links: ["db:database"]
+    external_links: [redis_1]
+    extends:
+      file: common.yml
+      service: base
+    restart: "no"
+    read_only: true
+    stop_grace_period: 30s
+    logging:
+      driver: json-file
+    gpus: all
+    frobnicate: yes
+    ports:
+      - "443:443"
+      - "127.0.0.1:9000:9000"
+      - "5000-5010:5000-5010"
+      - target: 8080
+        published: 8080
+        app_protocol: http
+    volumes:
+      - ./html:/usr/share/nginx/html:ro
+      - /var/run/docker.sock:/var/run/docker.sock
+      - /cache
+      - type: tmpfs
+        target: /tmp
+      - logs:/var/log/nginx
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/check-everything"]
+    depends_on: [db]
+    deploy:
+      mode: global
+      placement:
+        constraints: [node.role == manager]
+      restart_policy:
+        condition: on-failure
+  local-build:
+    build:
+      context: .
+      args:
+        VERSION: 1
+  from-git:
+    build:
+      context: https://github.com/acme/api.git#release:services/api
+      dockerfile: Dockerfile.prod
+    ports: ["3000:3000"]
+  debug-tools:
+    image: busybox:1.37
+    profiles: [debug]
+  db:
+    image: postgres:17
+    environment:
+      POSTGRES_PASSWORD: example
+  3d-render:
+    image: acme/render:1.0
+    networks: [backend]
+    expose: ["7000"]
+    healthcheck:
+      test: curl -f https://localhost:7000/
+      start_period: 2m
+networks:
+  backend:
+    internal: true
+volumes:
+  logs:
+    driver: nfs
+    driver_opts:
+      type: nfs
+secrets:
+  api_key:
+    file: ./api_key.txt
+configs:
+  nginx_conf:
+    file: ./nginx.conf
+include:
+  - other.yaml

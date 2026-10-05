@@ -30,6 +30,7 @@ type taskRun struct {
 	image      string
 	pullSecret string
 	command    []string
+	args       []string // the App's, when the Task runs the App's entrypoint
 	env        []corev1.EnvVar
 	size       string
 	resources  *corev1.ResourceRequirements
@@ -59,7 +60,7 @@ func resolveTask(task *kwerftv1.Task, app *kwerftv1.App, appImage *resolvedImage
 	if app != nil {
 		run.asApp = app.Name
 		if len(run.command) == 0 {
-			run.command = app.Spec.Command
+			run.command, run.args = app.Spec.Command, app.Spec.Args
 		}
 		if run.size == "" {
 			run.size, run.resources = app.Spec.Size, app.Spec.Resources
@@ -138,6 +139,7 @@ func (r *taskRun) job() *batchv1ac.JobApplyConfiguration {
 		image:      r.image,
 		pullSecret: r.pullSecret,
 		command:    r.command,
+		args:       r.args,
 		env:        r.env,
 		size:       r.size,
 		resources:  r.resources,

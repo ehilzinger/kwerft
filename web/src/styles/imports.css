@@ -1,0 +1,28 @@
+/* New App wizard: Docker Compose and Template sources (pages/DeployImport.tsx). */
+.imp-label { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.imp-upload { position: relative; overflow: hidden; cursor: pointer; }
+.imp-upload input { position: absolute; inset: 0; opacity: 0; cursor: pointer; }
+.imp-upload:focus-within { box-shadow: 0 0 0 2px var(--accent-2); border-color: var(--accent); }
+
+.tpl-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 10px; }
+.opt.tpl { gap: 6px; cursor: pointer; }
+.tpl-top { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.tpl-top .pill { margin: 0; }
+.opt .tpl-images { font-family: var(--mono); font-size: 11px; color: var(--faint); overflow-wrap: anywhere; }
+
+.imp-public { font-family: var(--mono); color: var(--accent) !important; }
+.imp-problems { margin: 4px 0 0; padding-left: 18px; }
+.imp-problems code, .imp-warnings code { font-family: var(--mono); font-size: 11.5px; background: var(--sunk); border-radius: 4px; padding: 0 4px; }
+.card > h3.sep { border-top: 1px solid var(--line-2); }
+
+.imp-warnings { display: grid; }
+.imp-group { padding: 10px 16px; border-bottom: 1px solid var(--line-2); display: grid; gap: 6px; }
+.imp-group:last-child { border-bottom: 0; }
+.imp-group > b { font-size: 12.5px; }
+.imp-group ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+.imp-group li { display: grid; grid-template-columns: 14px 1fr; gap: 8px; font-size: 12.5px; line-height: 1.45; color: var(--ink-2); }
+.imp-group li svg { width: 14px; height: 14px; margin-top: 2px; }
+.imp-group li.warning svg { color: var(--warn); }
+.imp-group li.info { color: var(--muted); }
+.imp-group li.info svg { color: var(--faint); }
+.imp-notes { margin: 0; font-size: 13px; line-height: 1.55; }

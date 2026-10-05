@@ -103,6 +103,7 @@ func (a *appRender) pod() *podShape {
 		container:   "app",
 		image:       a.image,
 		command:     s.Command,
+		args:        s.Args,
 		env:         s.Env,
 		size:        s.Size,
 		resources:   s.Resources,
