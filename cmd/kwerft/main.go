@@ -38,6 +38,7 @@ import (
 	"github.com/ehilzinger/kwerft/internal/server"
 	"github.com/ehilzinger/kwerft/internal/setup"
 	"github.com/ehilzinger/kwerft/internal/store"
+	"github.com/ehilzinger/kwerft/internal/upgrades"
 	"github.com/ehilzinger/kwerft/internal/version"
 	"github.com/ehilzinger/kwerft/web"
 )
@@ -50,6 +51,10 @@ func main() {
 	// `kwerft db-snapshot` is Velero's pre-backup hook on the console pod (dbsnapshot.go).
 	if len(os.Args) > 1 && os.Args[1] == "db-snapshot" {
 		os.Exit(runDBSnapshot(os.Args[2:]))
+	}
+	// `kwerft upgrade-runner` is an Upgrade's runner pod (upgraderunner.go).
+	if len(os.Args) > 1 && os.Args[1] == "upgrade-runner" {
+		os.Exit(runUpgradeRunner(os.Args[2:]))
 	}
 	// `kwerft agent` takes the console's flags for the reconcilers, plus its own.
 	agentMode := len(os.Args) > 1 && os.Args[1] == "agent"
@@ -81,6 +86,9 @@ func main() {
 		agentTokenFile     = flag.String("agent-token-file", "/etc/kwerft-agent/token", "agent mode: file with this cluster's agent token (the mounted Secret kwerft-agent)")
 		hcloudCCM          = flag.Bool("hcloud-ccm", false, "the hcloud cloud-controller-manager runs in the cluster (install.sh, chosen at the first install)")
 		hcloudProxyNetwork = flag.String("hcloud-proxy-network", "", "private network (CIDR) the ingress accepts the PROXY protocol from, for a Hetzner Load Balancer in front of it (install.sh); empty: none")
+
+		installBaseURL = flag.String("install-base-url", "", "the install repository's raw files, for release discovery and upgrades (empty: "+upgrades.DefaultInstallBaseURL+")")
+		upgradeFaults  = flag.Bool("upgrade-faults", false, "e2e only: pass an Upgrade's kwerft.dev/e2e-fault annotation on to its runner (chart value e2e.faults)")
 	)
 	flag.Parse()
 
@@ -119,6 +127,9 @@ func main() {
 	// The reconcilers, the same in the console's cluster and (agent mode)
 	// in remote ones.
 	var flows *hubble.Aggregator
+	// The console's store, for the upgrade's database copy (set once it is
+	// open; agent mode has none).
+	var database upgrades.Snapshotter
 	newControllers := func() (ctrl.Manager, error) {
 		traffic := &controllers.TrafficRuleReconciler{}
 		// Cilium's flows, read in-cluster from the Hubble relay: the
@@ -153,6 +164,10 @@ func main() {
 			}
 			name, _ = clusters.AgentTokenCluster(token)
 		}
+		if err := setupUpgrades(mgr, upgradeOptions{namespace: namespace, installBaseURL: *installBaseURL, faults: *upgradeFaults,
+			console: !agentMode, cluster: name, dataDir: *dataDir, database: database}); err != nil {
+			return nil, err
+		}
 		return mgr, setupEveryCluster(mgr, name, *hcloudProxyNetwork)
 	}
 	if agentMode {
@@ -179,12 +194,18 @@ func main() {
 		log.Error("cannot restore the database from the backup", "err", err)
 		os.Exit(1)
 	}
-	st, err := store.Open(ctx, filepath.Join(*dataDir, "kwerft.db"))
+	dbFile := filepath.Join(*dataDir, "kwerft.db")
+	if *runControllers {
+		// A rolled-back upgrade may ask this version to restore its copy.
+		restoreDatabase(ctx, log, *dataDir, dbFile)
+	}
+	st, err := store.Open(ctx, dbFile)
 	if err != nil {
 		log.Error("cannot open the database", "err", err)
 		os.Exit(1)
 	}
 	defer st.Close()
+	database = st
 	go cleanSessions(ctx, log, st)
 
 	var tokens setup.TokenSource = setup.NewStaticTokenSource("", 0) // expired: no setup possible

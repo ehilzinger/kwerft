@@ -18,6 +18,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/util/validation"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -29,6 +30,7 @@ import (
 	"github.com/ehilzinger/kwerft/internal/clusters"
 	"github.com/ehilzinger/kwerft/internal/hetzner"
 	"github.com/ehilzinger/kwerft/internal/jointoken"
+	"github.com/ehilzinger/kwerft/internal/upgrades"
 )
 
 // NodePoolReconciler keeps each NodePool's Hetzner Cloud servers: it
@@ -362,7 +364,38 @@ func (r *NodePoolReconciler) reconcile(ctx context.Context, pool *kwerftv1.NodeP
 	if pool.DeletionTimestamp != nil {
 		return run, r.finalize(ctx, run)
 	}
+	// An upgrade of the pool's cluster holds node changes until it is done
+	// (docs/phase6-upgrades.md).
+	if run.target != nil {
+		name, err := activeUpgrade(ctx, run.target)
+		if err != nil {
+			return run, err
+		}
+		if name != "" {
+			run.notes = append(run.notes, "Waiting for upgrade "+name+" to finish.")
+			run.busy = true
+			return run, nil
+		}
+	}
 	return run, r.scale(ctx, run)
+}
+
+// activeUpgrade names the cluster's active Upgrade, if any. A cluster
+// without the Upgrade CRD (an older agent) has none.
+func activeUpgrade(ctx context.Context, c client.Reader) (string, error) {
+	var list kwerftv1.UpgradeList
+	if err := c.List(ctx, &list); err != nil {
+		if meta.IsNoMatchError(err) || runtime.IsNotRegisteredError(err) || apierrors.IsNotFound(err) {
+			return "", nil
+		}
+		return "", fmt.Errorf("list upgrades: %w", err)
+	}
+	for _, u := range list.Items {
+		if upgrades.Active(u.Status.Phase) {
+			return u.Name, nil
+		}
+	}
+	return "", nil
 }
 
 // validatePool checks what the CRD cannot.

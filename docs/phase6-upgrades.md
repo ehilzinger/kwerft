@@ -692,3 +692,184 @@ and `given` in `parse_args`.
 **Open**: SUC's manifests are applied from GitHub without a checksum (like
 the Gateway API CRDs). The console's Plans (W4) rely on the upstream
 namespace and ServiceAccount names above.
+
+## As built (U3): Upgrade core
+
+Files: `internal/upgrades/` (versions, the install repository and
+manifests, maintenance windows, progress lines, the anonymous registry
+check, the database copy and restore, and the runner: `runner.go` state
+machine, `host.go` systemd host, `kube.go` Kubernetes side),
+`internal/controllers/upgrade_{controller,preflight,runner}.go` and
+`updates_controller.go`, `cmd/kwerft/{upgrades,upgraderunner}.go`, chart
+`templates/upgrade-runner.yaml` and `values.yaml` (`upgrades.installBaseURL`,
+`e2e.faults`), a gate in `nodepool_controller.go`, constants in
+`api/v1alpha1/annotations.go`. No type changes.
+
+**Where it runs.** `UpgradeReconciler` runs in every cluster (console and
+agent mode; registered in `newControllers`), `UpdatesReconciler` (discovery
+and AutoPatch) in the console only. Controller flags: `--install-base-url`
+(chart `upgrades.installBaseURL`; empty means
+`https://raw.githubusercontent.com/ehilzinger/kwerft-install/main`, where U1
+publishes) and `--upgrade-faults` (chart `e2e.faults`). The chart now sets
+`POD_NAME` on the console: the controller reads its own pod to pin the
+runner image (`status.containerStatuses[].imageID`, so `repo@sha256:…`; a
+locally imported image has no registry digest, which only dev installs hit
+and preflight refuses anyway).
+
+**Database copy: in-process.** The controller and the console are one
+process in one pod (`replicas: 1`, `Recreate`, leader election hands over on
+shutdown), so the Upgrade controller calls `store.Store.Snapshot` directly
+(`upgrades.Snapshotter`); there is no internal endpoint. The copy is
+`<data-dir>/backups/pre-<upgrade>.db`, i.e. `/var/lib/kwerft/backups/…` in
+the console pod (the design's `/data/backups`), made once per Upgrade
+(resumable); the newest 3 are kept. Agent mode has no database and skips
+it. Should the console ever run more than one replica, the copy must follow
+the store behind the leader (the existing TODO in `deployment.yaml`).
+For `rollbackSafe: false` with `acceptDataRollback`, the runner annotates the
+Upgrade `kwerft.dev/restore-database: <old version>` before it rolls the
+Kwerft release back; the console of exactly that version
+(`upgrades.RestorePendingDatabase`, called in `main` before `store.Open`)
+copies `status.backup.database` (only from `<data-dir>/backups/`) over
+`kwerft.db`, removes `-wal`/`-shm` and sets the annotation to `done`.
+
+**Lifecycle and who writes what.**
+
+| Phase | Writer | What happens |
+|---|---|---|
+| `""` → `Queued` | controller | another Upgrade is active, an older one waits, or (auto-update) the window is closed; `status.message` says which |
+| `Preflight` | controller | `startedAt`, `from` (running Kwerft, oldest kubelet), `preflight[]`; a blocking failure → `Failed`/`Preflight` |
+| `Backup` | controller, then runner | controller: finalizer `kwerft.dev/upgrade`, database copy, runner Job. Runner: `install.env` present, ≥ 5 GiB in `/var/lib`, download + SHA256SUMS + manifest version, App baseline, `k3s etcd-snapshot save --name pre-<upgrade>` (`backup.etcdSnapshot`), `helm list -A` (`backup.helmRevisions`) |
+| `Running` | runner | `systemd-run --unit kwerft-upgrade-<upgrade> … install.sh --version V --yes --progress …`; `steps[]` from the progress file; the log ConfigMap once per stage |
+| `Verifying` | runner | up to 10 min; `message` shows what is still missing |
+| `RollingBack` | runner | `helm rollback` of changed releases, Kwerft first, Cilium last; verify the old version |
+| `Succeeded` `RolledBack` `Failed` `Cancelled` | runner or controller | `finishedAt`; the runner writes the log ConfigMap and removes the unit; the controller drops the finalizer, pauses AutoPatch, keeps the newest 20 |
+
+`status.reason`: `Usage Preflight Network Kubernetes Platform Kwerft`
+(installer exit codes), `Installer` (another exit code, or the unit vanished
+without an exit line), `Verify`, `Timeout` (installer > 90 min, or the Job's
+3 h deadline), `Backup` (database copy, etcd snapshot or `helm list` failed:
+nothing changed), `Runner` (the Job gave up after 4 pod failures),
+`Cancelled`. A runner Job deleted by hand mid-run is created again and
+resumes from the status. The finalizer holds a Kwerft Upgrade from `Backup`
+until it finished: deleting it then waits for the end.
+
+**For U5 (API and UI).**
+- Create: as the user (impersonation), `generateName:
+  controllers.GenerateName(component, version)` (`kwerft-0.6.0-`,
+  `kubernetes-v1.38.1-k3s1-`), annotation `kwerft.dev/requested-by: <email>`,
+  `spec.{component,version,acceptDataRollback}`. Synchronous preflight:
+  build a `controllers.UpgradeChecks` in `main` as `setupUpgrades` does
+  (factor it out) and call `.Kwerft(ctx, spec, "")`; refuse when
+  `controllers.Blocked(checks)` is non-empty, show warnings. The controller
+  runs the same checks again.
+- Cancel (`DELETE …/upgrades/{name}`): patch the annotation
+  `kwerft.dev/cancel-requested: <email>` (keeps the record; the controller
+  and the runner honour it until the installer starts, and the phase's
+  optimistic lock decides a race). Owners need `patch` on `upgrades` for
+  that; deleting the object also works but loses the record.
+- Live status: watch the Upgrade (phase, `steps[]`, `message`). Log:
+  ConfigMap `kwerft-system/<upgrade>-log`, key `install.log` (the 64 KiB tail
+  of `/var/log/kwerft/install.log`), updated once per stage and at the end.
+- Check now: annotate ConsoleSettings `local`
+  `kwerft.dev/check-updates-requested: <RFC 3339 now>`. A check runs when it
+  is newer than `status.updates.checkedAt`.
+- Resume AutoPatch: annotate `kwerft.dev/resume-autopatch:
+  <status.updates.autoPatchPausedBy>`. Policy, channel, window:
+  `spec.updates`.
+- Notifications: an auto-update that ends `RolledBack`/`Failed` gets the
+  condition `AutoPatchPaused` and sets `status.updates.autoPatchPausedBy`;
+  otherwise the phase changes are the events (watch `upgrades`).
+
+**For U4 (Kubernetes, agents).**
+- `UpgradeReconciler.Kubernetes` takes a `controllers.KubernetesUpgrades`
+  (`Reconcile(ctx, *Upgrade) (ctrl.Result, error)`): it is called for the
+  active Kubernetes Upgrade from `Preflight` on and changes `u.Status`; the
+  controller writes it. Queueing, cancel before `Preflight`, the AutoPatch
+  pause and retention stay here. Kubernetes Upgrades get no finalizer and no
+  runner. Without a driver they fail at preflight.
+- Every active Upgrade (either component) holds NodePool changes of its
+  cluster: the NodePool reconciler lists Upgrades through the pool's cluster
+  client and waits ("Waiting for upgrade X to finish.").
+- Agent clusters run the same controller and runner (no database copy;
+  verification reads the agent's image tag instead of `/api/v1/version`).
+  `UpgradeChecks.Cluster` names the cluster for NodePools.
+- AutoPatch creates Kubernetes patch Upgrades only with `kubernetesPatches`,
+  after Kwerft patches, never minors.
+
+**Runner contract** (`kwerft upgrade-runner`, `internal/upgrades/runner.go`).
+- Job `<upgrade>-runner` in `kwerft-system`, controller-owned by the
+  Upgrade, label `kwerft.dev/upgrade`, service account
+  `kwerft-upgrade-runner`, node selector `kwerft.dev/installer=true`,
+  tolerates everything, host network, `ClusterFirstWithHostNet`, root with
+  only `CAP_SYS_CHROOT`, read-only root file system, the host's `/`
+  read-only at `/host` (`HostToContainer`), `/var/lib/kwerft/upgrade` at
+  `/work`. Backoff 4, deadline 3 h, TTL 7 days. It talks to the API at
+  `https://127.0.0.1:6443` (`--api-server`), not through the Service that
+  Cilium carries.
+- Only `systemd-run` and `systemctl` run in the chroot; `k3s`, `helm`
+  (`KUBECONFIG=/etc/rancher/k3s/k3s.yaml`, `HOME=/root`) and `install.sh`
+  run as transient host units. The installer's unit
+  (`kwerft-upgrade-<upgrade>`) has `RemainAfterExit=yes` and
+  `KillMode=process`; its exit code is the progress file's `{"exit":N}`,
+  else `ExecMainStatus` (U2: a missing exit line is a crash).
+- Files: `/var/lib/kwerft/upgrade/<upgrade>/{install.sh,SHA256SUMS,
+  manifest.json,progress.jsonl,apps-before.json,started}`.
+- Verification: console Deployment ready and `GET http://<Service
+  ClusterIP>/api/v1/version` = target (agents: the image tag); every
+  `kwerft.dev` CRD established; node agent rolled out; `https://<console
+  domain>/` answers with a valid certificate (the chain is not checked when
+  the ClusterIssuer `letsencrypt` uses an ACME staging server); no App has
+  fewer ready replicas than before; `kube-system/hubble-relay` ready when
+  present.
+- Rollback: releases whose revision changed, in reverse stage order;
+  releases new in the target are left installed (named in the message);
+  CRDs, host changes and SUC are not rolled back. A failed rollback ends
+  `Failed` with the `helm rollback` commands to run by hand and the names of
+  the snapshot and the database copy.
+- Fault injection (E1): with chart `e2e.faults=true`, an Upgrade annotated
+  `kwerft.dev/e2e-fault: install` (the installer counts as failed with exit
+  50 after it succeeded) or `verify` (verification fails) passes it on as
+  `--fault`; otherwise the annotation is ignored.
+
+**Discovery as built.** `releases.json` is read as U1 writes it (a list; an
+object with `releases` is accepted too). Up to 12 newer releases on the
+channel (edge sees everything, stable only stable), each with its manifest;
+a newer release without a manifest is skipped. Kubernetes targets come only
+from the running release's manifest (`kubernetes.pinned`, newer and at most
+one minor ahead); none while the running release has no manifest
+(≤ 0.5.x). Notes from `NOTES.md`, at most 8 KiB each. A failed check keeps
+the last `available` and sets `error`. Off clears `available` and makes no
+request. A check also runs when the running versions differ from
+`status.updates.current` (after an upgrade).
+
+**AutoPatch as built.** Inside the window, with no unfinished Upgrade: the
+newest allowed Kwerft patch of the running minor (no pre-releases), else
+with `kubernetesPatches` an allowed k3s patch. One attempt per release and
+window (a cancelled one is not retried in the same window). An auto-update
+in `Queued` or `Preflight` waits for the next window once this one closed.
+Any `Failed` or `RolledBack` auto-update pauses AutoPatch, preflight
+failures included (nothing changed then, but an owner should look).
+
+**Tests.** `internal/upgrades`: the runner state machine against a fake
+host and cluster (success; installer exit 50 → rollback in order; failed
+verification; both injected faults; failed rollback → `Failed` with manual
+steps; bad checksum; disk; missing `install.env`; failed snapshot; cancel;
+resume of a running installer; vanished unit; hung installer; database
+restore request), discovery against a fake repository and an HTTP server,
+windows, progress parsing, the registry check against a fake registry with
+a Bearer challenge, `systemctl show` parsing, verification on a fake API,
+the database copy (real SQLite) and restore. `internal/controllers`: the
+preflight against a fake API (every blocking check), and envtest for the
+queue, the runner Job, finalizer and deletion, cancel, a runner that gave
+up, retention, AutoPatch windows, pause and resume, discovery with Check
+now and the interval, Off, and the NodePool gate. Nothing ran on a host.
+
+**Open.**
+- Free disk on the installer node is only known to the runner (statfs); the
+  controller's preflight sees `DiskPressure` only. A number in the dialog
+  needs node-exporter or the kubelet's summary API.
+- Cosign verification of `install.sh` (design follow-up).
+- The first upgrade from a release without U2 (`install.env`, the installer
+  label) is refused with a hint to re-run the installer once; e2e (E1)
+  should start from a release with U2.
+- Owners' `patch` on `upgrades` (cancel) belongs to U5's roles matrix.
