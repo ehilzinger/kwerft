@@ -5,10 +5,11 @@ import { Dialog } from "../components/Dialog";
 import { Field } from "../components/Field";
 import { Icon } from "../components/Icon";
 import {
-  countdown, describePorts, describeSources, firewallApi, firewallKey, nodeStateText, parseSourcesText, ruleProblem, sshCovers,
+  cloudRuleText, countdown, describePorts, describeSources, firewallApi, firewallKey, nodeStateText, parseSourcesText, ruleProblem, sshCovers,
   type Firewall, type FirewallRule, type FirewallRuleInput,
 } from "../firewall";
 import { errorText } from "./Apps";
+import { FirewallState } from "./SettingsHCloud";
 import "../styles/firewall.css";
 
 const unreachable = "The console could not be reached. Check your connection and try again.";
@@ -57,6 +58,17 @@ export function ServerFirewall() {
         </table>
       </div>
       <Nodes fw={data} />
+      {data.cloud && (
+        <div className="card">
+          <div className="bd fw-cloud">
+            <b>Hetzner Cloud Firewall</b> <FirewallState f={data.cloud} />
+            <p className="dim note">
+              The rules above, as the nodes confirmed them, also filter traffic before it reaches the Cloud servers (Settings › Hetzner Cloud API).
+              Dedicated servers have the host firewall only.
+            </p>
+          </div>
+        </div>
+      )}
       <p className="dim note">
         Kwerft refuses to save a firewall change that would block SSH from the address you are using right now, and HTTP(S) to the
         console always stays open. A change that closes something is applied on the servers, then rolled back automatically unless you keep it
@@ -200,7 +212,12 @@ function RuleRow({ r, fw, onEdit, onRemove }: { r: FirewallRule; fw: Firewall; o
         {r.reason === "Invalid" && r.message && <span className="sub warn-text">{r.message}</span>}
       </td>
       <td>{r.nodes === "control-plane" ? "Control plane" : "All nodes"}</td>
-      <td>{statusPill(r, fw)} {r.required && r.name === "ssh" && <span className="pill mute nodot">required</span>}</td>
+      <td>
+        {statusPill(r, fw)} {r.required && r.name === "ssh" && <span className="pill mute nodot">required</span>}
+        {r.cloudFirewall && cloudRuleText[r.cloudFirewall] && (
+          <> <span className={`pill nodot ${cloudRuleText[r.cloudFirewall]!.tone}`} title={cloudRuleText[r.cloudFirewall]!.title}>{cloudRuleText[r.cloudFirewall]!.label}</span></>
+        )}
+      </td>
       <td className="row-acts" onClick={(e) => e.stopPropagation()}>
         {r.editable === "all" && <button className="btn sm danger" onClick={onRemove} aria-label={`Delete ${r.name}`} title="Delete"><Icon name="trash" /></button>}
         {r.editable === "sources" && <button className="btn sm" onClick={onEdit}>Sources</button>}

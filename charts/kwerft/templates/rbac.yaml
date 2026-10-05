@@ -67,6 +67,11 @@ rules:
   - apiGroups: [cilium.io]
     resources: [ciliumnodes]
     verbs: [get, list, watch]
+  # Whether the hcloud CSI driver's StorageClass hcloud-volumes exists: the
+  # Volumes page offers Cloud Volumes only then.
+  - apiGroups: [storage.k8s.io]
+    resources: [storageclasses]
+    verbs: [get, list, watch]
   - apiGroups: [rbac.authorization.k8s.io]
     resources: [roles, rolebindings]
     verbs: [get, list, watch, create, update, patch, delete, bind, escalate]

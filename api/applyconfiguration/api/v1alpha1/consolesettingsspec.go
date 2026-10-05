@@ -33,6 +33,12 @@ type ConsoleSettingsSpecApplyConfiguration struct {
 	// kwerft-system, which owners and admins may write through the console
 	// but nobody reads back.
 	SSO *SSOSettingsApplyConfiguration `json:"sso,omitempty"`
+	// HetznerCloud is what Kwerft does with the Hetzner Cloud API: the
+	// Cloud Firewall and a Load Balancer in front of the ingress. Its API
+	// token lives in the Secret kwerft-hcloud-token (key "token") in
+	// kwerft-system, which owners and admins may write through the console
+	// but nobody reads back.
+	HetznerCloud *HetznerCloudSettingsApplyConfiguration `json:"hetznerCloud,omitempty"`
 }
 
 // ConsoleSettingsSpecApplyConfiguration constructs a declarative configuration of the ConsoleSettingsSpec type for use with
@@ -78,5 +84,13 @@ func (b *ConsoleSettingsSpecApplyConfiguration) WithDNS(value *DNSSettingsApplyC
 // If called multiple times, the SSO field is set to the value of the last call.
 func (b *ConsoleSettingsSpecApplyConfiguration) WithSSO(value *SSOSettingsApplyConfiguration) *ConsoleSettingsSpecApplyConfiguration {
 	b.SSO = value
+	return b
+}
+
+// WithHetznerCloud sets the HetznerCloud field in the declarative configuration to the given value
+// and returns the receiver, so that objects can be built by chaining "With" function invocations.
+// If called multiple times, the HetznerCloud field is set to the value of the last call.
+func (b *ConsoleSettingsSpecApplyConfiguration) WithHetznerCloud(value *HetznerCloudSettingsApplyConfiguration) *ConsoleSettingsSpecApplyConfiguration {
+	b.HetznerCloud = value
 	return b
 }

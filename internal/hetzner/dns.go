@@ -31,6 +31,18 @@ var (
 	ErrNotFound = errors.New("not found")
 )
 
+// ErrForbidden: the API answered 403, e.g. a Read-only token asked to
+// change something. Such errors also match ErrTokenRejected.
+var ErrForbidden = errors.New("forbidden")
+
+type errForbidden struct{}
+
+func (errForbidden) Error() string { return "token rejected: not allowed (is it a Read-only token?)" }
+
+func (errForbidden) Is(target error) bool {
+	return target == ErrForbidden || target == ErrTokenRejected
+}
+
 // RateLimitError is a 429; Reset is when requests are possible again.
 type RateLimitError struct{ Reset time.Time }
 
@@ -246,8 +258,10 @@ func (c *Client) do(ctx context.Context, method, path string, in, out any) error
 	defer res.Body.Close()
 	limited := http.MaxBytesReader(nil, res.Body, 4<<20)
 	switch {
-	case res.StatusCode == http.StatusUnauthorized || res.StatusCode == http.StatusForbidden:
+	case res.StatusCode == http.StatusUnauthorized:
 		return ErrTokenRejected
+	case res.StatusCode == http.StatusForbidden:
+		return errForbidden{}
 	case res.StatusCode == http.StatusNotFound:
 		return ErrNotFound
 	case res.StatusCode == http.StatusTooManyRequests:

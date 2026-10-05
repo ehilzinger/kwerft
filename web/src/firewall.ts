@@ -3,6 +3,7 @@
 // confirmed. The server decides and checks everything (lock-out protection
 // included); the helpers here only phrase rules and pre-check forms.
 import { request } from "./api";
+import type { CloudFirewallStatus } from "./settings";
 
 export type FirewallProtocol = "TCP" | "UDP" | "ICMP";
 
@@ -22,6 +23,8 @@ export type FirewallRule = {
   ready: boolean;
   reason?: string;
   message?: string;
+  /** The rule's part in the Hetzner Cloud Firewall: Applied, Pending, Private, Disabled, Invalid, Off; absent without a Cloud API token. */
+  cloudFirewall?: string;
 };
 
 export type FirewallRuleInput = {
@@ -50,6 +53,15 @@ export type Firewall = {
   nodes: FirewallNode[];
   client: { ip: string; verifiable: boolean; ssh: boolean };
   problems?: string[];
+  /** The Hetzner Cloud Firewall in front of the Cloud servers, with a Cloud API token. */
+  cloud?: CloudFirewallStatus;
+};
+
+/** What a rule's cloudFirewall state means, for its pill. */
+export const cloudRuleText: Record<string, { tone: string; label: string; title: string }> = {
+  Applied: { tone: "info", label: "Cloud", title: "Also in the Hetzner Cloud Firewall" },
+  Pending: { tone: "warn", label: "Cloud: waiting", title: "Reaches the Hetzner Cloud Firewall once the nodes confirmed it" },
+  Private: { tone: "mute", label: "private", title: "Cloud Firewalls do not filter pod and private-network traffic" },
 };
 
 export const firewallKey = ["firewall"] as const;

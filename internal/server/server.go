@@ -112,6 +112,17 @@ type Config struct {
 	// Tunnel accepts remote clusters' agents at /api/v1/clusters/connect and
 	// reports on them; nil refuses agents.
 	Tunnel *clusters.Hub
+	// HCloudCCM: the hcloud cloud-controller-manager runs in the cluster
+	// (install.sh, an install-time choice). HCloudProxyNetwork is the
+	// private network the ingress accepts the PROXY protocol from, which a
+	// Load Balancer in front of it needs; empty: none (Settings › Hetzner
+	// Cloud API).
+	HCloudCCM          bool
+	HCloudProxyNetwork string
+	// StorageClassExists tells whether a StorageClass exists (the Volumes
+	// page offers hcloud-volume only when hcloud-volumes does); nil: none
+	// is known to exist, and Volume creation is not checked.
+	StorageClassExists func(ctx context.Context, name string) bool
 
 	// ActiveConsoleDomain returns the hostname the console is served on now
 	// (ConsoleSettings.status, which Settings can change); nil or "" means

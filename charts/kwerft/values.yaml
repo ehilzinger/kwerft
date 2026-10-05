@@ -160,3 +160,16 @@ firewall:
     resources:
       requests: { cpu: 5m, memory: 16Mi }
       limits: { memory: 64Mi }
+
+# Hetzner Cloud (Settings › Hetzner Cloud API). The token itself is never a
+# value: Settings or install.sh --config hcloud.tokenFile store it in the
+# Secret kwerft-hcloud-token. Set by install.sh.
+hcloud:
+  # The hcloud cloud-controller-manager runs (chosen at the first install;
+  # nodes register with it). Joining nodes then need the kubelet's
+  # cloud-provider=external.
+  ccm: false
+  # The private network Traefik accepts the PROXY protocol from: where a
+  # Hetzner Load Balancer in front of the ingress connects from. Empty: no
+  # Load Balancer possible (no private network, or a dedicated server).
+  proxyNetwork: ""

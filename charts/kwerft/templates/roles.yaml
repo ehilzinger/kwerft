@@ -286,3 +286,38 @@ subjects:
   - apiGroup: rbac.authorization.k8s.io
     kind: Group
     name: kwerft:role:admin
+---
+# Settings › Hetzner Cloud API: the Cloud API token, the same way as the DNS
+# token (patch only; the Domain reconciler creates it empty; Kwerft's own
+# identity reads it for the Cloud Firewall and the Load Balancer, and copies
+# it to the CSI driver's Secret kube-system/hcloud). What Kwerft does with it
+# is ConsoleSettings.spec.hetznerCloud.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: kwerft:hcloud-token
+  namespace: kwerft-system
+  labels: {{- include "kwerft.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: [secrets]
+    resourceNames: [kwerft-hcloud-token]
+    verbs: [patch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: kwerft:hcloud-token
+  namespace: kwerft-system
+  labels: {{- include "kwerft.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: kwerft:hcloud-token
+subjects:
+  - apiGroup: rbac.authorization.k8s.io
+    kind: Group
+    name: kwerft:role:owner
+  - apiGroup: rbac.authorization.k8s.io
+    kind: Group
+    name: kwerft:role:admin

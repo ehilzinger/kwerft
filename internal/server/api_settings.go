@@ -65,6 +65,7 @@ func (a *api) registerSettings(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/v1/settings/passkeys", read(a.requireRole(s.passkeyHolders, store.RoleOwner, store.RoleAdmin)))
 	mux.HandleFunc("PUT /api/v1/settings/console-domain", admin(s.setConsoleDomain))
 	mux.HandleFunc("PUT /api/v1/settings/apps", admin(a.withClusterParam(s.setApps)))
+	s.registerHCloud(mux, admin) // Hetzner Cloud API token, Cloud Firewall, Load Balancer (api_hcloud.go)
 }
 
 // ---- reading -----------------------------------------------------------------
@@ -95,7 +96,8 @@ type settingsJSON struct {
 	Certificates          []certificateJSON `json:"certificates"`
 	Ready                 *conditionJSON    `json:"ready,omitempty"`
 	// Cluster whose settings these are.
-	Cluster string `json:"cluster"`
+	Cluster string     `json:"cluster"`
+	HCloud  hcloudJSON `json:"hcloud"`
 }
 
 // dnsRecordJSON is one hostname whose records Kwerft keeps (status.dns).
@@ -130,6 +132,7 @@ func (s *settingsAPI) load(ctx context.Context, c client.Client) (*kwerftv1.Cons
 func (s *settingsAPI) view(cs *kwerftv1.ConsoleSettings) settingsJSON {
 	out := settingsJSON{ConsoleDomain: s.consoleDomain(), TLS: string(kwerftv1.TLSHTTP01),
 		PublicAddresses: []string{}, Certificates: []certificateJSON{}, DNSRecords: []dnsRecordJSON{}}
+	out.HCloud = s.hcloudView(context.Background(), cs)
 	if cs == nil {
 		return out
 	}

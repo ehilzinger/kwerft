@@ -423,7 +423,8 @@ func (r *DomainReconciler) retryAfterNewToken(ctx context.Context, s *kwerftv1.C
 }
 
 // ensureTokenSecret creates the empty write-only Secrets of the settings —
-// the DNS token and the single sign-on client secret — so owners and admins
+// the DNS token, the single sign-on client secret and the Hetzner Cloud API
+// token — so owners and admins
 // can set them with "patch" alone: their role cannot create Secrets, and no
 // role can read these.
 func (r *DomainReconciler) ensureTokenSecret(ctx context.Context) error {
@@ -431,7 +432,7 @@ func (r *DomainReconciler) ensureTokenSecret(ctx context.Context) error {
 	if reader == nil {
 		reader = r.Client
 	}
-	for _, name := range []string{DNSTokenSecret, OIDCSecret} {
+	for _, name := range []string{DNSTokenSecret, OIDCSecret, HCloudTokenSecret} {
 		var sec corev1.Secret
 		err := reader.Get(ctx, client.ObjectKey{Namespace: GatewayNamespace, Name: name}, &sec)
 		if !apierrors.IsNotFound(err) {
@@ -505,9 +506,14 @@ func certificateState(name, purpose string, hosts []string, state *readiness, no
 	}
 }
 
-// publicAddresses are the nodes' external IPs (k3s: --node-external-ip),
-// falling back to internal ones on clusters without any.
-func (r *DomainReconciler) publicAddresses(ctx context.Context) []string {
+// publicAddresses are where DNS must point: the Load Balancer's addresses
+// while it serves (hcloud_loadbalancer.go), else the nodes' external IPs
+// (k3s: --node-external-ip), falling back to internal ones on clusters
+// without any.
+func (r *DomainReconciler) publicAddresses(ctx context.Context, s *kwerftv1.ConsoleSettings) []string {
+	if lb := LoadBalancerAddresses(s); len(lb) > 0 {
+		return lb
+	}
 	var nodes corev1.NodeList
 	if err := r.List(ctx, &nodes); err != nil {
 		return nil

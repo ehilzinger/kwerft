@@ -103,6 +103,9 @@ type firewallRuleJSON struct {
 	Ready    bool   `json:"ready"`
 	Reason   string `json:"reason,omitempty"`
 	Message  string `json:"message,omitempty"`
+	// CloudFirewall is the rule's part in the Hetzner Cloud Firewall
+	// (FirewallRuleStatus.cloudFirewall); empty without a Cloud API token.
+	CloudFirewall string `json:"cloudFirewall,omitempty"`
 }
 
 type firewallNodeJSON struct {
@@ -147,12 +150,16 @@ type firewallJSON struct {
 	Nodes       []firewallNodeJSON `json:"nodes"`
 	Client      firewallClientJSON `json:"client"`
 	Problems    []string           `json:"problems,omitempty"`
+	// Cloud is the Hetzner Cloud Firewall in front of the Cloud servers
+	// (ConsoleSettings status.hetznerCloud.firewall), when a token is set.
+	Cloud *kwerftv1.CloudFirewallStatus `json:"cloud,omitempty"`
 }
 
 func fwRuleJSON(r *kwerftv1.FirewallRule) firewallRuleJSON {
 	out := firewallRuleJSON{
 		Name: r.Name, Port: r.Spec.Port, EndPort: r.Spec.EndPort, Protocol: r.Spec.Protocol, Sources: nonNil(r.Spec.Sources),
 		Nodes: r.Spec.Nodes, Description: r.Spec.Description, Disabled: r.Spec.Disabled, Required: firewall.IsRequired(r), Editable: "all",
+		CloudFirewall: r.Status.CloudFirewall,
 	}
 	if out.Nodes == "" {
 		out.Nodes = "all"
@@ -264,6 +271,11 @@ func (fw *firewallAPI) get(w http.ResponseWriter, r *http.Request) {
 
 	addr, verifiable := fw.clientAddr(r)
 	out.Client = firewallClientJSON{IP: fw.clientIP(r), Verifiable: verifiable, SSH: firewall.SSHReaches(sshSources, addr, alwaysSSH(list.Items)...)}
+	var cs kwerftv1.ConsoleSettings
+	if err := c.Get(ctx, client.ObjectKey{Name: kwerftv1.ConsoleSettingsName}, &cs); err == nil &&
+		cs.Annotations[controllers.AnnotationHCloudTokenUpdated] != "" && cs.Status.HetznerCloud != nil {
+		out.Cloud = cs.Status.HetznerCloud.Firewall
+	}
 
 	if !st.ok {
 		out.State = "unavailable"

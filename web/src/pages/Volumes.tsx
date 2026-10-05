@@ -10,6 +10,7 @@ import { ClusterBadge, ClusterFilter } from "../components/ClusterUI";
 import { inCluster, useClusterFilter, useClusters } from "../clusters";
 import { jobs, type Volume, type VolumeClass, type VolumeInUse } from "../jobs";
 import { abilities, ago, workloads } from "../workloads";
+import { settingsApi } from "../settings";
 import { errorText } from "./Apps";
 import "../styles/workloads.css";
 import "../styles/jobs.css";
@@ -150,6 +151,9 @@ function CreateVolumeDialog({ project: initialProject, onClose }: { project?: st
   const [size, setSize] = useState("10");
   const [cls, setCls] = useState<VolumeClass>("local-nvme");
   const [error, setError] = useState<{ field?: string; message: string }>();
+  // Which classes this cluster has: Cloud Volumes need the hcloud CSI driver.
+  const available = useQuery({ queryKey: ["volume-classes"], queryFn: settingsApi.volumeClasses, staleTime: 60_000 });
+  const classInfo = (id: VolumeClass) => available.data?.find((c) => c.id === id);
   const proj = project || (projects.data?.length === 1 ? projects.data[0]!.name : "");
   const create = useMutation({
     mutationFn: () => jobs.createVolume(proj, { name, size: /^\d+(\.\d+)?$/.test(size.trim()) ? `${size.trim()}Gi` : size.trim(), class: cls }),
@@ -186,9 +190,14 @@ function CreateVolumeDialog({ project: initialProject, onClose }: { project?: st
       <div className="field">
         <label>Class</label>
         <div className="choice two" role="group" aria-label="Class">
-          {classes.map((c) => (
-            <button type="button" key={c.id} className="opt" aria-pressed={cls === c.id} onClick={() => setCls(c.id)}><b>{c.label}</b><span>{c.note}</span></button>
-          ))}
+          {classes.map((c) => {
+            const info = classInfo(c.id);
+            const off = info !== undefined && !info.available;
+            return (
+              <button type="button" key={c.id} className="opt" aria-pressed={cls === c.id} disabled={off} title={off ? info.reason : undefined}
+                onClick={() => setCls(c.id)}><b>{c.label}</b><span>{off ? info.reason : c.note}</span></button>
+            );
+          })}
         </div>
         {error?.field === "class" && <span className="field-error" role="alert">{error.message}</span>}
       </div>

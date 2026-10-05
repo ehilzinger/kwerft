@@ -73,8 +73,10 @@ func main() {
 		buildAppArmor       = flag.String("build-apparmor-profile", "kwerft-buildkit", "AppArmor profile (loaded on every node) build containers run under; empty runs them unconfined")
 		hubbleRelay         = flag.String("hubble-relay", hubble.DefaultRelayAddress, "Hubble relay (host:port, plain gRPC) for traffic rule counts and dropped connections; empty turns them off (install.sh --lite has no Hubble)")
 
-		consoleURL     = flag.String("console-url", os.Getenv("KWERFT_CONSOLE_URL"), "agent mode: the console to connect to, https://<console>")
-		agentTokenFile = flag.String("agent-token-file", "/etc/kwerft-agent/token", "agent mode: file with this cluster's agent token (the mounted Secret kwerft-agent)")
+		consoleURL         = flag.String("console-url", os.Getenv("KWERFT_CONSOLE_URL"), "agent mode: the console to connect to, https://<console>")
+		agentTokenFile     = flag.String("agent-token-file", "/etc/kwerft-agent/token", "agent mode: file with this cluster's agent token (the mounted Secret kwerft-agent)")
+		hcloudCCM          = flag.Bool("hcloud-ccm", false, "the hcloud cloud-controller-manager runs in the cluster (install.sh, chosen at the first install)")
+		hcloudProxyNetwork = flag.String("hcloud-proxy-network", "", "private network (CIDR) the ingress accepts the PROXY protocol from, for a Hetzner Load Balancer in front of it (install.sh); empty: none")
 	)
 	flag.Parse()
 
@@ -88,6 +90,12 @@ func main() {
 	if *privateNetwork != "" {
 		if p, err := netip.ParsePrefix(*privateNetwork); err != nil || p.Masked() != p {
 			log.Error("invalid --private-network: want a network like 10.0.0.0/16", "value", *privateNetwork)
+			os.Exit(2)
+		}
+	}
+	if *hcloudProxyNetwork != "" {
+		if p, err := netip.ParsePrefix(*hcloudProxyNetwork); err != nil || p.Masked() != p {
+			log.Error("invalid --hcloud-proxy-network: want a network like 10.0.0.0/16", "value", *hcloudProxyNetwork)
 			os.Exit(2)
 		}
 	}
@@ -175,6 +183,15 @@ func main() {
 			log.Error("cannot start the cluster reconciler", "err", err)
 			os.Exit(1)
 		}
+		// Hetzner Cloud (Phase 5): the Cloud Firewall, the Load Balancer in
+		// front of the ingress, the CSI driver's token. KWERFT_CLUSTER_NAME
+		// names this cluster in Cloud labels (agent mode sets it; default local).
+		hcloud := &controllers.HetznerCloudReconciler{Client: mgr.GetClient(), APIReader: mgr.GetAPIReader(),
+			ClusterName: cmp.Or(os.Getenv("KWERFT_CLUSTER_NAME"), "local"), ProxyNetwork: *hcloudProxyNetwork}
+		if err := hcloud.SetupWithManager(mgr); err != nil {
+			log.Error("cannot start the Hetzner Cloud controller", "err", err)
+			os.Exit(1)
+		}
 		tokens = &setup.SecretTokenSource{Reader: mgr.GetAPIReader(), Writer: mgr.GetClient(), Namespace: namespace}
 		go waitUntilReady(ctx, log, mgr, &ready)
 		go func() {
@@ -254,6 +271,10 @@ func main() {
 		Tunnel: hub,
 
 		ActiveConsoleDomain: activeConsoleDomain(mgr, *dev),
+
+		HCloudCCM:          *hcloudCCM,
+		HCloudProxyNetwork: *hcloudProxyNetwork,
+		StorageClassExists: storageClassChecker(mgr),
 	})
 
 	go func() {
@@ -408,6 +429,15 @@ func newManager(log *slog.Logger, leaderElect bool, metricsListen, privateNetwor
 		return nil, err
 	}
 	return mgr, nil
+}
+
+// storageClassChecker reads StorageClasses through the manager's cache;
+// nil without the controllers.
+func storageClassChecker(mgr ctrl.Manager) func(context.Context, string) bool {
+	if mgr == nil {
+		return nil
+	}
+	return server.StorageClassChecker(mgr.GetClient())
 }
 
 // gitFactory is shared by the Git reconcilers and the console, so GitHub App

@@ -205,6 +205,10 @@ func (a *api) volumeCreate(w http.ResponseWriter, r *http.Request) {
 		invalid(w, "class", "Choose local-nvme or hcloud-volume.")
 		return
 	}
+	if req.Class == "hcloud-volume" && a.cfg.StorageClassExists != nil && !a.cfg.StorageClassExists(r.Context(), HCloudVolumesClass) {
+		invalid(w, "class", "Hetzner Cloud Volumes are not set up on this cluster. Choose Local NVMe, or set them up under Settings › Hetzner Cloud API.")
+		return
+	}
 	c, p, ctx, cancel, err := a.userClient(r)
 	defer cancel()
 	if err != nil {

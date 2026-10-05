@@ -12,7 +12,11 @@ import (
 // FirewallRuleStatus is written by the firewall reconciler.
 type FirewallRuleStatusApplyConfiguration struct {
 	ObservedGeneration *int64 `json:"observedGeneration,omitempty"`
-	// CloudFirewall reports the Hetzner Cloud Firewall sync for cloud nodes.
+	// CloudFirewall reports the Hetzner Cloud Firewall sync for cloud nodes:
+	// Applied, Pending (waiting for the rule set to be confirmed on the
+	// nodes), Private (pod and private-network traffic, which Cloud
+	// Firewalls do not filter), Disabled, Invalid, Off, or empty without a
+	// Cloud API token. Written by the Hetzner Cloud reconciler.
 	CloudFirewall *string                          `json:"cloudFirewall,omitempty"`
 	Conditions    []v1.ConditionApplyConfiguration `json:"conditions,omitempty"`
 }

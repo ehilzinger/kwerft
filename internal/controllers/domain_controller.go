@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -251,7 +252,7 @@ func (r *DomainReconciler) reportSettings(ctx context.Context, s *kwerftv1.Conso
 	if w.serving {
 		st.WildcardDomain = "*." + w.domain
 	}
-	st.PublicAddresses = r.publicAddresses(ctx)
+	st.PublicAddresses = r.publicAddresses(ctx, s)
 
 	st.Certificates = nil
 	if r.ClusterIssuer != "" {
@@ -384,9 +385,15 @@ func (r *DomainReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Named("domain").
 		Watches(&kwerftv1.Domain{}, toGateway).
 		Watches(&gwv1.Gateway{}, toGateway).
-		// Spec and annotation changes (a new DNS token), not its own status.
+		// Spec and annotation changes (a new DNS token), not its own status;
+		// and the Load Balancer starting or stopping to serve (where DNS
+		// points, status.publicAddresses).
 		Watches(&kwerftv1.ConsoleSettings{}, toGateway, builder.WithPredicates(predicate.Or(
-			predicate.GenerationChangedPredicate{}, predicate.AnnotationChangedPredicate{}))).
+			predicate.GenerationChangedPredicate{}, predicate.AnnotationChangedPredicate{},
+			predicate.Funcs{UpdateFunc: func(e event.UpdateEvent) bool {
+				return !slices.Equal(LoadBalancerAddresses(e.ObjectOld.(*kwerftv1.ConsoleSettings)),
+					LoadBalancerAddresses(e.ObjectNew.(*kwerftv1.ConsoleSettings)))
+			}}))).
 		// The console's routes, so a deleted one comes back.
 		Watches(&gwv1.HTTPRoute{}, toGateway, builder.WithPredicates(predicate.NewPredicateFuncs(func(o client.Object) bool {
 			return o.GetNamespace() == GatewayNamespace && o.GetLabels()[LabelManagedBy] == ManagedByKwerft
