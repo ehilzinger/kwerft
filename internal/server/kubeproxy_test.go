@@ -261,6 +261,7 @@ func TestKubeProxyStreamsAndAuditsWrites(t *testing.T) {
 	if code != http.StatusCreated || up.last(t).Method != "POST" {
 		t.Fatalf("create: %d", code)
 	}
+	// No waiting: the write is on the record before kubectl has its answer.
 	a := lastAudit(t, e.store, "kube.write")
 	if a == nil || a.Target != "POST /apis/kwerft.dev/v1alpha1/namespaces/shop/apps" || !strings.Contains(a.Detail, "ci") || !strings.Contains(a.Detail, "Created") {
 		t.Errorf("write audit %+v", a)

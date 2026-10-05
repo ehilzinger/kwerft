@@ -251,12 +251,48 @@ func (a *api) kubeProxy(w http.ResponseWriter, r *http.Request) {
 		proxy.ServeHTTP(w, r)
 		return
 	}
-	rec := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
-	proxy.ServeHTTP(rec, r)
-	// Recorded even when kubectl has hung up by now.
-	a.audit(r.WithContext(context.WithoutCancel(r.Context())), p.user.Email, "kube.write", r.Method+" "+k.path,
-		p.token.Name+", "+http.StatusText(rec.status))
+	// Recorded as the status goes out, before kubectl sees any of the
+	// answer (as every other write is audited before it is answered), and
+	// even when kubectl has hung up by now.
+	ctx := context.WithoutCancel(r.Context())
+	aw := &auditOnStatus{ResponseWriter: w, audit: func(status int) {
+		a.audit(r.WithContext(ctx), p.user.Email, "kube.write", r.Method+" "+k.path, p.token.Name+", "+http.StatusText(status))
+	}}
+	proxy.ServeHTTP(aw, r)
+	aw.record(http.StatusOK) // the proxy wrote nothing at all
 }
+
+// auditOnStatus calls audit once, with the final status, before that status
+// reaches the client.
+type auditOnStatus struct {
+	http.ResponseWriter
+	audit func(status int)
+	done  bool
+}
+
+func (w *auditOnStatus) record(status int) {
+	if !w.done {
+		w.done = true
+		w.audit(status)
+	}
+}
+
+func (w *auditOnStatus) WriteHeader(code int) {
+	if code >= 200 { // 1xx (100 Continue, 103 Early Hints) are not the answer
+		w.record(code)
+	}
+	w.ResponseWriter.WriteHeader(code)
+}
+
+func (w *auditOnStatus) Write(b []byte) (int, error) {
+	if !w.done {
+		w.WriteHeader(http.StatusOK)
+	}
+	return w.ResponseWriter.Write(b)
+}
+
+// Unwrap lets the proxy flush watches through http.ResponseController.
+func (w *auditOnStatus) Unwrap() http.ResponseWriter { return w.ResponseWriter }
 
 // inItsCluster: a request a project-restricted token may make (allowedFor)
 // goes to the cluster its project lives in, so a namespace of the same name
