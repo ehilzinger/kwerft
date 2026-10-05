@@ -341,12 +341,25 @@ func clusterError(w http.ResponseWriter, err error) {
 	}
 }
 
+// indexMaxAge bounds how long the project index is trusted: refreshing
+// lists Projects from the clusters' caches, so it is cheap.
+const indexMaxAge = 5 * time.Second
+
 // forProject is the cluster a project lives in. A name no cluster has is
 // the local cluster's: requests then get the API server's own 404 there,
 // as before multi-cluster.
 func (s *clusterSet) forProject(ctx context.Context, project string) (*clusterConn, error) {
 	if !s.multi() {
 		return s.local, nil
+	}
+	// A project that appeared in another cluster since (kubectl) makes a
+	// conflict the cached index cannot show: refresh one older than
+	// indexMaxAge before trusting it.
+	s.mu.RLock()
+	stale := s.now().Sub(s.indexedAt) > indexMaxAge
+	s.mu.RUnlock()
+	if stale {
+		s.refreshIndex(ctx)
 	}
 	for attempt := 0; attempt < 2; attempt++ {
 		s.mu.RLock()
