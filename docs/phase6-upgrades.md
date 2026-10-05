@@ -1314,3 +1314,164 @@ history, Overview notification and dots).
   proxy (RBAC cannot see the field); the console's own API refuses them.
 - The dialog does not repeat the release notes; they are in the page's
   Release notes card.
+
+## As built (G1): agent clusters in the API, Upgrade all, node pool fixes
+
+Files: `internal/controllers/upgrade_console.go` (+ test),
+`upgrade_preflight.go` (`NodePools`, `FollowsConsole`),
+`agent_upgrades.go`, `internal/upgrades/releases.go`
+(`KubernetesTarget`), `cmd/kwerft/upgrades.go` (`newUpgradePreflight`;
+U5's `upgradePreflight` and its TODO are gone), `internal/server/
+api_upgrades.go` (+ `upgrades_multi_test.go`), `web/src/updates.ts`,
+`web/src/pages/SettingsUpdates.tsx`, `nodepool_controller.go` (+
+`nodepool_repair_test.go`), `install/install.sh` (+ bats). No type changes.
+
+### Agent clusters in the Updates API
+
+`controllers.ConsolePreflight` is the API's `server.UpgradePreflight`
+(`server.ErrUpgradeUnsupported` is `controllers.ErrUpgradeUnsupported`):
+
+- `Supports(cluster)`: `local`; an agent cluster while its Cluster is
+  `Connected` and its API knows the Upgrade kind (a `List` with limit 1
+  through the tunnel, Kwerft's identity there; the answer is cached for a
+  minute). Agents from before console upgrades are not supported: the page
+  says "Re-run the installer … on its server".
+- `Preflight` in an agent cluster: `UpgradeChecks{Reader: <that cluster,
+  Kwerft's identity>, Version: <the Cluster's agentVersion>, Cluster: name,
+  NodePools: <management>, FollowsConsole: true}` with the console's
+  install repository and registry check; a Kubernetes preflight gets that
+  cluster's API server (`/readyz/etcd`, `/metrics` through the registry's
+  RESTConfig). A Kwerft one starts with `AgentTarget`
+  (`upgrades.AgentTargetAllowed`: never past the console).
+- `FollowsConsole` (set for every agent's own Upgrade controller too, in
+  `newUpgradeChecks`): the channel is not checked (an agent has no update
+  settings, and an edge console takes its agents along), no `AgentSkew`,
+  and `DataRollback` passes (agents keep no database). Fixes an agent
+  refusing its console's edge release in its own preflight.
+- `KubernetesTarget(kwerft, kubernetes)`: the agent release's
+  `kubernetes.pinned` by the same rule as discovery
+  (`upgrades.KubernetesTarget`); manifests cached 6 h (failures 10 min).
+  `GET /api/v1/updates` asks it only for supported agents and never with
+  the policy Off, so agent rows now show their k3s target next to the
+  console's release.
+
+History, detail, events, log and cancel already took `?cluster=`; the
+multi-cluster test drives them against a second API server
+(`TestAgentClusterUpgrades`). The log is read with Kwerft's identity in that
+cluster.
+
+### Upgrade all
+
+`POST /api/v1/upgrades/all` (owners, same-origin) `{version,
+acceptDataRollback?, password}` → 201 `{upgrade?, preflight?, fleet,
+members: [upgrade], skipped: [{cluster, reason, warning?}]}`, audited
+`upgrade.start_all` (target: the fleet, detail: what goes in order and what
+was left out). In this order: the version (a Kwerft release, not older than
+the console; 400 `version`), a development console (409), the password
+(`confirmIdentity`), the plan (`upgrades.PlanFleet` over the Cluster
+objects as the user, minus clusters not connected here, not `Supports`, or
+with an unfinished Kwerft Upgrade). Nothing to do: 409 with `skipped`.
+When the console is behind, its Upgrade is created exactly as `POST
+/upgrades` does (one unfinished per component, synchronous preflight,
+blocking checks 409 and nothing is created anywhere) and names the fleet;
+otherwise the fleet is `upgrades.NewFleetID()`. Then
+`controllers.FleetMember(fleet, after, i, version, email)` in each agent
+cluster as the owner; a failed create is skipped with a warning.
+
+`GET /api/v1/updates` gains `upgradeAll {version, console, clusters,
+skipped}` for owners: the console's newest allowed Kwerft target (or its own
+release when only agents are behind), absent when no agent cluster would
+follow or the console's own Kwerft upgrade is under way. Upgrade views gain
+`fleet`, `held` (the hold is the message) and `agentClusters {finished,
+stopped, message}` (the console Upgrade's `AgentClusters` condition).
+
+UI: **Upgrade all to V…** next to Check now opens a dialog with the steps
+in order, the clusters left out and why, the console's live preflight (when
+it upgrades), the data-rollback acceptance and the password. The progress
+card of the console's upgrade gets an "Agent clusters" line and keeps
+polling it after the console's own stream ended; members show in their
+cluster's row (Queued while held).
+
+### Coordinator decisions
+
+- **A member that ends `Failed` or `RolledBack` stops the fleet**: the
+  held members get `kwerft.dev/cancel-requested: kwerft (the upgrade X of
+  edge-1 ended RolledBack)`; the console's `AgentClusters` condition gets
+  reason `Stopped` and "Stopped: edge-1 ended RolledBack." This replaces
+  U4's "a failed or rolled-back member does not stop the fleet". A member
+  whose own preflight failed counts as Failed. The stop is decided from the
+  members seen: should the failed cluster be disconnected while another
+  member's cluster comes back, that one would go on (not handled).
+- **Turning AutoPatch on takes the password** (or an authenticator code):
+  `PUT /api/v1/settings/updates` takes `password` when the policy becomes
+  AutoPatch or `kubernetesPatches` turns on (400 `password` otherwise);
+  turning either off, or changing the window or channel, does not. The
+  policy form shows the field only then. This closes U5's open point.
+
+### Node pools
+
+- **Nodes left behind.** The removal deletes the Node and then the server,
+  but k3s registers a Node again while the server is still shutting down
+  (Hetzner deletes asynchronously), and nobody looked at it after: the
+  server was gone from the pool's list. Now every pass deletes the Nodes
+  labelled `kwerft.dev/pool=<pool>` that are NotReady and whose server
+  Hetzner no longer lists, not even as `deleting` (UID precondition; Ready
+  Nodes and other pools' are never touched); also before a deleted pool
+  drops its finalizer. A server deleted by hand is cleaned up the same way.
+  `TestNodePoolDeletesTheNodeOfAReplacedServer` reproduces the re-registered
+  Node.
+- **Why the two workers were replaced at the same moment.** The
+  outdated-server path (spec vs. server type and location) replaces one at
+  a time and only once every node is Ready, and type/location changes made
+  while the workers were not Ready did nothing by themselves; nothing in it
+  replaces two healthy workers. The repair path did: a worker NotReady for
+  `RepairAfter` (15 min) was marked for removal, every such worker in the
+  same pass, with no limit. So both workers had stopped reporting (≈10 min
+  after the rc.2 → rc.3 installer run, cause not found in the code: the
+  rc.3 firewall change only widens the private network rule), and 15 min
+  later both were replaced at once. Fixed: `chooseRepairs` replaces one
+  broken server at a time (the one broken longest; the next once nothing is
+  being removed or joining) and none while most of the cluster's nodes are
+  NotReady ("Not replaced: 2 of the cluster's 3 nodes are NotReady, which
+  points at the cluster or its network. Remove the server by hand if it is
+  broken."). `TestNodePoolRepairsOneAtATime`.
+- **Server names.** `serverPrefix` no longer prefixes the cluster when the
+  pool's name already starts with `<cluster>-` (the console's pools):
+  `local-workers-abcde`, not `local-local-workers-abcde`. Existing servers
+  keep their names (found by labels). Placement groups keep
+  `kwerft-<cluster>-<pool>`.
+
+### Installer
+
+`temp_domain_notice`: an explicit `--domain <ip>.sslip.io` (or
+`KWERFT_DOMAIN`, `--config`) says "<domain> is a temporary hostname (fine
+for trying Kwerft, not for production)."; "No --domain given" only when the
+fallback chose it. Two bats tests.
+
+### Tests
+
+`internal/controllers`: `ConsolePreflight` against fake management and
+agent APIs (supported, disconnected, unknown, an agent without the Upgrade
+kind; the agent's version, nodes and installer node, NodePools from the
+management cluster, never past the console, an edge console's agents, the
+Kubernetes preflight with that cluster's API server, k3s targets and their
+cache), the fleet stopping on Failed and RolledBack, the node pool tests
+above. `internal/server`: the agent cluster through the second envtest API
+server (overview rows and targets, preflight, start, history, detail,
+events, log, an unsupported agent), Upgrade all (validation, password,
+admins, agents only, the console first, a blocked preflight creates
+nothing, nothing left to do, the views), the AutoPatch password.
+`web/src/updates.test.ts`: plan steps, the fleet line, the password rule.
+The page was checked in the browser against the homepage's mock API with
+a simulated Upgrade all (dialog, wrong password, progress until the agent
+finished, the AutoPatch password, phone width). Nothing ran on a server.
+
+### Open
+
+- The cause of the two workers going NotReady together on kwerft-dev-test
+  (plan.md › Open follow-ups).
+- Upgrade all offers only the console's newest allowed release; a multi-
+  minor jump that `AgentSkew` refuses needs the agents upgraded one by one
+  first.
+- A held member's hold can be removed by hand in its cluster (U4); an
+  owner can also cancel a single member from its row.
