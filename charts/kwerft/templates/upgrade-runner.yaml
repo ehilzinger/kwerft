@@ -1,0 +1,89 @@
+# The upgrade runner (docs/phase6-upgrades.md): `kwerft upgrade-runner`, a
+# Job only the Upgrade controller creates (internal/controllers/
+# upgrade_runner.go), from the running console image pinned by digest, on
+# the node labelled kwerft.dev/installer=true. It is root on that host:
+# host network, the host's / read-only, /var/lib/kwerft/upgrade read-write,
+# and systemd-run (chrooted, CAP_SYS_CHROOT), which runs install.sh, helm
+# and k3s as transient units. Its Kubernetes identity below may read what
+# verification looks at and write the Upgrade's status and log; the
+# host's helm uses the host's kubeconfig, as the installer does.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: kwerft-upgrade-runner
+  namespace: {{ .Release.Namespace }}
+  labels: {{- include "kwerft.labels" . | nindent 4 }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: kwerft-upgrade-runner
+  labels: {{- include "kwerft.labels" . | nindent 4 }}
+rules:
+  # Its Upgrade: progress, the backup references, and the database-restore
+  # request of a rollback (an annotation).
+  - apiGroups: [kwerft.dev]
+    resources: [upgrades]
+    verbs: [get, list, watch, patch]
+  - apiGroups: [kwerft.dev]
+    resources: [upgrades/status]
+    verbs: [get, update, patch]
+  # Verification: App replicas before and after, the console's hostname.
+  - apiGroups: [kwerft.dev]
+    resources: [apps, consolesettings]
+    verbs: [get, list]
+  - apiGroups: [apiextensions.k8s.io]
+    resources: [customresourcedefinitions]
+    verbs: [get, list]
+  - apiGroups: [apps]
+    resources: [deployments, daemonsets]
+    verbs: [get]
+  # Let's Encrypt staging (e2e) is not a trusted CA.
+  - apiGroups: [cert-manager.io]
+    resources: [clusterissuers]
+    verbs: [get]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: kwerft-upgrade-runner
+  labels: {{- include "kwerft.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: kwerft-upgrade-runner
+subjects:
+  - kind: ServiceAccount
+    name: kwerft-upgrade-runner
+    namespace: {{ .Release.Namespace }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: kwerft-upgrade-runner
+  namespace: {{ .Release.Namespace }}
+  labels: {{- include "kwerft.labels" . | nindent 4 }}
+rules:
+  # The console's Service (GET /api/v1/version) and the log ConfigMap
+  # <upgrade>-log.
+  - apiGroups: [""]
+    resources: [services]
+    verbs: [get]
+  - apiGroups: [""]
+    resources: [configmaps]
+    verbs: [get, create, update]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: kwerft-upgrade-runner
+  namespace: {{ .Release.Namespace }}
+  labels: {{- include "kwerft.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: kwerft-upgrade-runner
+subjects:
+  - kind: ServiceAccount
+    name: kwerft-upgrade-runner
+    namespace: {{ .Release.Namespace }}

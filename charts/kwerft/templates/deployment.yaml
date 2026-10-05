@@ -62,9 +62,18 @@ spec:
             - --build-apparmor-profile={{ .appArmorProfile }}
             {{- end }}
             {{- end }}
+            {{- with .Values.upgrades.installBaseURL }}
+            - --install-base-url={{ . }}
+            {{- end }}
+            {{- if .Values.e2e.faults }}
+            - --upgrade-faults
+            {{- end }}
           env:
             - name: POD_NAMESPACE
               valueFrom: { fieldRef: { fieldPath: metadata.namespace } }
+            # Its own pod: the image the upgrade runner is pinned to.
+            - name: POD_NAME
+              valueFrom: { fieldRef: { fieldPath: metadata.name } }
             {{- if not $agent }}
             - name: KWERFT_DATA_KEY
               valueFrom: { secretKeyRef: { name: {{ include "kwerft.fullname" . }}-data-key, key: key } }

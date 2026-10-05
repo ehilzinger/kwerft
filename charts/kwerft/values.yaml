@@ -173,3 +173,15 @@ hcloud:
   # Hetzner Load Balancer in front of the ingress connects from. Empty: no
   # Load Balancer possible (no private network, or a dedicated server).
   proxyNetwork: ""
+
+# Upgrades from the console (docs/phase6-upgrades.md). Release discovery and
+# the upgrade runner read the public install repository; an empty
+# installBaseURL means https://raw.githubusercontent.com/ehilzinger/kwerft-install/main.
+upgrades:
+  installBaseURL: ""
+
+# End-to-end tests only (hack/e2e): with faults, an Upgrade's annotation
+# kwerft.dev/e2e-fault (install or verify) makes its runner fail on purpose,
+# to test the rollback. Never set it on a real install.
+e2e:
+  faults: false
