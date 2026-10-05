@@ -14,6 +14,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	kwerftv1 "github.com/ehilzinger/kwerft/api/v1alpha1"
+	"github.com/ehilzinger/kwerft/install"
 	"github.com/ehilzinger/kwerft/internal/auth"
 	"github.com/ehilzinger/kwerft/internal/clusters"
 	"github.com/ehilzinger/kwerft/internal/controllers"
@@ -35,8 +36,9 @@ import (
 //     (an Origin header is refused), the token in Authorization; failures
 //     are rate-limited per client address and audited.
 
-// installScriptURL is where the install command fetches the installer.
-const installScriptURL = "https://raw.githubusercontent.com/ehilzinger/kwerft-install/main/install.sh"
+// latestInstallerURL is the latest stable installer: the install command of
+// development builds, which have no published copy of their own.
+const latestInstallerURL = "https://raw.githubusercontent.com/ehilzinger/kwerft-install/main/install.sh"
 
 type clustersAPI struct {
 	*api
@@ -402,14 +404,22 @@ func (c *clustersAPI) rotate(w http.ResponseWriter, r *http.Request) {
 }
 
 // installCommand installs Kwerft in agent mode on a cluster's first server
-// (or updates the token on an existing one). Release consoles pin their
-// own version, so the agent matches the console.
+// (or updates the token on an existing one).
 func (c *clustersAPI) installCommand(token string) string {
-	args := "--agent --console https://" + c.consoleDomain() + " --cluster-token " + token
-	if releaseVersion.MatchString(version.Version) {
-		args += " --version " + version.Version
-	}
-	return "curl -fsSL " + installScriptURL + " | sudo bash -s -- " + args
+	return agentInstallCommand(c.consoleDomain(), token, version.Version)
 }
 
-var releaseVersion = regexp.MustCompile(`^v?[0-9]+\.[0-9]+\.[0-9]+(-rc\.[0-9]+)?$`)
+// agentInstallCommand fetches the installer of the console's own release,
+// release candidates included (the latest stable one may predate --agent),
+// and pins that version, so the agent matches the console. Development
+// builds get the latest stable installer and its default version.
+func agentInstallCommand(consoleDomain, token, ver string) string {
+	url := install.ReleaseURL(ver)
+	args := "--agent --console https://" + consoleDomain + " --cluster-token " + token
+	if url == "" {
+		url = latestInstallerURL
+	} else {
+		args += " --version " + strings.TrimPrefix(ver, "v")
+	}
+	return "curl -fsSL " + url + " | sudo bash -s -- " + args
+}
