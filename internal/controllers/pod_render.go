@@ -20,6 +20,12 @@ import (
 // other's node, since the disk is ReadWriteOnce.
 const LabelVolumePrefix = "volume.kwerft.dev/"
 
+// defaultSecretMode is AppVolume.mode's default (0444). Secret files belong
+// to root (Kwerft sets no fsGroup), so a container running as another user
+// can only read them world-readable; ssh accepts such a key, since it only
+// rejects loose permissions on keys its own user owns.
+const defaultSecretMode int32 = 0o444
+
 // podShape is what Apps and Tasks have in common: one container from an
 // image, with command, env, resources and volumes. App and Task renders fill
 // it from their spec and add what is theirs (ports and probes; restart policy
@@ -91,7 +97,7 @@ func (p *podShape) containerConfig() *corev1ac.ContainerApplyConfiguration {
 	}
 	for i, v := range p.volumes {
 		m := corev1ac.VolumeMount().WithName(volumeName(i)).WithMountPath(v.Path)
-		if v.ReadOnly {
+		if v.ReadOnly || v.Secret != "" {
 			m.WithReadOnly(true)
 		}
 		c.WithVolumeMounts(m)
@@ -101,7 +107,7 @@ func (p *podShape) containerConfig() *corev1ac.ContainerApplyConfiguration {
 
 // template is the pod template. Disks of its own (AppVolume.size) are only
 // mounted here; the StatefulSet's claim templates provide them. Shared
-// Volumes become claim references.
+// Volumes become claim references, Secrets secret volumes.
 func (p *podShape) template() *corev1ac.PodTemplateSpecApplyConfiguration {
 	labels := maps.Clone(p.labels)
 	spec := corev1ac.PodSpec().
@@ -118,6 +124,18 @@ func (p *podShape) template() *corev1ac.PodTemplateSpecApplyConfiguration {
 	}
 	var colocate []*corev1ac.WeightedPodAffinityTermApplyConfiguration
 	for i, v := range p.volumes {
+		if v.Secret != "" {
+			mode := defaultSecretMode
+			if v.Mode != nil {
+				mode = *v.Mode
+			}
+			// Not optional: without the Secret the pod waits in
+			// ContainerCreating rather than starting without its files.
+			spec.WithVolumes(corev1ac.Volume().
+				WithName(volumeName(i)).
+				WithSecret(corev1ac.SecretVolumeSource().WithSecretName(v.Secret).WithDefaultMode(mode)))
+			continue
+		}
 		if v.Volume == "" {
 			continue
 		}

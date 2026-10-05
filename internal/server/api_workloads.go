@@ -453,7 +453,7 @@ func appPhase(app *kwerftv1.App) (phase, reason, message string) {
 func appSummary(app *kwerftv1.App) appSummaryJSON {
 	out := appSummaryJSON{
 		Name: app.Name, Project: app.Namespace, Image: app.Status.Image, Ready: app.Status.ReadyReplicas,
-		Desired: 1, Stateful: len(app.Spec.Volumes) > 0, URLs: app.Status.URLs, Revision: app.Status.Revision,
+		Desired: 1, Stateful: slices.ContainsFunc(app.Spec.Volumes, func(v kwerftv1.AppVolume) bool { return v.OwnDisk() }), URLs: app.Status.URLs, Revision: app.Status.Revision,
 		Updated: app.CreationTimestamp.UTC(),
 	}
 	if app.Spec.Replicas != nil {
@@ -572,6 +572,26 @@ func validateSpec(w http.ResponseWriter, spec *kwerftv1.AppSpec) bool {
 			}
 			hosts[port.Public] = port.Container
 		}
+	}
+	return validateVolumes(w, "spec", spec.Volumes)
+}
+
+// validateVolumes checks the mounts of an App or Task: Secret names, and one
+// mount per path (Kubernetes would reject the pod template, and the
+// reconciler retry it forever). The CRD checks which form each mount has.
+func validateVolumes(w http.ResponseWriter, prefix string, vols []kwerftv1.AppVolume) bool {
+	paths := map[string]bool{}
+	for i, v := range vols {
+		field := fmt.Sprintf("%s.volumes[%d]", prefix, i)
+		if v.Secret != "" && len(validation.IsDNS1123Subdomain(v.Secret)) > 0 {
+			invalid(w, field+".secret", fmt.Sprintf("%q is not a valid Secret name. Use lowercase letters, digits, - and ., like ssh-key.", v.Secret))
+			return false
+		}
+		if paths[v.Path] {
+			invalid(w, field+".path", fmt.Sprintf("%s is mounted twice.", v.Path))
+			return false
+		}
+		paths[v.Path] = true
 	}
 	return true
 }

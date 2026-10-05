@@ -82,10 +82,11 @@ func (a *appRender) drainSeconds() int32 {
 }
 
 // stateful apps (any disk of their own) run as a StatefulSet so each replica
-// keeps its disk. Apps that only mount shared Volumes run as a Deployment.
+// keeps its disk. Apps that only mount shared Volumes and Secrets run as a
+// Deployment.
 func (a *appRender) stateful() bool {
 	for _, v := range a.app.Spec.Volumes {
-		if v.Volume == "" {
+		if v.OwnDisk() {
 			return true
 		}
 	}
@@ -148,8 +149,8 @@ func (a *appRender) statefulSet() *appsv1ac.StatefulSetApplyConfiguration {
 		WithSelector(metav1ac.LabelSelector().WithMatchLabels(a.selector)).
 		WithTemplate(a.podTemplate())
 	for i, v := range a.app.Spec.Volumes {
-		if v.Volume != "" {
-			continue // shared: a claim reference in the pod template
+		if !v.OwnDisk() {
+			continue // shared or a Secret: in the pod template
 		}
 		spec.WithVolumeClaimTemplates(corev1ac.PersistentVolumeClaim(volumeName(i), "").
 			WithSpec(corev1ac.PersistentVolumeClaimSpec().

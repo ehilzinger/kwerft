@@ -37,6 +37,9 @@ type AppReconciler struct {
 	// Registry tags the images of Git apps' revisions so the registry's
 	// retention keeps them; nil leaves the registry alone.
 	Registry *RegistryKeeper
+	// APIReader looks up the Secrets an App mounts while its replicas are
+	// not ready, to say which one is missing; nil skips that.
+	APIReader client.Reader
 }
 
 func (r *AppReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
@@ -166,16 +169,19 @@ func (r *AppReconciler) reconcile(ctx context.Context, app *kwerftv1.App) (*read
 
 	// Rollout progress from the workload we just applied.
 	var readyReplicas, updated int32
+	var podVolumes []corev1.Volume
 	if rd.stateful() {
 		if err := r.Get(ctx, client.ObjectKeyFromObject(sts), sts); err != nil {
 			return nil, err
 		}
 		readyReplicas, updated = sts.Status.ReadyReplicas, sts.Status.UpdatedReplicas
+		podVolumes = sts.Spec.Template.Spec.Volumes
 	} else {
 		if err := r.Get(ctx, client.ObjectKeyFromObject(deploy), deploy); err != nil {
 			return nil, err
 		}
 		readyReplicas, updated = deploy.Status.ReadyReplicas, deploy.Status.UpdatedReplicas
+		podVolumes = deploy.Spec.Template.Spec.Volumes
 	}
 	app.Status.ReadyReplicas = readyReplicas
 
@@ -186,7 +192,13 @@ func (r *AppReconciler) reconcile(ctx context.Context, app *kwerftv1.App) (*read
 	case readyReplicas >= want && updated >= want:
 		return &readiness{metav1.ConditionTrue, "Available", fmt.Sprintf("%d/%d replicas ready", readyReplicas, want)}, nil
 	default:
-		return &readiness{metav1.ConditionFalse, "Progressing", fmt.Sprintf("%d/%d replicas ready", readyReplicas, want)}, nil
+		// A missing Secret keeps the new pods in ContainerCreating, as
+		// Kubernetes does; the rollout waits, and the message says why.
+		msg := fmt.Sprintf("%d/%d replicas ready", readyReplicas, want)
+		if missing := missingSecrets(ctx, r.APIReader, app.Namespace, podVolumes); len(missing) > 0 {
+			msg += ": " + secretsMissing(missing)
+		}
+		return &readiness{metav1.ConditionFalse, "Progressing", msg}, nil
 	}
 }
 

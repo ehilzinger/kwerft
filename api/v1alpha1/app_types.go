@@ -90,14 +90,18 @@ type AppPort struct {
 	Protocol corev1.Protocol `json:"protocol,omitempty"`
 }
 
-// AppVolume mounts persistent storage at Path, in one of two forms:
+// AppVolume mounts storage at Path, in one of three forms:
 //   - Size (and Class): every replica gets its own disk; the App runs as a
 //     StatefulSet so each replica keeps it.
 //   - Volume: the shared Volume of that name in the same project, which
 //     other Apps and Tasks can mount too.
+//   - Secret: the Secret of that name in the same namespace, read-only, one
+//     file per key (an SSH key, a certificate). Until the Secret exists the
+//     pods wait in ContainerCreating, as Kubernetes does.
 //
-// +kubebuilder:validation:XValidation:rule="has(self.size) != has(self.volume)",message="set exactly one of size (a disk per replica) or volume (a shared Volume)"
+// +kubebuilder:validation:XValidation:rule="(has(self.size) ? 1 : 0) + (has(self.volume) ? 1 : 0) + (has(self.secret) ? 1 : 0) == 1",message="set exactly one of size (a disk per replica), volume (a shared Volume) or secret (a Secret as files)"
 // +kubebuilder:validation:XValidation:rule="!has(self.class) || has(self.size)",message="class applies to size; a shared Volume has its own class"
+// +kubebuilder:validation:XValidation:rule="!has(self.mode) || has(self.secret)",message="mode applies to secret (the permission of its files)"
 type AppVolume struct {
 	// +kubebuilder:validation:MinLength=1
 	Path string `json:"path"`
@@ -118,10 +122,31 @@ type AppVolume struct {
 	// +optional
 	Volume string `json:"volume,omitempty"`
 
-	// ReadOnly mounts the storage read-only.
+	// Secret names a Secret in the same namespace whose keys become files
+	// under Path. It is always mounted read-only.
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=253
+	// +optional
+	Secret string `json:"secret,omitempty"`
+
+	// Mode is the permission of the Secret's files, as a number: 256 is
+	// 0400. Empty means 0444: the files belong to root, so a container that
+	// runs as another user (uid 1000) needs them world-readable, and ssh
+	// accepts such a key because it only checks keys its own user owns. A
+	// container that runs as root and hands the file to ssh needs 0400.
+	// +kubebuilder:validation:Minimum=0
+	// +kubebuilder:validation:Maximum=511
+	// +optional
+	Mode *int32 `json:"mode,omitempty"`
+
+	// ReadOnly mounts the storage read-only. Secrets always are.
 	// +optional
 	ReadOnly bool `json:"readOnly,omitempty"`
 }
+
+// OwnDisk tells whether the mount is a disk per replica (Size), rather than
+// a shared Volume or a Secret.
+func (v *AppVolume) OwnDisk() bool { return v.Volume == "" && v.Secret == "" }
 
 // HealthCheck is used for readiness and liveness.
 type HealthCheck struct {

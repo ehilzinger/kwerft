@@ -256,6 +256,10 @@ func TestTaskValidationNamesTheField(t *testing.T) {
 			"source": map[string]any{"image": map[string]any{"ref": "busybox"}}, "envOverrides": []map[string]string{{"name": "1BAD", "value": "x"}}}}, "spec.envOverrides[0].name"},
 		{"missing volume", map[string]any{"spec": map[string]any{
 			"source": map[string]any{"image": map[string]any{"ref": "busybox"}}, "volumes": []map[string]any{{"path": "/data", "volume": "nope"}}}}, "spec.volumes[0].volume"},
+		{"bad secret name", map[string]any{"spec": map[string]any{
+			"source": map[string]any{"image": map[string]any{"ref": "busybox"}}, "volumes": []map[string]any{{"path": "/keys", "secret": "SSH_Key"}}}}, "spec.volumes[0].secret"},
+		{"path mounted twice", map[string]any{"spec": map[string]any{
+			"source": map[string]any{"image": map[string]any{"ref": "busybox"}}, "volumes": []map[string]any{{"path": "/keys", "secret": "a"}, {"path": "/keys", "secret": "b"}}}}, "spec.volumes[1].path"},
 		{"missing restart app", map[string]any{"spec": map[string]any{
 			"source": map[string]any{"image": map[string]any{"ref": "busybox"}}, "onSuccess": map[string]any{"restart": []string{"nope"}}}}, "spec.onSuccess.restart[0]"},
 		{"too many retries", map[string]any{"spec": map[string]any{
@@ -272,6 +276,16 @@ func TestTaskValidationNamesTheField(t *testing.T) {
 	var e apiError
 	if code := c.dev.do(t, "POST", "/api/v1/projects/task-checks/tasks", map[string]any{"spec": map[string]any{}}, &e); code != http.StatusUnprocessableEntity {
 		t.Errorf("neither source nor fromApp: %d %+v, want 422", code, e)
+	}
+	// A Secret need not exist yet: the pod waits for it.
+	withSecret := map[string]any{"spec": map[string]any{
+		"source": map[string]any{"image": map[string]any{"ref": "busybox"}}, "volumes": []map[string]any{{"path": "/keys", "secret": "ssh-key", "mode": 0o400}}}}
+	var task kwerftv1.Task
+	if code := c.dev.do(t, "POST", "/api/v1/projects/task-checks/tasks", withSecret, &task); code != http.StatusCreated {
+		t.Fatalf("task with a secret: %d", code)
+	}
+	if v := task.Spec.Volumes; len(v) != 1 || v[0].Secret != "ssh-key" || v[0].Mode == nil || *v[0].Mode != 0o400 {
+		t.Errorf("volumes = %+v", v)
 	}
 }
 

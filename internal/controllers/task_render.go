@@ -69,7 +69,7 @@ func resolveTask(task *kwerftv1.Task, app *kwerftv1.App, appImage *resolvedImage
 		}
 		run.env = slices.Clone(app.Spec.Env)
 		for _, v := range app.Spec.Volumes {
-			if v.Volume != "" { // a replica's own disk cannot be shared
+			if !v.OwnDisk() { // a replica's own disk cannot be shared
 				run.volumes = append(run.volumes, v)
 			}
 		}

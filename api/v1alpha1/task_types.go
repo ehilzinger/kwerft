@@ -74,9 +74,10 @@ type TaskSpec struct {
 	// +optional
 	Egress string `json:"egress,omitempty"`
 
-	// Volumes mounts shared Volumes. A Task has no disk of its own.
+	// Volumes mounts shared Volumes and Secrets. A Task has no disk of its
+	// own.
 	// +kubebuilder:validation:MaxItems=16
-	// +kubebuilder:validation:XValidation:rule="self.all(v, has(v.volume))",message="a Task can only mount shared Volumes (volume), not a disk of its own (size)"
+	// +kubebuilder:validation:XValidation:rule="self.all(v, !has(v.size))",message="a Task can only mount shared Volumes (volume) and Secrets (secret), not a disk of its own (size)"
 	// +optional
 	Volumes []AppVolume `json:"volumes,omitempty"`
 

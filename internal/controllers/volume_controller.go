@@ -241,6 +241,38 @@ func missingVolumes(ctx context.Context, c client.Client, namespace string, vols
 	return missing, nil
 }
 
+// missingSecrets returns the Secrets that pods with these volumes mount and
+// that do not exist, for a status message: such pods wait in
+// ContainerCreating. It reads metadata only, from the API server (Kwerft does
+// not cache Secrets); any other error counts as present, since this only
+// words a message. A nil reader checks nothing.
+func missingSecrets(ctx context.Context, r client.Reader, namespace string, vols []corev1.Volume) []string {
+	if r == nil {
+		return nil
+	}
+	var missing []string
+	for _, v := range vols {
+		s := v.Secret
+		if s == nil || (s.Optional != nil && *s.Optional) || slices.Contains(missing, s.SecretName) {
+			continue
+		}
+		obj := &metav1.PartialObjectMetadata{}
+		obj.SetGroupVersionKind(corev1.SchemeGroupVersion.WithKind("Secret"))
+		if err := r.Get(ctx, client.ObjectKey{Namespace: namespace, Name: s.SecretName}, obj); apierrors.IsNotFound(err) {
+			missing = append(missing, s.SecretName)
+		}
+	}
+	return missing
+}
+
+// secretsMissing words missingSecrets for a status message.
+func secretsMissing(missing []string) string {
+	if len(missing) == 1 {
+		return fmt.Sprintf("Secret %q does not exist", missing[0])
+	}
+	return fmt.Sprintf("Secrets %s do not exist", strings.Join(missing, ", "))
+}
+
 func volumeClaimName(volume string) string { return volume }
 
 // projectOf returns the project a namespace belongs to, or a terminal error.

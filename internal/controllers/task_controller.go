@@ -299,6 +299,10 @@ func (r *TaskReconciler) observe(ctx context.Context, task *kwerftv1.Task, job *
 	if waiting != "" {
 		msg = waiting
 	}
+	// The pod waits in ContainerCreating for a Secret it mounts.
+	if missing := missingSecrets(ctx, r.APIReader, task.Namespace, job.Spec.Template.Spec.Volumes); len(missing) > 0 {
+		msg = "Waiting for the pod to start: " + secretsMissing(missing)
+	}
 	setReady(&st.Conditions, task.Generation, metav1.ConditionFalse, "Pending", msg)
 	return nil
 }

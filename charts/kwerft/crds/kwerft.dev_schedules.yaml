@@ -638,15 +638,19 @@ spec:
                     minimum: 0
                     type: integer
                   volumes:
-                    description: Volumes mounts shared Volumes. A Task has no disk
-                      of its own.
+                    description: |-
+                      Volumes mounts shared Volumes and Secrets. A Task has no disk of its
+                      own.
                     items:
                       description: |-
-                        AppVolume mounts persistent storage at Path, in one of two forms:
+                        AppVolume mounts storage at Path, in one of three forms:
                           - Size (and Class): every replica gets its own disk; the App runs as a
                             StatefulSet so each replica keeps it.
                           - Volume: the shared Volume of that name in the same project, which
                             other Apps and Tasks can mount too.
+                          - Secret: the Secret of that name in the same namespace, read-only, one
+                            file per key (an SSH key, a certificate). Until the Secret exists the
+                            pods wait in ContainerCreating, as Kubernetes does.
                       properties:
                         class:
                           description: |-
@@ -656,12 +660,31 @@ spec:
                           - local-nvme
                           - hcloud-volume
                           type: string
+                        mode:
+                          description: |-
+                            Mode is the permission of the Secret's files, as a number: 256 is
+                            0400. Empty means 0444: the files belong to root, so a container that
+                            runs as another user (uid 1000) needs them world-readable, and ssh
+                            accepts such a key because it only checks keys its own user owns. A
+                            container that runs as root and hands the file to ssh needs 0400.
+                          format: int32
+                          maximum: 511
+                          minimum: 0
+                          type: integer
                         path:
                           minLength: 1
                           type: string
                         readOnly:
-                          description: ReadOnly mounts the storage read-only.
+                          description: ReadOnly mounts the storage read-only. Secrets
+                            always are.
                           type: boolean
+                        secret:
+                          description: |-
+                            Secret names a Secret in the same namespace whose keys become files
+                            under Path. It is always mounted read-only.
+                          maxLength: 253
+                          minLength: 1
+                          type: string
                         size:
                           anyOf:
                           - type: integer
@@ -678,18 +701,21 @@ spec:
                       - path
                       type: object
                       x-kubernetes-validations:
-                      - message: set exactly one of size (a disk per replica) or volume
-                          (a shared Volume)
-                        rule: has(self.size) != has(self.volume)
+                      - message: set exactly one of size (a disk per replica), volume
+                          (a shared Volume) or secret (a Secret as files)
+                        rule: '(has(self.size) ? 1 : 0) + (has(self.volume) ? 1 :
+                          0) + (has(self.secret) ? 1 : 0) == 1'
                       - message: class applies to size; a shared Volume has its own
                           class
                         rule: '!has(self.class) || has(self.size)'
+                      - message: mode applies to secret (the permission of its files)
+                        rule: '!has(self.mode) || has(self.secret)'
                     maxItems: 16
                     type: array
                     x-kubernetes-validations:
-                    - message: a Task can only mount shared Volumes (volume), not
-                        a disk of its own (size)
-                      rule: self.all(v, has(v.volume))
+                    - message: a Task can only mount shared Volumes (volume) and Secrets
+                        (secret), not a disk of its own (size)
+                      rule: self.all(v, !has(v.size))
                 type: object
                 x-kubernetes-validations:
                 - message: set source or fromApp

@@ -5,6 +5,7 @@ import { branchProblem, gitApi, normalizeRepository, repoPathProblem, repository
 import { GitFields, gitSourceOf } from "./Deploy";
 import { Icon } from "../components/Icon";
 import { VolumeMounts, checkMounts, mountsOf, volumesOf, type Mount } from "../components/VolumeMounts";
+import { ownDisks as disksOf } from "../mounts";
 import { HOST_RE, sizes, workloads, type App, type AppSpec, type EnvVar, type Size } from "../workloads";
 
 type HC = "none" | "http" | "tcp";
@@ -29,7 +30,7 @@ type Form = {
   hcPort: string;
   drain: string;
   egress: "none" | "https" | "all";
-  mounts: Mount[]; // shared Volumes; disks per replica are kept as they are
+  mounts: Mount[]; // shared Volumes and Secrets; disks per replica are kept as they are
 };
 
 function formOf(spec: AppSpec): Form {
@@ -80,7 +81,7 @@ function specOf(f: Form, base: AppSpec): AppSpec {
   return spec;
 }
 
-const ownDisks = (spec: AppSpec) => (spec.volumes ?? []).filter((v) => !v.volume);
+const ownDisks = (spec: AppSpec) => disksOf(spec.volumes);
 
 /** Client-side checks, reported with the same field paths the server uses. */
 function check(f: Form, isImage: boolean): { field: string; message: string } | undefined {
@@ -329,10 +330,10 @@ export function AppSettings({ app, canEdit, onSaved }: { app: App; canEdit: bool
               </div>
             )}
             <div className="field full">
-              <label>Shared volumes</label>
+              <label>Shared volumes and secrets</label>
               <VolumeMounts project={base.metadata.namespace} mounts={f.mounts} onChange={(v) => set("mounts", v)} idPrefix="s-vol"
                 errorAt={mountErr ? [Number(mountErr[1]), error!.message] : undefined} />
-              <span className="hint">Volumes of the project that other apps and jobs mount too; the pods run on the volume's node.</span>
+              <span className="hint">Volumes of the project that other apps and jobs mount too; the pods run on the volume's node. A secret is mounted read-only, one file per key; until it exists, new replicas wait.</span>
             </div>
           </div>
         </div>

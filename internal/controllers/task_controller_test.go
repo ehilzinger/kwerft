@@ -338,6 +338,47 @@ func TestTaskOnSuccessRestartsAppsOnce(t *testing.T) {
 	}
 }
 
+func TestTaskMountsSecretsAsFiles(t *testing.T) {
+	requireEnvtest(t)
+	projectNamespace(t, "task-keys")
+	createApp(t, "task-keys", "site", kwerftv1.AppSpec{
+		Source: kwerftv1.AppSource{Image: &kwerftv1.ImageSource{Ref: "ghcr.io/acme/site:1.0"}},
+		Volumes: []kwerftv1.AppVolume{
+			{Path: "/home/app/.ssh", Secret: "deploy-key"},
+			{Path: "/cache", Size: resource.MustParse("1Gi")}, // not for the Task
+		},
+	})
+	spec := kwerftv1.TaskSpec{FromApp: "site", Volumes: []kwerftv1.AppVolume{{Path: "/etc/tls", Secret: "tls", Mode: ptr.To[int32](0o400)}}}
+	task := createTask(t, "task-keys", "publish", spec)
+	job := waitForJob(t, "task-keys", "publish")
+
+	pod := job.Spec.Template
+	mounts := pod.Spec.Containers[0].VolumeMounts
+	if len(mounts) != 2 || len(pod.Spec.Volumes) != 2 {
+		t.Fatalf("volumes = %+v, mounts = %+v, want the App's Secret and the Task's", pod.Spec.Volumes, mounts)
+	}
+	for i, want := range []struct {
+		path, secret string
+		mode         int32
+	}{{"/home/app/.ssh", "deploy-key", 0o444}, {"/etc/tls", "tls", 0o400}} {
+		m, v := mounts[i], pod.Spec.Volumes[i]
+		if m.MountPath != want.path || !m.ReadOnly || m.Name != v.Name {
+			t.Errorf("mount %d = %+v, want %s read-only", i, m, want.path)
+		}
+		if v.Secret == nil || v.Secret.SecretName != want.secret || v.Secret.DefaultMode == nil || *v.Secret.DefaultMode != want.mode {
+			t.Errorf("volume %d = %+v, want Secret %s with mode %o", i, v, want.secret, want.mode)
+		}
+	}
+	// Neither Secret exists: the pod would wait in ContainerCreating.
+	waitForTask(t, task, func(task *kwerftv1.Task) error {
+		c := meta.FindStatusCondition(task.Status.Conditions, ConditionReady)
+		if task.Status.Phase != kwerftv1.TaskPending || c == nil || !strings.Contains(c.Message, "Secrets deploy-key, tls do not exist") {
+			return fmt.Errorf("phase %q, condition %+v", task.Status.Phase, c)
+		}
+		return nil
+	})
+}
+
 func TestTaskFromAppInheritsAndOverrides(t *testing.T) {
 	requireEnvtest(t)
 	ctx := context.Background()
