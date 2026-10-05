@@ -173,6 +173,10 @@ func startTestCluster() (_ *testCluster, _ func(), err error) {
 	if err := (&controllers.ScheduleReconciler{Client: mgr.GetClient()}).SetupWithManager(mgr); err != nil {
 		return fail("schedule reconciler", err)
 	}
+	// Secret sets (secrets_test.go): the Secrets and Roles the API writes through.
+	if err := (&controllers.SecretSetReconciler{Client: mgr.GetClient(), APIReader: mgr.GetAPIReader()}).SetupWithManager(mgr); err != nil {
+		return fail("secret set reconciler", err)
+	}
 	// Git connections (git_test.go): their Secrets and RBAC live in the
 	// builds namespace; the reconciler talks to each test's fake Git host.
 	if err := admin.Create(ctx, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: builds.Namespace}}); err != nil {

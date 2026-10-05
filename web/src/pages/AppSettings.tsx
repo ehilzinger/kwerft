@@ -1,12 +1,16 @@
 import { useState, type FormEvent, type InputHTMLAttributes } from "react";
+import { Link } from "@tanstack/react-router";
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { ApiError } from "../api";
+import { ApiError, api } from "../api";
 import { branchProblem, gitApi, normalizeRepository, repoPathProblem, repositoryProblem } from "../builds";
 import { GitFields, gitSourceOf } from "./Deploy";
 import { Icon } from "../components/Icon";
 import { VolumeMounts, checkMounts, mountsOf, volumesOf, type Mount } from "../components/VolumeMounts";
 import { ownDisks as disksOf } from "../mounts";
-import { HOST_RE, sizes, workloads, type App, type AppSpec, type EnvVar, type Size } from "../workloads";
+import { HOST_RE, sizes, workloads, type App, type AppSpec, type Size } from "../workloads";
+import { appEnvSet, envPlan, envRowsOf, secretKeys, secretsApi, sourceOf, withSource, type EnvRow } from "../secrets";
+import { RevealSecret } from "../components/RevealSecret";
+import "../styles/secrets.css";
 
 type HC = "none" | "http" | "tcp";
 type Form = {
@@ -23,7 +27,9 @@ type Form = {
   autoDeploy: boolean;
   replicas: string;
   size: Size;
-  env: { name: string; value: string; from?: EnvVar["valueFrom"] }[];
+  // Plain values, keys of the App's own secret set <app>-env (written on
+  // save, never read back) and keys of the project's shared sets.
+  env: EnvRow[];
   ports: { container: string; public: string; protocol: "TCP" | "UDP" }[];
   hc: HC;
   hcPath: string;
@@ -33,7 +39,7 @@ type Form = {
   mounts: Mount[]; // shared Volumes and Secrets; disks per replica are kept as they are
 };
 
-function formOf(spec: AppSpec): Form {
+function formOf(spec: AppSpec, app: string): Form {
   const hc = spec.healthCheck;
   return {
     image: spec.source.image?.ref ?? "",
@@ -48,7 +54,7 @@ function formOf(spec: AppSpec): Form {
     autoDeploy: spec.source.git?.autoDeploy ?? true,
     replicas: String(spec.replicas ?? 1),
     size: spec.size ?? "small",
-    env: (spec.env ?? []).map((e) => ({ name: e.name, value: e.value ?? "", from: e.valueFrom })),
+    env: envRowsOf(spec.env, app),
     ports: (spec.ports ?? []).map((p) => ({ container: String(p.container), public: p.public ?? "", protocol: p.protocol ?? "TCP" })),
     hc: hc ? (hc.http ? "http" : "tcp") : "none",
     hcPath: hc?.http ?? "/healthz",
@@ -61,7 +67,7 @@ function formOf(spec: AppSpec): Form {
 
 // specOf applies the form to the current spec, keeping every field the form
 // does not show (command, volumes, allowFrom, custom resources, ...).
-function specOf(f: Form, base: AppSpec): AppSpec {
+function specOf(f: Form, base: AppSpec, app: string): AppSpec {
   const spec: AppSpec = structuredClone(base);
   if (spec.source.image) spec.source.image = { ref: f.image.trim(), ...(f.pullSecret.trim() ? { pullSecret: f.pullSecret.trim() } : {}) };
   if (spec.source.git) {
@@ -70,7 +76,7 @@ function specOf(f: Form, base: AppSpec): AppSpec {
   }
   spec.replicas = Number(f.replicas);
   spec.size = f.size;
-  spec.env = f.env.filter((e) => e.name.trim() || e.value).map((e) => (e.from ? { name: e.name.trim(), valueFrom: e.from } : { name: e.name.trim(), value: e.value }));
+  spec.env = envPlan(f.env, app, base.env).env;
   spec.ports = f.ports.map((p) => ({ container: Number(p.container), protocol: p.protocol, ...(p.public.trim() ? { public: p.public.trim().toLowerCase() } : {}) }));
   if (f.hc === "none") delete spec.healthCheck;
   else spec.healthCheck = { port: Number(f.hcPort), ...(f.hc === "http" ? { http: f.hcPath.trim() || "/" } : {}) };
@@ -84,7 +90,7 @@ function specOf(f: Form, base: AppSpec): AppSpec {
 const ownDisks = (spec: AppSpec) => disksOf(spec.volumes);
 
 /** Client-side checks, reported with the same field paths the server uses. */
-function check(f: Form, isImage: boolean): { field: string; message: string } | undefined {
+function check(f: Form, isImage: boolean, app: string, before: AppSpec): { field: string; message: string } | undefined {
   if (isImage && !f.image.trim()) return { field: "spec.source.image.ref", message: "Enter an image, like ghcr.io/acme/api:1.4.2." };
   if (!isImage) {
     const repo = repositoryProblem(normalizeRepository(f.repo));
@@ -99,8 +105,10 @@ function check(f: Form, isImage: boolean): { field: string; message: string } | 
   const n = Number(f.replicas);
   if (f.replicas.trim() === "" || !Number.isInteger(n) || n < 0) return { field: "spec.replicas", message: "Enter a whole number, 0 or more." };
   for (const [i, e] of f.env.entries()) {
-    if (!e.name.trim() && e.value) return { field: `spec.env[${i}].name`, message: "Give this variable a name." };
+    if (!e.name.trim() && (e.value || e.kind !== "plain")) return { field: `spec.env[${i}].name`, message: "Give this variable a name." };
   }
+  const plan = envPlan(f.env, app, before.env);
+  if (plan.error) return { field: `spec.env[${plan.error.index}].value`, message: plan.error.message };
   for (const [i, p] of f.ports.entries()) {
     const c = Number(p.container);
     if (!Number.isInteger(c) || c < 1 || c > 65535) return { field: `spec.ports[${i}].container`, message: "A port is a number from 1 to 65535." };
@@ -122,7 +130,7 @@ export function AppSettings({ app, canEdit, onSaved }: { app: App; canEdit: bool
   // generation sent on save makes the server refuse if someone else changed
   // the settings since.
   const [base, setBase] = useState(app);
-  const [initial, setInitial] = useState(() => formOf(app.spec));
+  const [initial, setInitial] = useState(() => formOf(app.spec, app.metadata.name));
   const [f, setF] = useState(initial);
   const [error, setError] = useState<{ field?: string; message: string; conflict?: boolean }>();
   const set = <K extends keyof Form>(k: K, v: Form[K]) => setF((prev) => ({ ...prev, [k]: v }));
@@ -133,12 +141,35 @@ export function AppSettings({ app, canEdit, onSaved }: { app: App; canEdit: bool
   const conns = useQuery({ queryKey: ["git-connections"], queryFn: gitApi.connections, enabled: !!git, retry: false, staleTime: 30_000 });
   const project = base.metadata.namespace;
   const usable = (conns.data ?? []).filter((c) => c.projects.length === 0 || c.projects.includes(project));
+  const name = base.metadata.name;
+  const session = useQuery({ queryKey: ["session"], queryFn: api.session });
+  const platform = session.data?.role === "owner" || session.data?.role === "admin";
+  // The project's shared sets, for "secret · set/key" rows (key names only).
+  const sets = useQuery({ queryKey: secretKeys.sets(project), queryFn: () => secretsApi.sets(project), retry: false, staleTime: 30_000 });
+  const shared = (sets.data ?? []).filter((s) => !s.app && s.name !== appEnvSet(name));
 
   const save = useMutation({
-    mutationFn: () => workloads.updateApp(base.metadata.namespace, base.metadata.name, specOf(f, base.spec), base.metadata.generation),
+    mutationFn: async () => {
+      // Secret values first, into the App's own set (created with its first
+      // key): the App then references keys that exist. Keys nothing refers
+      // to any more go after the App no longer needs them.
+      const plan = envPlan(f.env, name, base.spec.env);
+      for (const p of plan.put) {
+        try {
+          await secretsApi.setKey(project, appEnvSet(name), p.key, p.value);
+        } catch (e) {
+          const i = f.env.findIndex((r) => r.kind === "own" && (r.key ?? r.name.trim()) === p.key);
+          throw new ApiError(e instanceof ApiError ? e.status : 0, `${p.key} was not stored: ${e instanceof Error ? e.message : String(e)}`, `spec.env[${i}].value`);
+        }
+      }
+      const saved = await workloads.updateApp(project, name, specOf(f, base.spec, name), base.metadata.generation);
+      await Promise.all(plan.remove.map((k) => secretsApi.removeKey(project, appEnvSet(name), k).catch(() => undefined)));
+      return saved;
+    },
     onSuccess: (saved) => {
       setBase(saved);
-      const next = formOf(saved.spec);
+      void sets.refetch();
+      const next = formOf(saved.spec, name);
       setInitial(next);
       setF(next);
       setError(undefined);
@@ -155,7 +186,7 @@ export function AppSettings({ app, canEdit, onSaved }: { app: App; canEdit: bool
 
   function submit(e: FormEvent) {
     e.preventDefault();
-    const problem = check(f, isImage);
+    const problem = check(f, isImage, name, base.spec);
     if (problem) return setError(problem);
     setError(undefined);
     save.mutate();
@@ -163,7 +194,7 @@ export function AppSettings({ app, canEdit, onSaved }: { app: App; canEdit: bool
 
   function reload() {
     setBase(app);
-    const next = formOf(app.spec);
+    const next = formOf(app.spec, app.metadata.name);
     setInitial(next);
     setF(next);
     setError(undefined);
@@ -171,6 +202,8 @@ export function AppSettings({ app, canEdit, onSaved }: { app: App; canEdit: bool
 
   const err = (field: string) => (error?.field === field ? error.message : undefined);
   const errAt = (prefix: string) => (error?.field?.startsWith(prefix) ? error.message : undefined);
+  // Under the name, unless the value cell shows it (secret rows).
+  const nameErr = (i: number, e: EnvRow) => errAt(`spec.env[${i}].name`) ?? (e.kind === "plain" ? errAt(`spec.env[${i}]`) : undefined);
   const mountErr = /^mounts\[(\d+)\]$/.exec(error?.field ?? "");
   const nextRevision = (app.status?.revision ?? 0) + 1;
   const ro = !canEdit;
@@ -240,27 +273,39 @@ export function AppSettings({ app, canEdit, onSaved }: { app: App; canEdit: bool
         <div className="card">
           <div className="ch-h">
             <h3>Environment</h3>
-            <button type="button" className="btn sm" onClick={() => set("env", [...f.env, { name: "", value: "" }])}><Icon name="plus" />Add variable</button>
+            <button type="button" className="btn sm" onClick={() => set("env", [...f.env, { name: "", value: "", kind: "plain" }])}><Icon name="plus" />Add variable</button>
           </div>
           <div className="scroll-x">
             <table className="t">
-              <thead><tr><th style={{ width: "34%" }}>Name</th><th>Value</th><th style={{ width: 1 }}></th></tr></thead>
+              <thead><tr><th style={{ width: "30%" }}>Name</th><th>Value</th><th>Source</th><th style={{ width: 1 }}></th></tr></thead>
               <tbody>
-                {f.env.length === 0 && <tr><td colSpan={3} className="dim">No variables.</td></tr>}
+                {f.env.length === 0 && <tr><td colSpan={4} className="dim">No variables.</td></tr>}
                 {f.env.map((e, i) => (
                   <tr key={i}>
                     <td>
                       <input className="input mono" aria-label={`Variable ${i + 1} name`} value={e.name} placeholder="NAME"
-                        aria-invalid={!!errAt(`spec.env[${i}]`)} onChange={(ev) => set("env", f.env.map((x, j) => (j === i ? { ...x, name: ev.target.value } : x)))} />
-                      {errAt(`spec.env[${i}]`) && <span className="field-error" role="alert">{errAt(`spec.env[${i}]`)}</span>}
+                        aria-invalid={!!nameErr(i, e)} onChange={(ev) => set("env", f.env.map((x, j) => (j === i ? { ...x, name: ev.target.value } : x)))} />
+                      {nameErr(i, e) && <span className="field-error" role="alert">{nameErr(i, e)}</span>}
                     </td>
                     <td>
-                      {e.from ? (
-                        <span className="tag">{e.from.secretKeyRef ? `secret · ${e.from.secretKeyRef.name}/${e.from.secretKeyRef.key}` : e.from.configMapKeyRef ? `config · ${e.from.configMapKeyRef.name}/${e.from.configMapKeyRef.key}` : `field · ${e.from.fieldRef?.fieldPath}`}</span>
-                      ) : (
-                        <input className="input mono" aria-label={`Variable ${i + 1} value`} value={e.value}
-                          onChange={(ev) => set("env", f.env.map((x, j) => (j === i ? { ...x, value: ev.target.value } : x)))} />
-                      )}
+                      <EnvValue row={e} index={i} project={project} app={name} platform={platform} error={errAt(`spec.env[${i}].value`)}
+                        onValue={(v) => set("env", f.env.map((x, j) => (j === i ? { ...x, value: v } : x)))} />
+                    </td>
+                    <td>
+                      <select className="input env-source" aria-label={`Variable ${i + 1} source`} value={sourceOf(e)}
+                        onChange={(ev) => set("env", f.env.map((x, j) => (j === i ? withSource(x, ev.target.value) : x)))}>
+                        <option value="plain">Plain</option>
+                        <option value="own">Secret · this app</option>
+                        {e.kind === "ref" && !shared.some((s) => s.name === e.set && s.keys.some((k) => k.name === e.key)) && (
+                          <option value={sourceOf(e)}>Secret · {e.set}/{e.key}</option>
+                        )}
+                        {shared.filter((s) => s.keys.length > 0).map((s) => (
+                          <optgroup key={s.name} label={`Set ${s.name}`}>
+                            {s.keys.map((k) => <option key={k.name} value={`ref:${s.name}/${k.name}`}>{s.name} · {k.name}</option>)}
+                          </optgroup>
+                        ))}
+                        {e.kind === "other" && <option value="other">{e.from?.configMapKeyRef ? "ConfigMap" : "Field"}</option>}
+                      </select>
                     </td>
                     <td><button type="button" className="btn ghost sm danger" onClick={() => set("env", f.env.filter((_, j) => j !== i))} aria-label={`Remove ${e.name || "variable"}`}>Remove</button></td>
                   </tr>
@@ -268,6 +313,11 @@ export function AppSettings({ app, canEdit, onSaved }: { app: App; canEdit: bool
               </tbody>
             </table>
           </div>
+          <p className="dim small pad" style={{ borderTop: "1px solid var(--line-2)" }}>
+            Secret values are write-only for developers: they go into the app's own secret set ({appEnvSet(name)}) or come from a shared set on
+            the <Link to="/secrets" search={{ project }}>Secrets</Link> page. Reveal is for owners and admins, after their password, and is audited.
+            Changing a value rolls the app without a new revision.
+          </p>
         </div>
 
         <div className="g2e">
@@ -356,6 +406,42 @@ export function AppSettings({ app, canEdit, onSaved }: { app: App; canEdit: bool
       )}
     </form>
   );
+}
+
+// The value cell of an env row: a plain value, a write-only one for the
+// App's own set, or the shared set's key it reads.
+function EnvValue({ row, index, project, app, platform, error, onValue }: {
+  row: EnvRow; index: number; project: string; app: string; platform: boolean; error?: string; onValue: (v: string) => void;
+}) {
+  switch (row.kind) {
+    case "plain":
+      return <input className="input mono" aria-label={`Variable ${index + 1} value`} value={row.value} aria-invalid={!!error} onChange={(ev) => onValue(ev.target.value)} />;
+    case "own":
+      return (
+        <>
+          <div className="env-value">
+            <input className="input mono" type="password" autoComplete="new-password" aria-label={`Variable ${index + 1} secret value`} value={row.value}
+              placeholder={row.key ? "•••••••• stored · type to replace" : "Value (write-only)"} aria-invalid={!!error} onChange={(ev) => onValue(ev.target.value)} />
+            {platform && row.key && !row.value && <RevealSecret project={project} set={appEnvSet(app)} secretKey={row.key} />}
+          </div>
+          {error && <span className="field-error" role="alert">{error}</span>}
+        </>
+      );
+    case "ref":
+      return (
+        <>
+          <div className="env-value">
+            <Link to="/secrets" search={{ project, set: row.set }} className="tag">secret · {row.set}/{row.key}</Link>
+            {platform && row.set && row.key && <RevealSecret project={project} set={row.set} secretKey={row.key} />}
+          </div>
+          {error && <span className="field-error" role="alert">{error}</span>}
+        </>
+      );
+    default: {
+      const from = row.from;
+      return <span className="tag">{from?.configMapKeyRef ? `config · ${from.configMapKeyRef.name}/${from.configMapKeyRef.key}` : `field · ${from?.fieldRef?.fieldPath}`}</span>;
+    }
+  }
 }
 
 function knownField(field: string) {

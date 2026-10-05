@@ -18,7 +18,12 @@
 #    pods, logs, ...) reaches a developer or viewer any other way.
 #
 # Nobody gets Secrets through this path. Developers can point an App at a
-# Secret by name; the pod reads it, the user never does.
+# Secret by name; the pod reads it, the user never does. Secret sets
+# (Phase 6) add, per project namespace, the Roles the SecretSet reconciler
+# keeps (internal/controllers/secretset_controller.go): kwerft:secret-sets,
+# patch on exactly the Secrets of the project's sets, bound to owners,
+# admins and the project's developers; kwerft:secret-sets-read, get on the
+# same, bound to owners and admins (reveal, after their password).
 #
 # Keep template directives on lines of their own: the API tests apply this
 # file to a test API server after dropping every line with a template action.
@@ -94,10 +99,12 @@ metadata:
   name: kwerft:project-developer
   labels: {{- include "kwerft.labels" . | nindent 4 }}
 rules:
-  # Workloads: deploy, change, roll back, restart, scale, delete; and the
-  # project's traffic rules.
+  # Workloads: deploy, change, roll back, restart, scale, delete; the
+  # project's traffic rules; and its secret sets (key names in the status;
+  # the values are in Secrets, which only the SecretSet reconciler's Roles
+  # reach: kwerft:secret-sets, patch on exactly the managed ones).
   - apiGroups: [kwerft.dev]
-    resources: [apps, domains, tasks, schedules, volumes, trafficrules]
+    resources: [apps, domains, tasks, schedules, volumes, trafficrules, secretsets]
     verbs: [get, list, watch, create, update, patch, delete]
   # Builds: start one ("Build now") and cancel it (the cancel annotation is a
   # patch; the spec is immutable). No update, no delete: Kwerft prunes them.

@@ -103,6 +103,7 @@ func (a *api) register(mux *http.ServeMux) {
 	a.registerWorkloads(mux)
 	a.registerProjectAccess(mux) // Team or Members, and the members (api_project_access.go)
 	a.registerJobs(mux)
+	a.registerSecrets(mux) // secret sets and their write-only values (api_secrets.go)
 	a.registerPods(mux)
 	a.registerSettings(mux)
 	a.registerBuilds(mux) // Git builds: list, logs, cancel (api_builds.go)

@@ -100,6 +100,12 @@ const (
 	// AlertRules is enforced by Kubernetes, but the console also checks it
 	// for Custom rules (owners and admins only).
 	AlertRules = "alert-rules"
+	// RevealSecrets: read back one value of a secret set, after the
+	// password, audited. Kubernetes holds it too (the SecretSet
+	// reconciler's Role kwerft:secret-sets-read binds owners and admins).
+	RevealSecrets = "reveal-secrets"
+	// CopySecretSets: copy a set with its values into another project.
+	CopySecretSets = "copy-secret-sets"
 )
 
 // Matrix is the source of truth, in the order the Access page shows it.
@@ -158,6 +164,25 @@ var Matrix = []Permission{
 			{Group: "kwerft.dev", Resource: "trafficrules", Verb: "update", Namespaced: true},
 			{Group: "kwerft.dev", Resource: "trafficrules", Verb: "delete", Namespaced: true},
 		},
+	},
+	{
+		// Values are write-only: the SecretSet reconciler's Role grants patch
+		// on exactly the sets' Secrets, never get. Viewers see key names.
+		ID: "secret-sets", Label: "Create secret sets and set, generate or remove their values (write-only)", Enforced: ByKubernetes,
+		Grants: map[string]Grant{Owner: yes, Admin: yes, Developer: {Level: Partial, Note: "within their projects; values cannot be read back"}, Viewer: no},
+		Kube: []Check{
+			{Group: "kwerft.dev", Resource: "secretsets", Verb: "create", Namespaced: true},
+			{Group: "kwerft.dev", Resource: "secretsets", Verb: "update", Namespaced: true},
+			{Group: "kwerft.dev", Resource: "secretsets", Verb: "delete", Namespaced: true},
+		},
+	},
+	{
+		ID: RevealSecrets, Label: "Reveal a secret value (after their password, audited)", Enforced: ByConsole,
+		Grants: map[string]Grant{Owner: yes, Admin: yes, Developer: no, Viewer: no},
+	},
+	{
+		ID: CopySecretSets, Label: "Copy a secret set into another project", Enforced: ByConsole,
+		Grants: map[string]Grant{Owner: yes, Admin: yes, Developer: no, Viewer: no},
 	},
 	{
 		ID: "projects", Label: "Create and delete projects", Enforced: ByKubernetes,

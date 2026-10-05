@@ -109,6 +109,7 @@ func TestMain(m *testing.M) {
 	must((&VolumeReconciler{Client: mgr.GetClient()}).SetupWithManager(mgr))
 	must((&TaskReconciler{Client: mgr.GetClient(), APIReader: mgr.GetAPIReader(), Now: testClock.Now}).SetupWithManager(mgr))
 	must((&ScheduleReconciler{Client: mgr.GetClient(), Now: testClock.Now}).SetupWithManager(mgr))
+	must((&SecretSetReconciler{Client: mgr.GetClient(), APIReader: mgr.GetAPIReader()}).SetupWithManager(mgr))
 	must((&BuildReconciler{
 		Client:              mgr.GetClient(),
 		APIReader:           mgr.GetAPIReader(),

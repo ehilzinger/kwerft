@@ -338,7 +338,7 @@ func waitUntilReady(ctx context.Context, log *slog.Logger, mgr ctrl.Manager, rea
 	types := []client.Object{&kwerftv1.Project{}, &kwerftv1.App{}, &kwerftv1.Domain{},
 		&kwerftv1.Volume{}, &kwerftv1.Task{}, &kwerftv1.Schedule{}, &kwerftv1.ConsoleSettings{},
 		&kwerftv1.GitConnection{}, &kwerftv1.Build{}, &kwerftv1.AlertRule{}, &kwerftv1.NotificationChannel{},
-		&kwerftv1.FirewallRule{}, &kwerftv1.Cluster{}, &kwerftv1.NodePool{}}
+		&kwerftv1.FirewallRule{}, &kwerftv1.Cluster{}, &kwerftv1.NodePool{}, &kwerftv1.SecretSet{}}
 	for _, obj := range types {
 		for {
 			_, err := mgr.GetCache().GetInformer(ctx, obj, cache.BlockUntilSynced(false))
@@ -414,6 +414,11 @@ func newManager(log *slog.Logger, leaderElect bool, metricsListen, privateNetwor
 		return nil, err
 	}
 	if err := (&controllers.ScheduleReconciler{Client: mgr.GetClient()}).SetupWithManager(mgr); err != nil {
+		return nil, err
+	}
+	// Secret sets (Phase 6): their Secrets, generated and derived keys, and
+	// the Roles that make values write-only.
+	if err := (&controllers.SecretSetReconciler{Client: mgr.GetClient(), APIReader: mgr.GetAPIReader()}).SetupWithManager(mgr); err != nil {
 		return nil, err
 	}
 	gitConnections := &controllers.GitConnectionReconciler{Client: mgr.GetClient(), APIReader: mgr.GetAPIReader(),
