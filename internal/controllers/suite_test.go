@@ -125,7 +125,7 @@ func TestMain(m *testing.M) {
 	must((&NotificationChannelReconciler{Client: mgr.GetClient(), APIReader: mgr.GetAPIReader(), Now: channelClock.Now}).SetupWithManager(mgr))
 	must((&FirewallReconciler{Client: mgr.GetClient(), APIReader: mgr.GetAPIReader(), PrivateNetwork: testPrivateNetwork}).SetupWithManager(mgr))
 	// Clusters (cluster_controller_test.go): agents come and go through a fake tunnel.
-	must((&ClusterReconciler{Client: mgr.GetClient(), APIReader: mgr.GetAPIReader(), Tunnel: testTunnel,
+	must((&ClusterReconciler{Client: mgr.GetClient(), APIReader: mgr.GetAPIReader(), Tunnel: testTunnel, Remote: testTunnel.remote,
 		Namespace: GatewayNamespace, ConsoleDomain: testConsoleDomain, Resync: 500 * time.Millisecond,
 		Local: func(context.Context) clusters.AgentInfo {
 			return clusters.AgentInfo{KubernetesVersion: "v-test", Nodes: 1, ReadyNodes: 1}

@@ -21,8 +21,11 @@ func setupClusters(mgr ctrl.Manager, hub *clusters.Hub, namespace, consoleDomain
 	if err != nil {
 		return err
 	}
+	// Kwerft's own identity in each connected cluster, to copy notification
+	// channels and Git connections there (cluster_mirror.go).
+	remotes := &clusters.Clients{Registry: hub, Scheme: mgr.GetScheme()}
 	return (&controllers.ClusterReconciler{
-		Client: mgr.GetClient(), APIReader: mgr.GetAPIReader(), Tunnel: hub,
+		Client: mgr.GetClient(), APIReader: mgr.GetAPIReader(), Tunnel: hub, Remote: remotes.For,
 		Namespace: namespace, ConsoleDomain: consoleDomain,
 		Local: func(ctx context.Context) clusters.AgentInfo { return clusters.LocalInfo(ctx, cs, "") },
 	}).SetupWithManager(mgr)

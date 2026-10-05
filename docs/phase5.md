@@ -229,6 +229,53 @@ material and rotation, hetzner-cloud pool/secret/delete, invalid names);
 agent connects → rotate → refused and audited, delete; connect endpoint
 refuses sessions and Origins and rate-limits); bats for `--agent`.
 
+**Contract with W4 (checked after W4 landed).**
+- `RESTConfig(remote)` is a real `http://127.0.0.1:<port>` Host, so
+  `rest.HTTPClientFor`, service-proxy paths and `/k8s/` paths work. Each
+  agent session has its own port and key: a reconnect (or a newer
+  connection replacing an older one) closes `Changed()` and yields a new
+  Host, so "keep the connection while Connected and Host is unchanged" is
+  safe; the old config gets connection refused. `clusters.Clients` keeps
+  one controller-runtime client per cluster on that rule.
+- The agent's identity is the chart's `kwerft-controller` ClusterRole
+  (list/watch every kwerft.dev kind and namespaces, create Builds,
+  impersonate the console's users and role groups) plus the Role
+  `kwerft-observability-proxy` (get/create `services/proxy` in
+  `kwerft-observability` only), bound to the console's service account in
+  both modes. `tunnel_envtest_test.go` asks the remote API server through
+  the tunnel for each of these, and that `services/proxy` elsewhere and
+  `system:masters` are refused.
+- Streaming and upgrades: watches, log follows (`FlushInterval: -1`),
+  exec over WebSocket and the SPDY fallback (client-go's fallback executor
+  against an SPDY-only endpoint) are tested through the tunnel.
+- `List()` reads Cluster objects from the manager's cache: no API call.
+
+**Mirroring notification channels and Git connections**
+(`internal/controllers/cluster_mirror.go`). W4 keeps NotificationChannels
+and GitConnections in the management cluster only; remote clusters still
+need receivers and clone credentials. On every pass of a *connected* remote
+cluster (each minute, on connect, and at once when a channel or connection
+changes its spec or annotations — the console sets
+`kwerft.dev/credentials-updated` after writing credentials) the Cluster
+reconciler, through the tunnel with Kwerft's own identity:
+- server-side applies (field manager `kwerft-mirror`) a copy of each
+  NotificationChannel and GitConnection (spec only, no status), labelled
+  `kwerft.dev/mirrored=true`;
+- applies its Secret — `notify-<name>` in `kwerft-observability`,
+  `git-<name>` in `kwerft-builds` — with the original's data, labelled
+  `kwerft.dev/mirrored=true` and with the usual
+  `kwerft.dev/notification-channel` / `kwerft.dev/git-connection` label,
+  controlled by the copy (the remote reconcilers never adopt another
+  owner's Secret);
+- deletes copies (and their copied Secrets) whose original is gone;
+- leaves an object of the same name that the remote cluster made itself
+  alone, and says so in the Cluster's condition `Mirrored` (False with the
+  names; True when all are in sync).
+The remote reconcilers then render the Alertmanager configs and check the
+credentials there. Webhooks stay the management console's: in agent mode
+there is no console hostname, so no webhook URL. Secrets are read uncached;
+a credential change without the annotation arrives within a minute.
+
 **Limits and open points.**
 - Logs through a *real* API server are not in the envtest (no kubelet);
   the fake API server covers streaming. Port-forward is the same upgrade

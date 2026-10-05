@@ -16,6 +16,7 @@ import (
 	"time"
 
 	authnv1 "k8s.io/api/authentication/v1"
+	authzv1 "k8s.io/api/authorization/v1"
 	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -37,6 +38,9 @@ import (
 // cluster; it gets the chart's kwerft-controller ClusterRole, as the real
 // one does.
 const agentUser = "system:serviceaccount:kwerft-system:kwerft"
+
+// observabilityNamespace is the chart's observability.namespace.
+const observabilityNamespace = "kwerft-observability"
 
 func startEnv(t *testing.T) (*envtest.Environment, *rest.Config) {
 	t.Helper()
@@ -86,11 +90,30 @@ func applyChartRoles(ctx context.Context, c client.Client) error {
 				obj = &rbacv1.ClusterRole{}
 			case head.Kind == "ClusterRoleBinding" && file == "roles.yaml":
 				obj = &rbacv1.ClusterRoleBinding{}
+			// The Kwerft service account's Roles (rbac.yaml): their
+			// namespace and subject lines are template lines, so fill
+			// them in for the agent's stand-in.
+			case head.Kind == "Role" && file == "rbac.yaml":
+				obj = &rbacv1.Role{}
+			case head.Kind == "RoleBinding" && file == "rbac.yaml":
+				obj = &rbacv1.RoleBinding{}
 			default:
 				continue
 			}
 			if err := yaml.UnmarshalStrict([]byte(doc), obj); err != nil {
 				return fmt.Errorf("%s: %w", file, err)
+			}
+			switch o := obj.(type) {
+			case *rbacv1.Role:
+				o.Namespace = observabilityNamespace
+			case *rbacv1.RoleBinding:
+				o.Namespace = observabilityNamespace
+				o.Subjects = []rbacv1.Subject{{APIGroup: rbacv1.GroupName, Kind: "User", Name: agentUser}}
+			}
+			if ns := obj.GetNamespace(); ns != "" {
+				if err := c.Create(ctx, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: ns}}); err != nil && !apierrors.IsAlreadyExists(err) {
+					return err
+				}
 			}
 			if err := c.Create(ctx, obj); err != nil {
 				return fmt.Errorf("%s: %w", file, err)
@@ -168,6 +191,52 @@ func TestTunnelToARemoteAPIServer(t *testing.T) {
 	}
 	if who.Status.UserInfo.Username != agentUser {
 		t.Errorf("identity through the tunnel: %q, want %q", who.Status.UserInfo.Username, agentUser)
+	}
+
+	// What the console does there with Kwerft's own identity (W4): informer
+	// caches of Kwerft's kinds and namespaces, Builds from Git webhooks,
+	// metrics, logs and Alertmanager through the service proxy, and
+	// impersonating users. Asked of the API server through the tunnel.
+	type check struct{ group, resource, sub, verb, ns, name string }
+	var checks []check
+	for _, r := range []string{"projects", "apps", "tasks", "schedules", "volumes", "domains", "builds", "alertrules", "consolesettings", "firewallrules",
+		"notificationchannels", "gitconnections", "trafficrules"} {
+		checks = append(checks, check{group: "kwerft.dev", resource: r, verb: "list"}, check{group: "kwerft.dev", resource: r, verb: "watch"})
+	}
+	checks = append(checks,
+		check{resource: "namespaces", verb: "list"}, check{resource: "namespaces", verb: "watch"},
+		check{group: "kwerft.dev", resource: "builds", verb: "create", ns: "shop"},
+		check{resource: "services", sub: "proxy", verb: "get", ns: observabilityNamespace},
+		check{resource: "services", sub: "proxy", verb: "create", ns: observabilityNamespace},
+		check{resource: "users", verb: "impersonate", name: "kwerft:dev@example.com"},
+		check{resource: "groups", verb: "impersonate", name: "kwerft:role:developer"},
+		check{resource: "groups", verb: "impersonate", name: "system:authenticated"},
+	)
+	for _, c := range checks {
+		review := &authzv1.SelfSubjectAccessReview{Spec: authzv1.SelfSubjectAccessReviewSpec{ResourceAttributes: &authzv1.ResourceAttributes{
+			Group: c.group, Resource: c.resource, Subresource: c.sub, Verb: c.verb, Namespace: c.ns, Name: c.name}}}
+		got, err := cs.AuthorizationV1().SelfSubjectAccessReviews().Create(ctx, review, metav1.CreateOptions{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !got.Status.Allowed {
+			t.Errorf("the agent may not %s %s.%s/%s %s in %q", c.verb, c.resource, c.group, c.sub, c.name, c.ns)
+		}
+	}
+	// ...but no other observability namespace's proxy, and no system:masters.
+	for _, c := range []check{
+		{resource: "services", sub: "proxy", verb: "create", ns: "kube-system"},
+		{resource: "groups", verb: "impersonate", name: "system:masters"},
+	} {
+		review := &authzv1.SelfSubjectAccessReview{Spec: authzv1.SelfSubjectAccessReviewSpec{ResourceAttributes: &authzv1.ResourceAttributes{
+			Group: c.group, Resource: c.resource, Subresource: c.sub, Verb: c.verb, Namespace: c.ns, Name: c.name}}}
+		got, err := cs.AuthorizationV1().SelfSubjectAccessReviews().Create(ctx, review, metav1.CreateOptions{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got.Status.Allowed {
+			t.Errorf("the agent may %s %s/%s %s in %q", c.verb, c.resource, c.sub, c.name, c.ns)
+		}
 	}
 
 	// Users act as themselves, exactly as in the local cluster: the console's

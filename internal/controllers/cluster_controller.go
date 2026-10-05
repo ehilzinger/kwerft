@@ -13,12 +13,15 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	corev1ac "k8s.io/client-go/applyconfigurations/core/v1"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/manager"
+	"sigs.k8s.io/controller-runtime/pkg/predicate"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 	"sigs.k8s.io/controller-runtime/pkg/source"
 
 	kwerftac "github.com/ehilzinger/kwerft/api/applyconfiguration/api/v1alpha1"
@@ -73,6 +76,11 @@ type ClusterReconciler struct {
 	// ConsoleDomain is the --console-domain flag, for the console URL agents
 	// dial when ConsoleSettings has none.
 	ConsoleDomain string
+	// Remote returns a client for a connected cluster with Kwerft's own
+	// identity there (clusters.Clients.For); nil turns off copying
+	// notification channels and Git connections into remote clusters
+	// (cluster_mirror.go).
+	Remote func(name string) (client.Client, error)
 	// Local reports the management cluster's own health; nil leaves the
 	// versions empty.
 	Local func(ctx context.Context) clusters.AgentInfo
@@ -148,6 +156,16 @@ func (r *ClusterReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		}
 	}
 	r.setRemoteStatus(&c, agent, connected, problem)
+	if connected && r.Remote != nil {
+		remote, err := r.Remote(c.Name)
+		if err == nil {
+			err = r.mirror(ctx, remote)
+		}
+		if err != nil {
+			log.FromContext(ctx).Info("copying channels and Git connections into the cluster failed", "cluster", c.Name, "err", err.Error())
+		}
+		setMirrored(&c, err)
+	}
 	if err := r.writeStatus(ctx, &c, orig); err != nil {
 		return ctrl.Result{}, err
 	}
@@ -172,19 +190,42 @@ func (r *ClusterReconciler) reconcileCloud(ctx context.Context, c *kwerftv1.Clus
 			WithServerType(hc.ServerType).
 			WithLocation(hc.Location).
 			WithCount(cmp.Or(hc.ControlPlanes, 1)))
-	if err := apply(ctx, r.Client, pool); err != nil {
-		return "", false, fmt.Errorf("control-plane pool: %w", err)
+	// Applied only when it differs: an apply that changes nothing still
+	// bumps the pool's resourceVersion on some API servers, and the pool
+	// is watched (Owns), which would make this a busy loop.
+	var cur kwerftv1.NodePool
+	err := r.Get(ctx, client.ObjectKey{Name: ControlPlanePoolName(c.Name)}, &cur)
+	want := kwerftv1.NodePoolSpec{Cluster: c.Name, Role: kwerftv1.NodeControlPlane, ServerType: hc.ServerType, Location: hc.Location, Count: cmp.Or(hc.ControlPlanes, 1)}
+	upToDate := err == nil && metav1.IsControlledBy(&cur, c) && cur.Labels[LabelClusterName] == c.Name &&
+		cur.Spec.Cluster == want.Cluster && cur.Spec.Role == want.Role && cur.Spec.ServerType == want.ServerType &&
+		cur.Spec.Location == want.Location && cur.Spec.Count == want.Count
+	if err != nil && !apierrors.IsNotFound(err) {
+		return "", false, err
+	}
+	if !upToDate {
+		if err := apply(ctx, r.Client, pool); err != nil {
+			return "", false, fmt.Errorf("control-plane pool: %w", err)
+		}
 	}
 
 	secret := &corev1.Secret{}
 	key := client.ObjectKey{Namespace: r.namespace(), Name: clusters.AgentSecretName(c.Name)}
-	err := r.APIReader.Get(ctx, key, secret)
+	err = r.APIReader.Get(ctx, key, secret)
 	if err != nil && !apierrors.IsNotFound(err) {
 		return "", false, err
 	}
 	exists := err == nil
-	hash := c.Annotations[clusters.TokenHashAnnotation]
 	everConnected := connected || c.Status.LastSeen != nil
+	// The token hash from the API server, not the cache: a cached Cluster
+	// may not show the hash just written, and comparing it with the fresh
+	// Secret would revoke a token that is valid, or mint a second one.
+	fresh := &kwerftv1.Cluster{}
+	if !everConnected {
+		if err := r.APIReader.Get(ctx, client.ObjectKeyFromObject(c), fresh); err != nil {
+			return "", false, err
+		}
+	}
+	hash := fresh.Annotations[clusters.TokenHashAnnotation]
 	switch {
 	case everConnected:
 		// The cluster bootstrapped; nothing needs the plain token any more.
@@ -194,10 +235,18 @@ func (r *ClusterReconciler) reconcileCloud(ctx context.Context, c *kwerftv1.Clus
 			}
 		}
 		return "", false, nil
+	case hash == "" && exists && len(secret.Data[clusters.SecretToken]) > 0 && metav1.IsControlledBy(secret, c):
+		// The Secret was written but the hash was not (a failure between
+		// the two): record the hash of the token already handed out.
+		patch := client.MergeFrom(fresh.DeepCopy())
+		if fresh.Annotations == nil {
+			fresh.Annotations = map[string]string{}
+		}
+		fresh.Annotations[clusters.TokenHashAnnotation] = auth.HashToken(string(secret.Data[clusters.SecretToken]))
+		return "", true, r.Patch(ctx, fresh, patch)
 	case hash == "":
 		// A new cluster: a token for its first server's cloud-init. The
-		// Secret first, then the hash, so a failure in between only
-		// leads to a fresh token on the next pass.
+		// Secret first, then the hash (see above for a failure between).
 		consoleURL := r.consoleURL(ctx)
 		if consoleURL == "" {
 			return "The console has no hostname yet, so the cluster's agent would not know where to connect.", false, nil
@@ -214,12 +263,13 @@ func (r *ClusterReconciler) reconcileCloud(ctx context.Context, c *kwerftv1.Clus
 		if err := apply(ctx, r.Client, s); err != nil {
 			return "", false, fmt.Errorf("agent secret: %w", err)
 		}
-		patch := client.MergeFrom(c.DeepCopy())
-		if c.Annotations == nil {
-			c.Annotations = map[string]string{}
+		// Guarded by the fresh resourceVersion: a concurrent rotation wins.
+		patch := client.MergeFromWithOptions(fresh.DeepCopy(), client.MergeFromWithOptimisticLock{})
+		if fresh.Annotations == nil {
+			fresh.Annotations = map[string]string{}
 		}
-		c.Annotations[clusters.TokenHashAnnotation] = auth.HashToken(token)
-		return "", true, r.Patch(ctx, c, patch)
+		fresh.Annotations[clusters.TokenHashAnnotation] = auth.HashToken(token)
+		return "", true, r.Patch(ctx, fresh, patch)
 	case exists && !auth.TokenMatches(string(secret.Data[clusters.SecretToken]), hash):
 		// Rotated before the first connection: the stored token is void, and
 		// the new one exists only in the install command shown then.
@@ -397,7 +447,27 @@ func (r *ClusterReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	b := ctrl.NewControllerManagedBy(mgr).
 		Named("cluster").
 		For(&kwerftv1.Cluster{}).
-		Owns(&kwerftv1.NodePool{})
+		// Spec changes and deletions of its pools; not their status.
+		Owns(&kwerftv1.NodePool{}, builder.WithPredicates(predicate.GenerationChangedPredicate{}))
+	if r.Remote != nil {
+		// A channel or Git connection changed (credentials: the console's
+		// annotation): copy it into every cluster at once.
+		all := handler.EnqueueRequestsFromMapFunc(func(ctx context.Context, _ client.Object) []reconcile.Request {
+			var list kwerftv1.ClusterList
+			if err := mgr.GetCache().List(ctx, &list); err != nil {
+				return nil
+			}
+			out := make([]reconcile.Request, 0, len(list.Items))
+			for _, c := range list.Items {
+				if c.Name != clusters.Local {
+					out = append(out, reconcile.Request{NamespacedName: client.ObjectKey{Name: c.Name}})
+				}
+			}
+			return out
+		})
+		changed := builder.WithPredicates(predicate.Or(predicate.GenerationChangedPredicate{}, predicate.AnnotationChangedPredicate{}))
+		b = b.Watches(&kwerftv1.NotificationChannel{}, all, changed).Watches(&kwerftv1.GitConnection{}, all, changed)
+	}
 	if r.Tunnel != nil {
 		events := make(chan event.GenericEvent)
 		if err := mgr.Add(&tunnelEvents{tunnel: r.Tunnel, reader: mgr.GetCache(), out: events}); err != nil {

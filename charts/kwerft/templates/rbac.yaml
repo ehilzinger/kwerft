@@ -94,3 +94,34 @@ subjects:
   - kind: ServiceAccount
     name: {{ include "kwerft.fullname" . }}
     namespace: {{ .Release.Namespace }}
+---
+# The cluster's metrics, logs and Alertmanager through the API server's
+# service proxy: how the console reaches a remote cluster's observability
+# stack through the agent tunnel (docs/phase5.md, W4), and the same right
+# locally so both identities stay equal. Only this namespace; the console
+# confines queries to the user's projects itself.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: kwerft-observability-proxy
+  namespace: {{ .Values.observability.namespace }}
+  labels: {{- include "kwerft.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: [services/proxy]
+    verbs: [get, create]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: kwerft-observability-proxy
+  namespace: {{ .Values.observability.namespace }}
+  labels: {{- include "kwerft.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: kwerft-observability-proxy
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "kwerft.fullname" . }}
+    namespace: {{ .Release.Namespace }}
