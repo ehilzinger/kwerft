@@ -161,6 +161,14 @@ type Config struct {
 	// built (point its observability at fakes); see clusters.go.
 	clusterHook func(*clusterConn)
 
+	// Upgrades runs upgrade preflights for Settings › Updates
+	// (api_upgrades.go); nil: the page reads, but no upgrade can be
+	// started from the console.
+	Upgrades UpgradePreflight
+	// upgradesHook lets tests shorten the live status stream's intervals;
+	// see api_upgrades.go.
+	upgradesHook func(*upgradesAPI)
+
 	// nodesHook lets tests replace the Hetzner Cloud and Robot endpoints of
 	// the nodes API; see api_nodes.go.
 	nodesHook func(*nodesAPI)

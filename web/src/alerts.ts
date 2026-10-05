@@ -41,7 +41,7 @@ export type SilenceInput = { fingerprint: string; duration: string; comment: str
 
 export type AlertCondition =
   | "CrashLooping" | "Restarts" | "MemoryHigh" | "CPUHigh" | "VolumeFillingUp" | "NodeMemoryPressure" | "NodeDiskPressure"
-  | "CertificateExpiring" | "ScheduleFailing" | "BuildFailing" | "HTTPErrorRate" | "HTTPLatency" | "BackupFailing" | "BackupMissing" | "Custom";
+  | "CertificateExpiring" | "ScheduleFailing" | "BuildFailing" | "HTTPErrorRate" | "HTTPLatency" | "BackupFailing" | "BackupMissing" | "UpgradeFailed" | "Custom";
 
 export type AlertScope = { projects: string[]; apps: string[] };
 
@@ -289,6 +289,10 @@ export const conditions: Record<AlertCondition, ConditionInfo> = {
     label: "Backup missing", hint: "A backup plan has not completed a backup in time", scope: "none", everything: "All backup plans", severity: "critical",
     window: { default: "", label: "Or no success within (empty: twice the plan's interval)" },
   },
+  UpgradeFailed: {
+    label: "Upgrade failed", hint: "An upgrade of Kwerft or Kubernetes failed or was rolled back", scope: "none", everything: "Kwerft and Kubernetes", severity: "critical",
+    window: { default: "1d", label: "Fires for" },
+  },
   Custom: {
     label: "Custom expression", hint: "A MetricsQL expression; each result is an alert", scope: "none", everything: "What the expression returns", severity: "warning",
     for: { default: "", label: "For" },
@@ -332,6 +336,7 @@ export function describeCondition(r: Measured): string {
     case "HTTPLatency": return `95th percentile response time above ${n} ms over ${humanDuration(w)}`;
     case "BackupFailing": return `A backup plan's latest backup failed${forText}`;
     case "BackupMissing": return `A backup plan has not completed a backup within ${w ? humanDuration(w) : "twice its interval"}${forText}`;
+    case "UpgradeFailed": return `The latest upgrade failed or was rolled back (fires for ${humanDuration(w)})${forText}`;
     case "Custom": return `Custom expression${forText}`;
   }
 }

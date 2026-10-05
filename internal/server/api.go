@@ -114,6 +114,7 @@ func (a *api) register(mux *http.ServeMux) {
 	a.registerTraffic(mux)  // traffic rules, dropped connections, isolation
 	a.registerFirewall(mux) // server firewall rules and their confirmation (api_firewall.go)
 	a.registerBackups(mux)  // backup target, plans, backups and restores (api_backups.go)
+	a.registerUpgrades(mux) // Settings › Updates: releases, policy, upgrades (api_upgrades.go)
 
 	mux.HandleFunc("GET /api/v1/cluster-status", a.requireUser(a.clusterStatus)) // clusters.go
 	a.registerClusters(mux)                                                      // clusters, and their agents' tunnel endpoint (api_clusters.go)

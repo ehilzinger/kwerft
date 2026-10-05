@@ -4,7 +4,10 @@ import { api } from "../api";
 import { alertKeys, alertsApi } from "../alerts";
 import { Icon, type IconName } from "./Icon";
 import { UnreachableBanner } from "./ClusterUI";
+import { useUpdateNotices } from "../pages/SettingsUpdates";
+import { noticeText } from "../updates";
 import "../styles/monitoring.css";
+import "../styles/updates.css";
 
 type NavItem = { to: string; label: string; icon: IconName; adminOnly?: boolean };
 
@@ -42,6 +45,8 @@ export function Shell() {
   // The Monitoring badge: firing alerts. Without alerting (yet), no badge.
   const firing = useQuery({ queryKey: alertKeys.alerts("firing"), queryFn: () => alertsApi.alerts("firing"), refetchInterval: 15000, retry: false, enabled: !!user.data && !user.data.mustEnrol });
   const firingCount = firing.data?.length ?? 0;
+  // The Settings dot: a release to install (owners and admins).
+  const notices = useUpdateNotices();
 
   async function signOut() {
     try {
@@ -64,6 +69,11 @@ export function Shell() {
                 <Link key={item.to} to={item.to} activeOptions={{ exact: item.to === "/" }}>
                   <Icon name={item.icon} />
                   {item.label}
+                  {item.to === "/settings" && notices.length > 0 && (
+                    <span className="upd-dot" title={notices.map((n) => `${noticeText(n).title} available`).join(", ")}>
+                      <span className="sr"> (update available)</span>
+                    </span>
+                  )}
                   {item.to === "/monitoring" && firingCount > 0 && (
                     <span className="count" title={`${firingCount} firing ${firingCount === 1 ? "alert" : "alerts"}`}>
                       {firingCount}<span className="sr"> firing {firingCount === 1 ? "alert" : "alerts"}</span>

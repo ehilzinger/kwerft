@@ -30,6 +30,7 @@ const (
 	KindCertificate Kind = "certificate" // Domain and console certificates
 	KindSchedule    Kind = "schedule"    // Schedules: namespace, schedule
 	KindBackup      Kind = "backup"      // BackupPlans: plan; platform alerts, no scope
+	KindUpgrade     Kind = "upgrade"     // Upgrades: component, version, upgrade; platform alerts, no scope
 	KindCustom      Kind = "custom"      // spec.expr; no scope
 )
 
@@ -67,7 +68,7 @@ type Info struct {
 
 // Scoped reports whether rules of this condition accept a scope.
 func (i Info) Scoped() bool {
-	return i.Kind != KindNode && i.Kind != KindCustom && i.Kind != KindBackup
+	return i.Kind != KindNode && i.Kind != KindCustom && i.Kind != KindBackup && i.Kind != KindUpgrade
 }
 
 const day = 24 * time.Hour
@@ -97,6 +98,7 @@ var Catalog = []Info{
 		Threshold: &Threshold{Default: 1000, Unit: UnitMillis, Min: 1, Max: 600000}, HasWindow: true, DefaultWindow: 5 * time.Minute, DefaultFor: 10 * time.Minute},
 	{Condition: kwerftv1.AlertBackupFailing, Label: "Backup failing", Kind: KindBackup, Severity: "critical"},
 	{Condition: kwerftv1.AlertBackupMissing, Label: "Backup missing", Kind: KindBackup, Severity: "critical", HasWindow: true},
+	{Condition: kwerftv1.AlertUpgradeFailed, Label: "Upgrade failed", Kind: KindUpgrade, Severity: "critical", HasWindow: true, DefaultWindow: day},
 	{Condition: kwerftv1.AlertCustom, Label: "Custom expression", Kind: KindCustom, Severity: "warning"},
 }
 
@@ -354,6 +356,12 @@ func Expr(spec *kwerftv1.AlertRuleSpec) string {
 			return age + " > " + itoa(int64(e.Window/time.Second)) + " and on (plan) " + interval
 		}
 		return age + " > on (plan) 2 * " + interval
+	case kwerftv1.AlertUpgradeFailed:
+		// Only the newest finished Upgrade of each component has the
+		// series (internal/controllers/metrics.go), so a later success
+		// ends the alert; otherwise it fires for the window after the
+		// failure, once per Upgrade.
+		return "time() - max by (component, version, upgrade, result) (kwerft_upgrade_failed_timestamp_seconds) < " + itoa(int64(e.Window/time.Second))
 	case kwerftv1.AlertCustom:
 		return strings.TrimSpace(spec.Expr)
 	}
@@ -542,6 +550,10 @@ func annotations(e Effective, rule string) (summary, description string) {
 		}
 		return `No backup of plan {{ $labels.plan }} for {{ $value | humanizeDuration }}`,
 			`The plan has not completed a backup within ` + d + `. Check that Velero runs and the bucket is reachable (Settings › Backups).`
+	case kwerftv1.AlertUpgradeFailed:
+		return `The upgrade of {{ $labels.component }} to {{ $labels.version }} {{ if eq $labels.result "RolledBack" }}was rolled back{{ else }}failed{{ end }}`,
+			`Upgrade {{ $labels.upgrade }} did not finish. A rolled-back Kwerft upgrade left the previous version running; a failed one needs a look. ` +
+				`Settings › Updates shows its steps, the reason and the installer log. AutoPatch, when on, waits until an owner resumes it.`
 	case kwerftv1.AlertHTTPLatency:
 		return `{{ $labels.namespace }}/{{ $labels.app }} is slow: p95 {{ printf "%.0f" $value }} ms`,
 			`95 % of requests took less than {{ printf "%.0f" $value }} ms over ` + Humanize(e.Window) + `, above the ` + t + ` ms set.`
@@ -572,6 +584,8 @@ func consoleURL(e Effective, host string) string {
 		return base + "/monitoring/metrics"
 	case KindBackup:
 		return base + "/backups"
+	case KindUpgrade:
+		return base + "/settings/updates"
 	}
 	return `{{ if and $labels.namespace $labels.app }}` + base + `/apps/{{ $labels.namespace }}/{{ $labels.app }}?tab=logs{{ else }}` + base + `/monitoring{{ end }}`
 }

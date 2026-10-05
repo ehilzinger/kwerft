@@ -126,6 +126,39 @@ kwerft_backup_plan_last_success_timestamp_seconds{plan="cluster"} 1.7e+09
 	}
 }
 
+// Upgrades feed the alert UpgradeFailed: only the newest finished Upgrade
+// of each component counts, cancelled ones are passed over and a later
+// success clears the component.
+func TestUpgradeMetrics(t *testing.T) {
+	up := func(name string, c kwerftv1.UpgradeComponent, v string, phase kwerftv1.UpgradePhase, finished int64) *kwerftv1.Upgrade {
+		u := &kwerftv1.Upgrade{ObjectMeta: metav1.ObjectMeta{Name: name}, Spec: kwerftv1.UpgradeSpec{Component: c, Version: v},
+			Status: kwerftv1.UpgradeStatus{Phase: phase}}
+		if finished > 0 {
+			u.Status.FinishedAt = ts(finished)
+		}
+		return u
+	}
+	objs := []client.Object{
+		// Kwerft: rolled back, then a cancelled attempt; the rollback stands.
+		up("kwerft-0.6.0-a", kwerftv1.UpgradeKwerft, "0.6.0", kwerftv1.UpgradeSucceeded, 1700000000),
+		up("kwerft-0.6.1-b", kwerftv1.UpgradeKwerft, "0.6.1", kwerftv1.UpgradeRolledBack, 1700001000),
+		up("kwerft-0.6.1-c", kwerftv1.UpgradeKwerft, "0.6.1", kwerftv1.UpgradeCancelled, 1700002000),
+		up("kwerft-0.6.2-d", kwerftv1.UpgradeKwerft, "0.6.2", kwerftv1.UpgradeQueued, 0),
+		// Kubernetes: failed, then fixed by a later success.
+		up("kubernetes-v1.38.1-k3s1-e", kwerftv1.UpgradeKubernetes, "v1.38.1+k3s1", kwerftv1.UpgradeFailed, 1700000500),
+		up("kubernetes-v1.38.1-k3s1-f", kwerftv1.UpgradeKubernetes, "v1.38.1+k3s1", kwerftv1.UpgradeSucceeded, 1700003000),
+	}
+	c := fake.NewClientBuilder().WithScheme(NewScheme()).WithObjects(objs...).Build()
+	want := `
+# HELP kwerft_upgrade_failed_timestamp_seconds When the newest finished Upgrade of a component (cancelled ones aside) failed or was rolled back (status.finishedAt); no series once a later one succeeded.
+# TYPE kwerft_upgrade_failed_timestamp_seconds gauge
+kwerft_upgrade_failed_timestamp_seconds{component="Kwerft",result="RolledBack",upgrade="kwerft-0.6.1-b",version="0.6.1"} 1.700001e+09
+`
+	if err := testutil.CollectAndCompare(&MetricsCollector{Reader: c}, strings.NewReader(want), "kwerft_upgrade_failed_timestamp_seconds"); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestObserveBuild(t *testing.T) {
 	buildDuration.Reset()
 	running := build("shop", "api-7", "api", "push", 7, kwerftv1.BuildRunning)
