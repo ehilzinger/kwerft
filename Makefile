@@ -76,6 +76,12 @@ helm-lint: ## Lint and render the Helm chart
 	helm template kwerft charts/kwerft --set mode=agent --set agent.consoleURL=https://ops.example.com \
 		| grep -q -- '- --console-url=https://ops.example.com'
 	! helm template kwerft charts/kwerft --set mode=agent --set agent.consoleURL=https://ops.example.com | grep -qE 'name: kwerft-data(-key)?$$'
+	@# Backups: Velero's pre-backup hook copies the console's database (docs/phase6.md); agents have none.
+	helm template kwerft charts/kwerft --set console.domain=ops.example.com \
+		| grep -qF "pre.hook.backup.velero.io/command: '[\"/usr/local/bin/kwerft\", \"db-snapshot\", \"--data-dir=/var/lib/kwerft\"]'"
+	helm template kwerft charts/kwerft --set console.domain=ops.example.com | grep -qx '        pre.hook.backup.velero.io/container: kwerft'
+	helm template kwerft charts/kwerft --set console.domain=ops.example.com | grep -qx '        pre.hook.backup.velero.io/on-error: Fail'
+	! helm template kwerft charts/kwerft --set mode=agent --set agent.consoleURL=https://ops.example.com | grep -q 'pre.hook.backup.velero.io'
 	@# With the VictoriaMetrics operator's CRDs, as install.sh installs them (metrics-*.yaml).
 	helm template kwerft charts/kwerft --set console.domain=ops.example.com --api-versions operator.victoriametrics.com/v1beta1 | grep -q 'kind: VMRule'
 

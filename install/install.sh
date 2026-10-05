@@ -48,6 +48,12 @@ HCLOUD_LOCATIONS="fsn1 nbg1 hel1 ash hil sin"
 ZOT_VERSION="v2.1.21"                   # in-cluster registry, ghcr.io/project-zot/zot-minimal
 BUILDKIT_VERSION="v0.33.1"              # docker.io/moby/buildkit:<version>-rootless
 RAILPACK_VERSION="v0.40.1"              # ghcr.io/railwayapp/railpack-frontend (contains the railpack CLI)
+# Backups (docs/phase6.md), latest stable as of 2026-10-05. Chart 12.2.0
+# ships Velero 1.18.2; the image runs the patch release, and the chart's CRD
+# job (velero install --crds-only, from that image) applies its CRDs.
+VELERO_VERSION="v1.18.4"                # docker.io/velero/velero
+VELERO_CHART_VERSION="12.2.0"           # vmware-tanzu/velero
+VELERO_PLUGIN_AWS_VERSION="v1.14.4"     # docker.io/velero/velero-plugin-for-aws (S3-compatible storage)
 KWERFT_CHART_REPO="oci://ghcr.io/ehilzinger/charts/kwerft"
 KWERFT_IMAGE_REPO="ghcr.io/ehilzinger/kwerft"   # the chart's image.repository; checked before installing
 
@@ -55,6 +61,7 @@ KWERFT_IMAGE_REPO="ghcr.io/ehilzinger/kwerft"   # the chart's image.repository; 
 # Exit codes are part of the automation contract — do not renumber.
 # ---------------------------------------------------------------------------
 readonly EXIT_OK=0 EXIT_USAGE=2 EXIT_PREFLIGHT=10 EXIT_NETWORK=20 EXIT_K8S=30 EXIT_PLATFORM=40 EXIT_KWERFT=50
+readonly EXIT_RESTORE=60   # --restore: the backup could not be read or restored
 
 readonly STATE_DIR="/var/lib/kwerft"
 VALUES_DIR="$STATE_DIR/values"            # Helm values the installer writes; not readonly so tests can point it elsewhere
@@ -79,6 +86,17 @@ FIREWALL_STATE_DIR="$STATE_DIR/firewall"  # the node agent's state (internal/fir
 HCLOUD_TOKEN_SUM_FILE="$STATE_DIR/hcloud-token.sha256"  # likewise; tells a changed Cloud API token from the same one
 HCLOUD_TMP_DIR="$STATE_DIR"               # likewise; short-lived copies of the Cloud API token (0700)
 K3S_CONFIG_FILE="/etc/rancher/k3s/config.yaml"  # likewise
+K3S_ETCD_CONFIG_FILE="/etc/rancher/k3s/config.yaml.d/50-kwerft-etcd-snapshots.yaml"  # likewise
+readonly ETCD_MARKER="# Managed by Kwerft installer (etcd snapshots)."
+readonly ETCD_S3_SECRET="kwerft-etcd-s3"  # kube-system; the console keeps it from Settings › Backups
+readonly ETCD_SNAPSHOT_SCHEDULE_DEFAULT="0 */6 * * *"
+readonly ETCD_SNAPSHOT_RETENTION_DEFAULT=28
+readonly VELERO_NS="velero"
+readonly BSL_NAME="kwerft"                # the BackupStorageLocation the console keeps
+readonly CONSOLE_UID=65532                # the chart's podSecurityContext.runAsUser
+RESTORE_TIMEOUT=${KWERFT_RESTORE_TIMEOUT:-14400}          # seconds a restore may take (volume data)
+RESTORE_SYNC_TIMEOUT=${KWERFT_RESTORE_SYNC_TIMEOUT:-600}  # seconds until Velero has read the bucket
+RESTORE_POLL=${KWERFT_RESTORE_POLL:-10}                   # seconds between status checks; tests set 0
 
 # Options (flags override KWERFT_* environment variables).
 DOMAIN="${KWERFT_DOMAIN:-}"
@@ -115,6 +133,9 @@ AGENT=0                 # --agent (MODE becomes agent unless --uninstall or --re
 AWAIT_CLOUD_TOKEN=0     # --await-cloud-token (agent mode): Cloud Volumes once the console hands over its token
 CLOUD_TOKEN_WAIT=${KWERFT_CLOUD_TOKEN_WAIT:-300}   # seconds --await-cloud-token waits
 LITE=0
+RESTORE_FROM="${KWERFT_RESTORE:-}"  # --restore latest|<backup>
+BACKUP_ENDPOINT="" BACKUP_REGION="" BACKUP_BUCKET="" BACKUP_PREFIX=""   # --config backups.*
+BACKUP_ACCESS_KEY_FILE="" BACKUP_SECRET_KEY_FILE="" BACKUP_RECOVERY_KEY_FILE=""
 
 # Discovered facts.
 PUBLIC_IP=""
@@ -191,6 +212,13 @@ Development:
   --image-archive FILE   Import FILE (docker/OCI tarball) into k3s first; needs --image.
                          hack/dev-server.sh uses both to test unreleased builds
 
+Restore onto a new server (docs: Backups):
+  --restore B            Restore the console and every project from a backup: "latest"
+                         (the newest complete cluster backup) or a backup's name. Needs
+                         --config with a backups block (endpoint, region, bucket, prefix,
+                         accessKeyFile, secretKeyFile, recoveryKeyFile). The console
+                         hostname comes from the backup unless --domain is given
+
 Maintenance:
   --reset-firewall       Remove Kwerft's host firewall and pause the console's
                          firewall rules on this server (rescue)
@@ -202,7 +230,7 @@ General:
   --help, -h             Show this help
 
 Every option can also be set as KWERFT_<NAME> in the environment, e.g. KWERFT_DOMAIN.
-Exit codes: 0 ok · 2 usage · 10 preflight · 20 network/DNS · 30 Kubernetes · 40 platform · 50 Kwerft
+Exit codes: 0 ok · 2 usage · 10 preflight · 20 network/DNS · 30 Kubernetes · 40 platform · 50 Kwerft · 60 restore
 EOF
 }
 
@@ -254,6 +282,7 @@ parse_args() {
       --image)          need_arg "$@"; IMAGE=$2; shift 2 ;;
       --image-archive)  need_arg "$@"; IMAGE_ARCHIVE=$2; shift 2 ;;
       --lite)           LITE=1; shift ;;
+      --restore)        need_arg "$@"; RESTORE_FROM=$2; shift 2 ;;
       --harden-ssh)     HARDEN_SSH=1; shift ;;
       --reset-firewall) MODE="reset-firewall"; shift ;;
       --uninstall)      MODE="uninstall"; shift ;;
@@ -354,6 +383,7 @@ parse_args() {
   if [[ "$HCLOUD_CCM" == "true" && -z "$HCLOUD_TOKEN_FILE" ]]; then
     die $EXIT_USAGE "hcloud.cloudControllerManager in $CONFIG_FILE needs hcloud.tokenFile: the cloud-controller-manager works with the Cloud API"
   fi
+  parse_restore_args
   return 0
 }
 
@@ -419,6 +449,64 @@ valid_cluster_token() {
 cluster_of_token() {
   local rest=${1#kwag_}
   printf '%s' "${rest%%_*}"
+}
+
+# parse_restore_args checks --restore and reads the backups block of --config:
+#   backups:
+#     endpoint: https://fsn1.your-objectstorage.com
+#     region: fsn1                      # default: from a Hetzner endpoint, else us-east-1
+#     bucket: acme-kwerft
+#     prefix: ops.example.com           # default: --domain
+#     accessKeyFile: /root/s3.access
+#     secretKeyFile: /root/s3.secret
+#     recoveryKeyFile: /root/kwerft-recovery.key
+parse_restore_args() {
+  [[ -n "$RESTORE_FROM" ]] || return 0
+  [[ "$MODE" == "install" ]] || die $EXIT_USAGE "--restore rebuilds a console on a new server; it does not combine with --agent, --join, --uninstall or --reset-firewall"
+  (( LITE )) && die $EXIT_USAGE "--restore needs Velero, which --lite leaves out"
+  [[ "$RESTORE_FROM" == "latest" || ( ${#RESTORE_FROM} -le 253 && "$RESTORE_FROM" =~ ^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$ ) ]] \
+    || die $EXIT_USAGE "--restore takes latest or a backup's name, got '$RESTORE_FROM'"
+  [[ -n "$CONFIG_FILE" ]] || die $EXIT_USAGE "--restore needs --config with a backups block (endpoint, region, bucket, prefix, accessKeyFile, secretKeyFile, recoveryKeyFile)"
+  BACKUP_ENDPOINT=$(config_get_in backups endpoint)
+  BACKUP_REGION=$(config_get_in backups region)
+  BACKUP_BUCKET=$(config_get_in backups bucket)
+  BACKUP_PREFIX=$(config_get_in backups prefix)
+  BACKUP_ACCESS_KEY_FILE=$(config_get_in backups accessKeyFile)
+  BACKUP_SECRET_KEY_FILE=$(config_get_in backups secretKeyFile)
+  BACKUP_RECOVERY_KEY_FILE=$(config_get_in backups recoveryKeyFile)
+  BACKUP_ENDPOINT=${BACKUP_ENDPOINT%/}
+  [[ "$BACKUP_ENDPOINT" =~ ^https://[A-Za-z0-9.-]+(:[0-9]+)?$ ]] \
+    || die $EXIT_USAGE "backups.endpoint in $CONFIG_FILE must look like https://fsn1.your-objectstorage.com, got '$BACKUP_ENDPOINT'"
+  [[ "$BACKUP_BUCKET" =~ ^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$ ]] \
+    || die $EXIT_USAGE "backups.bucket in $CONFIG_FILE must be a bucket name, got '$BACKUP_BUCKET'"
+  if [[ -z "$BACKUP_REGION" ]]; then
+    local host=${BACKUP_ENDPOINT#https://}
+    host=${host%%:*}
+    if [[ "$host" == *.your-objectstorage.com ]]; then BACKUP_REGION=${host%%.*}; else BACKUP_REGION=us-east-1; fi
+  fi
+  [[ "$BACKUP_REGION" =~ ^[a-z0-9-]+$ ]] || die $EXIT_USAGE "backups.region in $CONFIG_FILE must look like fsn1, got '$BACKUP_REGION'"
+  BACKUP_PREFIX=${BACKUP_PREFIX#/}
+  BACKUP_PREFIX=${BACKUP_PREFIX%/}
+  [[ -n "$BACKUP_PREFIX" ]] || BACKUP_PREFIX=$DOMAIN
+  [[ -n "$BACKUP_PREFIX" ]] \
+    || die $EXIT_USAGE "backups.prefix in $CONFIG_FILE is needed: the folder in the bucket, by default the console's hostname (Settings › Backups shows it)"
+  [[ ${#BACKUP_PREFIX} -le 200 && "$BACKUP_PREFIX" =~ ^[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)*$ && "/$BACKUP_PREFIX/" != */../* ]] \
+    || die $EXIT_USAGE "backups.prefix in $CONFIG_FILE must be a folder like ops.example.com, got '$BACKUP_PREFIX'"
+  local key f
+  for key in accessKeyFile secretKeyFile recoveryKeyFile; do
+    f=$(config_get_in backups "$key")
+    [[ -n "$f" && -r "$f" ]] || die $EXIT_USAGE "backups.$key in $CONFIG_FILE not readable: '$f'"
+  done
+  [[ "$(recovery_key <"$BACKUP_RECOVERY_KEY_FILE")" =~ ^[A-Z2-7]{52}$ ]] \
+    || die $EXIT_USAGE "backups.recoveryKeyFile ($BACKUP_RECOVERY_KEY_FILE) does not hold a recovery key: 52 characters A-Z and 2-7, as the console showed it"
+  return 0
+}
+
+# recovery_key turns a recovery key as the console shows it (groups of four
+# base32 characters) into the Kopia repository password Velero uses: upper
+# case, without spaces, dashes or line breaks. Reads stdin.
+recovery_key() {
+  tr -d '[:space:]-' | tr '[:lower:]' '[:upper:]'
 }
 
 # ---------------------------------------------------------------------------
@@ -805,6 +893,7 @@ nodes_initialized() {
 stage_kubernetes() {
   write_k3s_config
   write_registry_mirror >/dev/null   # before k3s first starts: no restart needed
+  write_etcd_snapshot_config "$ETCD_SNAPSHOT_SCHEDULE_DEFAULT" "$ETCD_SNAPSHOT_RETENTION_DEFAULT" >/dev/null   # likewise
   curl -fsSL https://get.k3s.io \
     | INSTALL_K3S_VERSION="$K3S_VERSION" INSTALL_K3S_SKIP_ENABLE=false sh -s - server >>"$LOG_FILE" 2>&1 \
     || die $EXIT_K8S "k3s installation failed"
@@ -857,14 +946,15 @@ write_registry_mirror() {
   echo changed
 }
 
-# restart_k3s applies a changed registries.yaml. Restarting k3s leaves running
-# containers alone (the unit's KillMode=process); the API is back in seconds.
-# Prints the unit it restarted, nothing when k3s is not running yet.
+# restart_k3s [file] applies a changed registries.yaml (or the file named).
+# Restarting k3s leaves running containers alone (the unit's
+# KillMode=process); the API is back in seconds. Prints the unit it
+# restarted, nothing when k3s is not running yet.
 restart_k3s() {
-  local unit
+  local unit changed=${1:-$REGISTRIES_FILE}
   for unit in k3s k3s-agent; do
     systemctl is-active --quiet "$unit" || continue
-    systemctl restart "$unit" >>"$LOG_FILE" 2>&1 || die $EXIT_K8S "Could not restart $unit to apply $REGISTRIES_FILE"
+    systemctl restart "$unit" >>"$LOG_FILE" 2>&1 || die $EXIT_K8S "Could not restart $unit to apply $changed"
     if [[ "$unit" == "k3s" ]]; then
       retry 60 2 kc get --raw /readyz >/dev/null 2>&1 || die $EXIT_K8S "Kubernetes API did not come back after restarting k3s"
     fi
@@ -1556,6 +1646,473 @@ EOF
 }
 
 # ---------------------------------------------------------------------------
+# Stage: backups (docs/phase6.md)
+# k3s's own etcd snapshots, locally and to the backup bucket, and Velero for
+# backups of projects and of the console itself: file-system volume backups
+# with Kopia (encrypted with the recovery key), S3-compatible storage through
+# the AWS plugin. Velero starts without a BackupStorageLocation: the console
+# creates it from Settings › Backups. --lite leaves Velero out.
+# ---------------------------------------------------------------------------
+stage_backups() {
+  local etcd
+  etcd=$(ensure_etcd_snapshots)
+  if (( LITE )); then
+    echo "Velero off (--lite) · $etcd"
+    return 0
+  fi
+  install_velero
+  echo "Velero $VELERO_VERSION · volume backups with Kopia · $etcd"
+}
+
+# etcd_snapshot_config <schedule> <retention> prints the k3s config drop-in.
+# k3s reads Secret kube-system/kwerft-etcd-s3 (etcd-s3-config-secret) at
+# every snapshot, not when it starts: while the Secret is missing (no backup
+# target in Settings yet) k3s logs a warning and goes on taking and pruning
+# local snapshots; once the console writes it, the next snapshot goes to the
+# bucket as well, without a restart. No other etcd-s3-* option may be set,
+# or k3s ignores the Secret. The schedule is read when k3s starts.
+etcd_snapshot_config() {
+  cat <<EOF
+$ETCD_MARKER
+# k3s reads this file when it starts; the installer restarts k3s when it changes.
+etcd-snapshot-schedule-cron: "$1"
+etcd-snapshot-retention: $2
+etcd-snapshot-compress: true
+etcd-s3: true
+etcd-s3-config-secret: $ETCD_S3_SECRET
+EOF
+}
+
+# write_etcd_snapshot_config <schedule> <retention> brings the drop-in up to
+# date and prints "changed", "unchanged", or "none" where k3s runs no
+# embedded etcd of Kwerft's making (only the first server has cluster-init).
+write_etcd_snapshot_config() {
+  grep -qx 'cluster-init: true' "$K3S_CONFIG_FILE" 2>/dev/null || { echo none; return 0; }
+  local want
+  want=$(etcd_snapshot_config "$1" "$2")
+  if [[ -f "$K3S_ETCD_CONFIG_FILE" && "$(<"$K3S_ETCD_CONFIG_FILE")" == "$want" ]]; then echo unchanged; return 0; fi
+  mkdir -p "$(dirname "$K3S_ETCD_CONFIG_FILE")"
+  (umask 077; printf '%s\n' "$want" >"$K3S_ETCD_CONFIG_FILE.kwerft-new")
+  mv -f "$K3S_ETCD_CONFIG_FILE.kwerft-new" "$K3S_ETCD_CONFIG_FILE"
+  echo changed
+}
+
+# valid_cron: five cron fields (or a descriptor such as @daily), nothing
+# YAML or k3s would read differently.
+valid_cron() {
+  [[ "$1" =~ ^@(yearly|annually|monthly|weekly|daily|midnight|hourly)$ \
+    || "$1" =~ ^[0-9A-Za-z*/,?-]+( [0-9A-Za-z*/,?-]+){4}$ ]]
+}
+
+# etcd_snapshot_settings prints "<schedule>|<retention>": Settings ›
+# Backups (ConsoleSettings spec.backups.etcdSnapshots), else the defaults.
+etcd_snapshot_settings() {
+  local schedule retention
+  schedule=$(cluster_setting '{.spec.backups.etcdSnapshots.schedule}')
+  retention=$(cluster_setting '{.spec.backups.etcdSnapshots.retention}')
+  if [[ -n "$schedule" ]] && ! valid_cron "$schedule"; then
+    warn "The etcd snapshot schedule '$schedule' (Settings › Backups) is not a cron schedule; using '$ETCD_SNAPSHOT_SCHEDULE_DEFAULT'."
+    schedule=""
+  fi
+  if [[ -n "$retention" ]] && { [[ ! "$retention" =~ ^[1-9][0-9]{0,2}$ ]] || (( retention > 500 )); }; then
+    warn "The etcd snapshot retention '$retention' (Settings › Backups) is not between 1 and 500; keeping $ETCD_SNAPSHOT_RETENTION_DEFAULT."
+    retention=""
+  fi
+  printf '%s|%s\n' "${schedule:-$ETCD_SNAPSHOT_SCHEDULE_DEFAULT}" "${retention:-$ETCD_SNAPSHOT_RETENTION_DEFAULT}"
+}
+
+# ensure_etcd_snapshots writes the drop-in and restarts k3s when it changed
+# (a schedule changed in Settings takes effect with the next run). Prints the
+# summary's part.
+ensure_etcd_snapshots() {
+  local settings schedule retention state restarted=""
+  settings=$(etcd_snapshot_settings)
+  schedule=${settings%|*}
+  retention=${settings##*|}
+  state=$(write_etcd_snapshot_config "$schedule" "$retention")
+  case "$state" in
+    none) echo "etcd snapshots as k3s has them (no embedded etcd set up by Kwerft)"; return 0 ;;
+    changed) restarted=$(restart_k3s "$K3S_ETCD_CONFIG_FILE") ;;
+  esac
+  echo "etcd snapshots ($schedule, $retention kept)${restarted:+ · $restarted restarted}"
+}
+
+# velero_values: no BackupStorageLocation, VolumeSnapshotLocation or cloud
+# credentials (the console's location carries its own), the node agent on
+# every node (build pools are tainted) for file-system backups, and modest
+# requests for small servers.
+velero_values() {
+  cat <<EOF
+image:
+  repository: docker.io/velero/velero
+  tag: $VELERO_VERSION
+initContainers:
+  - name: velero-plugin-for-aws
+    image: docker.io/velero/velero-plugin-for-aws:$VELERO_PLUGIN_AWS_VERSION
+    imagePullPolicy: IfNotPresent
+    volumeMounts:
+      - mountPath: /target
+        name: plugins
+resources:
+  requests: {cpu: 50m, memory: 128Mi}
+  limits: {memory: 512Mi}
+upgradeJobResources:
+  requests: {cpu: 50m, memory: 64Mi}
+  limits: {memory: 256Mi}
+credentials:
+  useSecret: false
+snapshotsEnabled: false
+deployNodeAgent: true
+nodeAgent:
+  resources:
+    requests: {cpu: 50m, memory: 128Mi}
+    limits: {memory: 1Gi}
+  tolerations:
+    - operator: Exists
+configuration:
+  uploaderType: kopia
+  defaultVolumesToFsBackup: true
+  defaultBackupStorageLocation: $BSL_NAME
+  backupStorageLocation: []
+  volumeSnapshotLocation: []
+  repositoryMaintenanceJob:
+    repositoryConfigData:
+      name: velero-repo-maintenance
+      global:
+        keepLatestMaintenanceJobs: 3
+        podResources:
+          cpuRequest: 50m
+          memoryRequest: 128Mi
+          memoryLimit: 1Gi
+EOF
+}
+
+install_velero() {
+  mkdir -p "$VALUES_DIR"
+  velero_values >"$VALUES_DIR/velero.yaml"
+  helmk repo add vmware-tanzu https://vmware-tanzu.github.io/helm-charts --force-update >>"$LOG_FILE" 2>&1
+  helmk upgrade --install velero vmware-tanzu/velero --version "$VELERO_CHART_VERSION" \
+    --namespace "$VELERO_NS" --create-namespace --wait --timeout 10m \
+    -f "$VALUES_DIR/velero.yaml" \
+    >>"$LOG_FILE" 2>&1 || die $EXIT_PLATFORM "Velero installation failed"
+}
+
+# ---------------------------------------------------------------------------
+# Stage: Restore (--restore; docs/phase6.md › Full restore onto a new server)
+# The stages before have built an empty cluster with Velero. This one points
+# Velero at the bucket (read-only while it restores), restores a Cluster
+# backup — every project, kwerft-system with the console's database volume,
+# data key, tokens and certificates, kwerft-builds, the cluster-wide
+# kwerft.dev objects — and marks the database for the console to swap in
+# the backup hook's consistent copy. The Kwerft stage then upgrades the
+# restored Helm release in place.
+# ---------------------------------------------------------------------------
+# Never restored: what the stages before have just set up, and what only
+# makes sense on the server it was taken on.
+readonly RESTORE_EXCLUDED_NAMESPACES="kube-system kube-public kube-node-lease velero cert-manager traefik kwerft-observability"
+readonly RESTORE_EXCLUDED_RESOURCES="nodes events events.events.k8s.io leases.coordination.k8s.io endpoints endpointslices.discovery.k8s.io jobs.batch customresourcedefinitions.apiextensions.k8s.io storageclasses.storage.k8s.io csidrivers.storage.k8s.io csinodes.storage.k8s.io volumeattachments.storage.k8s.io apiservices.apiregistration.k8s.io mutatingwebhookconfigurations.admissionregistration.k8s.io validatingwebhookconfigurations.admissionregistration.k8s.io ciliumendpoints.cilium.io ciliumendpointslices.cilium.io ciliumidentities.cilium.io ciliumnodes.cilium.io certificaterequests.cert-manager.io orders.acme.cert-manager.io challenges.acme.cert-manager.io"
+# Restored with their status: kinds whose empty status would start work
+# again (a build, a one-off task, an upgrade, a project restore).
+readonly RESTORE_WITH_STATUS="builds.kwerft.dev tasks.kwerft.dev upgrades.kwerft.dev restores.kwerft.dev"
+
+stage_restore() {
+  apply_kwerft_crds
+  write_restore_secrets
+  restore_bsl ReadOnly | kc apply -f - >>"$LOG_FILE" 2>&1 \
+    || die $EXIT_RESTORE "Could not create the backup storage location $BSL_NAME in namespace $VELERO_NS"
+  wait_backup_sync
+  local backup name phase items
+  backup=$(pick_backup)
+  name=$(restore_name "$backup")
+  start_restore "$backup" "$name"
+  phase=$(wait_restore "$name")
+  fix_restored_objects
+  mark_database_restore "$backup"
+  # From now on the console keeps the location (Settings › Backups) and
+  # backs up into the same folder.
+  kc -n "$VELERO_NS" patch backupstoragelocations.velero.io "$BSL_NAME" --type merge -p '{"spec":{"accessMode":"ReadWrite"}}' \
+    >>"$LOG_FILE" 2>&1 || die $EXIT_RESTORE "Could not open the backup storage location $BSL_NAME for new backups"
+  items=$(restore_field "$name" '{.status.progress.itemsRestored}')
+  echo "backup $backup · ${items:-all} objects$([[ "$phase" == PartiallyFailed ]] && echo ' (with errors, see above)') · console database from the backup"
+}
+
+# apply_kwerft_crds: the restored kwerft.dev objects need their CRDs, which
+# the Kwerft stage would apply only after the restore.
+apply_kwerft_crds() {
+  local ref version_args=()
+  ref=$(chart_ref)
+  [[ "$ref" == oci://* ]] && version_args=(--version "$KWERFT_VERSION")
+  helmk show crds "$ref" ${version_args[@]+"${version_args[@]}"} 2>>"$LOG_FILE" \
+    | kc apply --server-side --force-conflicts -f - >>"$LOG_FILE" 2>&1 \
+    || die $EXIT_KWERFT "Kwerft CRDs failed to apply (chart: $ref)"
+}
+
+# write_restore_secrets writes, as the console does from Settings ›
+# Backups: velero/velero-repo-credentials (repository-password: the
+# recovery key, the Kopia repository's password) and
+# velero/kwerft-bsl-credentials (cloud: an AWS credentials file with the
+# access keys). The keys pass through a 0700 directory, never arguments or
+# the log.
+write_restore_secrets() {
+  local tmp ok=1
+  tmp=$(mktemp -d "$HCLOUD_TMP_DIR/restore.XXXXXX")
+  printf '[default]\naws_access_key_id=%s\naws_secret_access_key=%s\n' \
+    "$(tr -d '[:space:]' <"$BACKUP_ACCESS_KEY_FILE")" "$(tr -d '[:space:]' <"$BACKUP_SECRET_KEY_FILE")" >"$tmp/cloud"
+  recovery_key <"$BACKUP_RECOVERY_KEY_FILE" >"$tmp/password"
+  kc -n "$VELERO_NS" create secret generic velero-repo-credentials --from-file=repository-password="$tmp/password" \
+    --dry-run=client -o yaml | kc apply -f - >>"$LOG_FILE" 2>&1 || ok=0
+  if (( ok )); then
+    kc -n "$VELERO_NS" create secret generic kwerft-bsl-credentials --from-file=cloud="$tmp/cloud" \
+      --dry-run=client -o yaml | kc apply -f - >>"$LOG_FILE" 2>&1 || ok=0
+  fi
+  rm -rf "$tmp"
+  (( ok )) || die $EXIT_RESTORE "Could not store the backup credentials in namespace $VELERO_NS"
+}
+
+# restore_bsl <accessMode> prints the BackupStorageLocation "kwerft" for the
+# bucket in --config, as the console keeps it: <prefix>/velero.
+restore_bsl() {
+  cat <<EOF
+apiVersion: velero.io/v1
+kind: BackupStorageLocation
+metadata:
+  name: $BSL_NAME
+  namespace: $VELERO_NS
+spec:
+  provider: aws
+  default: true
+  accessMode: $1
+  objectStorage:
+    bucket: "$BACKUP_BUCKET"
+    prefix: "$BACKUP_PREFIX/velero"
+  credential:
+    name: kwerft-bsl-credentials
+    key: cloud
+  config:
+    region: "$BACKUP_REGION"
+    s3Url: "$BACKUP_ENDPOINT"
+    s3ForcePathStyle: "true"
+    checksumAlgorithm: ""
+EOF
+}
+
+bsl_field() {
+  kc -n "$VELERO_NS" get backupstoragelocations.velero.io "$BSL_NAME" -o jsonpath="$1" 2>/dev/null || true
+}
+
+restore_field() {
+  kc -n "$VELERO_NS" get restores.velero.io "$1" -o jsonpath="$2" 2>/dev/null || true
+}
+
+bucket_url() {
+  printf 's3://%s/%s/velero at %s' "$BACKUP_BUCKET" "$BACKUP_PREFIX" "$BACKUP_ENDPOINT"
+}
+
+# wait_backup_sync waits until Velero reaches the bucket (the location is
+# Available) and has listed its backups once (lastSyncedTime).
+wait_backup_sync() {
+  local waited=0 step phase synced message
+  step=$(( RESTORE_POLL > 0 ? RESTORE_POLL : 1 ))
+  while :; do
+    phase=$(bsl_field '{.status.phase}')
+    synced=$(bsl_field '{.status.lastSyncedTime}')
+    if [[ "$phase" == Available && -n "$synced" ]]; then return 0; fi
+    (( waited < RESTORE_SYNC_TIMEOUT )) || break
+    sleep "$RESTORE_POLL"
+    waited=$((waited + step))
+  done
+  if [[ "$phase" == Available ]]; then
+    die $EXIT_RESTORE "Velero reached $(bucket_url) but has not listed its backups within $((RESTORE_SYNC_TIMEOUT / 60)) min; re-run to wait longer."
+  fi
+  message=$(bsl_field '{.status.message}')
+  die $EXIT_RESTORE "Cannot read the backups in $(bucket_url): ${message:-the location is ${phase:-not checked yet}}." \
+    "Check backups.endpoint, region, bucket, prefix and the access keys in $CONFIG_FILE."
+}
+
+# pick_backup prints the backup to restore: the one named by --restore, or
+# the newest Completed backup labelled kwerft.dev/backup-scope=Cluster.
+pick_backup() {
+  local list backup phase scope count
+  if [[ "$RESTORE_FROM" != latest ]]; then
+    phase=$(kc -n "$VELERO_NS" get backups.velero.io "$RESTORE_FROM" -o jsonpath='{.status.phase}' 2>/dev/null) \
+      || die $EXIT_RESTORE "There is no backup named $RESTORE_FROM in $(bucket_url)."
+    scope=$(kc -n "$VELERO_NS" get backups.velero.io "$RESTORE_FROM" -o jsonpath='{.metadata.labels.kwerft\.dev/backup-scope}' 2>/dev/null || true)
+    [[ "$scope" == Cluster ]] \
+      || die $EXIT_RESTORE "Backup $RESTORE_FROM is not a backup of the whole cluster (scope: ${scope:-none}); --restore needs a Cluster backup."
+    case "$phase" in
+      Completed) ;;
+      PartiallyFailed) warn "Backup $RESTORE_FROM is incomplete (some objects or volumes failed); restoring what it holds." ;;
+      *) die $EXIT_RESTORE "Backup $RESTORE_FROM did not complete (${phase:-no status}); name another one or use --restore latest." ;;
+    esac
+    echo "$RESTORE_FROM"
+    return 0
+  fi
+  list=$(kc -n "$VELERO_NS" get backups.velero.io -l kwerft.dev/backup-scope=Cluster \
+    -o jsonpath='{range .items[?(@.status.phase=="Completed")]}{.status.completionTimestamp}{" "}{.metadata.name}{"\n"}{end}' 2>/dev/null || true)
+  backup=$(sort <<<"$list" | awk 'NF == 2 {name = $2} END {print name}')
+  if [[ -z "$backup" ]]; then
+    count=$(kc -n "$VELERO_NS" get backups.velero.io -o name 2>/dev/null | grep -c . || true)
+    die $EXIT_RESTORE "There is no complete Cluster backup in $(bucket_url) (${count:-0} backups of any kind there)." \
+      "Check backups.prefix, or name a backup with --restore <name>."
+  fi
+  echo "$backup"
+}
+
+# restore_name: one Velero Restore per backup, so a re-run after a failure
+# waits for the same restore instead of starting another.
+restore_name() {
+  printf 'restore-%s' "$1" | cut -c1-253
+}
+
+# yaml_list "a b" prints ["a", "b"].
+yaml_list() {
+  local items=() item out=""
+  read -r -a items <<<"$1"
+  for item in "${items[@]}"; do out+="\"$item\", "; done
+  printf '[%s]' "${out%, }"
+}
+
+# restore_manifest <backup> <name>: everything in the backup except
+# RESTORE_EXCLUDED_*; an object that exists already (the platform the
+# stages before set up) is never overwritten.
+restore_manifest() {
+  cat <<EOF
+apiVersion: velero.io/v1
+kind: Restore
+metadata:
+  name: $2
+  namespace: $VELERO_NS
+  labels:
+    app.kubernetes.io/managed-by: kwerft
+    kwerft.dev/restore: installer
+spec:
+  backupName: $1
+  includedNamespaces: ["*"]
+  excludedNamespaces: $(yaml_list "$RESTORE_EXCLUDED_NAMESPACES")
+  excludedResources: $(yaml_list "$RESTORE_EXCLUDED_RESOURCES")
+  includeClusterResources: true
+  existingResourcePolicy: none
+  restorePVs: true
+  restoreStatus:
+    includedResources: $(yaml_list "$RESTORE_WITH_STATUS")
+EOF
+}
+
+start_restore() {
+  if kc -n "$VELERO_NS" get restores.velero.io "$2" >/dev/null 2>&1; then
+    log "Restore $2 exists already; waiting for it"
+    return 0
+  fi
+  restore_manifest "$1" "$2" | kc create -f - >>"$LOG_FILE" 2>&1 \
+    || die $EXIT_RESTORE "Could not start restoring backup $1"
+}
+
+# wait_restore <name> waits for the restore to end and prints its phase.
+# Volume data can take a while: a line on stderr every minute shows that
+# it moves.
+wait_restore() {
+  local name=$1 waited=0 said=0 step phase done_items total
+  step=$(( RESTORE_POLL > 0 ? RESTORE_POLL : 1 ))
+  while :; do
+    phase=$(restore_field "$name" '{.status.phase}')
+    case "$phase" in Completed|PartiallyFailed|Failed|FailedValidation) break ;; esac
+    restore_cloud_volumes
+    (( waited < RESTORE_TIMEOUT )) \
+      || die $EXIT_RESTORE "The restore $name did not finish within $((RESTORE_TIMEOUT / 60)) min (${phase:-New}). Follow it with: kubectl -n $VELERO_NS get restore $name -o yaml"
+    if (( waited - said >= 60 )); then
+      done_items=$(restore_field "$name" '{.status.progress.itemsRestored}')
+      total=$(restore_field "$name" '{.status.progress.totalItems}')
+      printf '  %s… restoring: %s of %s objects, %d min%s\n' "$C_DIM" "${done_items:-0}" "${total:-?}" $((waited / 60)) "$C_0" >&2
+      log "Restore $name: $phase ${done_items:-0}/${total:-?}"
+      said=$waited
+    fi
+    sleep "$RESTORE_POLL"
+    waited=$((waited + step))
+  done
+  case "$phase" in
+    Failed)
+      die $EXIT_RESTORE "Restoring backup into $name failed: $(restore_field "$name" '{.status.failureReason}')." \
+        "Details: kubectl -n $VELERO_NS get restore $name -o yaml; delete that restore to try again." ;;
+    FailedValidation)
+      die $EXIT_RESTORE "Velero refused the restore $name: $(restore_field "$name" '{.status.validationErrors}')." ;;
+    PartiallyFailed)
+      warn "The restore finished with $(restore_field "$name" '{.status.errors}') errors: some objects or volumes did not come back." \
+        "Details: kubectl -n $VELERO_NS get restore $name -o yaml; kubectl -n $VELERO_NS get podvolumerestores -l velero.io/restore-name=$name" ;;
+  esac
+  echo "$phase"
+}
+
+# restore_cloud_volumes: Cloud Volumes in the backup need the CSI driver,
+# which the Hetzner Cloud stage installs only with a Cloud API token.
+# Without hcloud.tokenFile in --config the token comes back with
+# kwerft-system during the restore; once it is there, install the driver so
+# those volumes can be created.
+restore_cloud_volumes() {
+  [[ "$PLATFORM" == cloud ]] || return 0
+  helmk -n kube-system status hcloud-csi >/dev/null 2>&1 && return 0
+  [[ -n "$(stored_hcloud_token)" ]] || return 0
+  log "Restore: the Cloud API token is back; installing the CSI driver for Cloud Volumes"
+  stage_hcloud >>"$LOG_FILE"
+}
+
+# fix_restored_objects prepares what Velero brought back for the Kwerft
+# stage's Helm upgrade (Helm adopts the restored objects: their Helm labels,
+# annotations and release history came back with them):
+#  - Velero gives restored Services new cluster IPs. The registry's Service
+#    has a fixed one (chart: registry.clusterIP) that cannot change in
+#    place, so it goes and the chart creates it again.
+#  - A Helm operation in flight when the backup was taken left a pending
+#    revision, and Helm refuses to upgrade a pending release: it goes, and
+#    the last deployed revision is the current one again.
+fix_restored_objects() {
+  local ip
+  ip=$(kc -n kwerft-system get service kwerft-registry -o jsonpath='{.spec.clusterIP}' 2>/dev/null || true)
+  if [[ -n "$ip" && "$ip" != "$REGISTRY_CLUSTER_IP" ]]; then
+    kc -n kwerft-system delete service kwerft-registry >>"$LOG_FILE" 2>&1 \
+      || die $EXIT_RESTORE "Could not remove the restored registry Service (it needs its fixed address $REGISTRY_CLUSTER_IP)"
+  fi
+  kc -n kwerft-system delete secret -l 'owner=helm,name=kwerft,status in (pending-install,pending-upgrade,pending-rollback)' \
+    --ignore-not-found >>"$LOG_FILE" 2>&1 || true
+}
+
+# mark_database_restore leaves the marker backup/RESTORE in the restored
+# database volume: the console, on its next start, replaces the volume's
+# live database files (copied while it was writing them) with the
+# consistent copy the backup hook made (cmd/kwerft/dbsnapshot.go). The
+# console is stopped meanwhile, and the volume is handed to the console's
+# user, in case the file-system restore brought files back as root.
+mark_database_restore() {
+  local backup=$1 pv dir
+  pv=$(kc -n kwerft-system get pvc kwerft-data -o jsonpath='{.spec.volumeName}' 2>/dev/null || true)
+  [[ -n "$pv" ]] \
+    || die $EXIT_RESTORE "Backup $backup holds no console database volume (kwerft-system/kwerft-data); it is not a backup of a Kwerft console."
+  dir=$(kc get pv "$pv" -o jsonpath='{.spec.hostPath.path}{.spec.local.path}' 2>/dev/null || true)
+  [[ -n "$dir" && -d "$dir" ]] \
+    || die $EXIT_RESTORE "The console's database volume $pv is not a directory on this server (${dir:-no local path}); --restore needs it on local storage (the default, local-path)."
+  [[ -s "$dir/backup/kwerft.db" ]] \
+    || die $EXIT_RESTORE "Backup $backup has no copy of the console's database (backup/kwerft.db): its backup hook did not run. Name a newer backup."
+  kc -n kwerft-system scale deployment kwerft --replicas=0 >>"$LOG_FILE" 2>&1 \
+    || die $EXIT_RESTORE "Could not stop the restored console to swap in its database"
+  retry 90 2 console_stopped || die $EXIT_RESTORE "The restored console did not stop within 3 min"
+  printf 'restored from backup %s at %s\n' "$backup" "$(date -u +%FT%TZ)" >"$dir/backup/RESTORE"
+  chown -R "$CONSOLE_UID:$CONSOLE_UID" "$dir"
+  kc -n kwerft-system scale deployment kwerft --replicas=1 >>"$LOG_FILE" 2>&1 \
+    || die $EXIT_RESTORE "Could not start the restored console"
+}
+
+console_stopped() {
+  local pods
+  pods=$(kc -n kwerft-system get pods -l app.kubernetes.io/name=kwerft,app.kubernetes.io/instance=kwerft -o name 2>/dev/null) || return 1
+  [[ -z "$pods" ]]
+}
+
+# restore_refused: --restore is for a new server. A server whose Kwerft
+# came from a restore may run the same command again (it resumes).
+restore_refused() {
+  ! stage_done restore && { stage_done kwerft || stage_done handoff || stage_done kwerft-agent; }
+}
+
+# ---------------------------------------------------------------------------
 # Stage: Kwerft
 # ---------------------------------------------------------------------------
 chart_ref() {
@@ -1852,6 +2409,8 @@ stage_handoff() {
       state="token ready" ;;
     config)
       state="owner from config" ;;
+    restored)
+      state="accounts from the backup" ;;
   esac
   echo "DNS ${resolved:-unresolved} · $state"
 }
@@ -1862,7 +2421,9 @@ stage_handoff() {
 #   pending   a valid token is waiting to be used
 #   expired   the token ran out before setup was done
 #   complete  Kwerft consumed the token (it deletes the Secret once the owner exists)
+#   restored  --restore: the users came back with the console's database
 setup_token_state() {
+  if [[ -n "$RESTORE_FROM" ]]; then echo restored; return; fi
   if [[ -n "$CONFIG_FILE" ]]; then echo config; return; fi
   # The console knows best: once an owner exists, setup is over for good —
   # even if the token file and Secret are gone (a re-run after a re-run).
@@ -1906,7 +2467,15 @@ create_setup_token() {
 print_summary() {
   local secs=$(( $(date +%s) - START_TS ))
   echo
-  if [[ -n "$CONFIG_FILE" ]]; then
+  if [[ -n "$RESTORE_FROM" ]]; then
+    printf '  Open        %shttps://%s%s\n' "$C_ACC" "$DOMAIN" "$C_0"
+    printf '  Sign in with your accounts: users, settings and projects came back from the backup\n'
+    if [[ "$(cluster_setting '{.spec.dns.manageRecords}')" == "true" ]]; then
+      printf '  DNS         Kwerft points its records at this server (%s) by itself\n' "$PUBLIC_IP"
+    else
+      printf '  DNS         point %s and the apps hostnames at this server: %s\n' "$DOMAIN" "$PUBLIC_IP"
+    fi
+  elif [[ -n "$CONFIG_FILE" ]]; then
     printf '  Open        %shttps://%s%s\n' "$C_ACC" "$DOMAIN" "$C_0"
     printf '  Sign in with the owner account from %s\n' "$CONFIG_FILE"
   elif [[ -s "$SETUP_TOKEN_FILE" ]]; then
@@ -2045,12 +2614,18 @@ main() {
     if [[ "$MODE" == "install" ]] && stage_done kwerft-agent; then
       die $EXIT_USAGE "This server runs Kwerft in agent mode (managed from a console). Re-run the console's command with --agent."
     fi
+    if [[ -n "$RESTORE_FROM" ]] && restore_refused; then
+      die $EXIT_USAGE "This server already runs Kwerft; --restore is for a new server. (Back up and restore single projects in the console.)"
+    fi
   fi
 
   printf '%s▸ Kwerft installer %s%s  %schannel=%s · platform=%s · mode=%s%s\n\n' \
     "$C_ACC$C_B" "$KWERFT_VERSION" "$C_0" "$C_DIM" "$CHANNEL" "$PLATFORM" "$MODE" "$C_0"
 
-  if [[ "$MODE" == "install" ]] && is_temp_domain; then
+  if [[ -n "$RESTORE_FROM" ]]; then
+    say "Restoring backup $RESTORE_FROM from $(bucket_url)$( (( DOMAIN_EXPLICIT )) || echo '; the console hostname comes from the backup')."
+    echo
+  elif [[ "$MODE" == "install" ]] && is_temp_domain; then
     warn "No --domain given: using temporary hostname $DOMAIN (fine for trying Kwerft, not for production)."
     echo
   fi
@@ -2084,6 +2659,12 @@ main() {
     run_stage kwerft-agent "Kwerft agent" stage_kwerft_agent force
     (( DRY_RUN )) || print_agent_summary
     return
+  fi
+  run_stage backups       "Backups"       stage_backups force
+  if [[ -n "$RESTORE_FROM" ]]; then
+    run_stage restore     "Restore"       stage_restore
+    # The console hostname is the restored setting unless --domain says otherwise.
+    if (( ! DRY_RUN && ! DOMAIN_EXPLICIT )); then DOMAIN=""; resolve_domain; fi
   fi
   run_stage kwerft         "Kwerft"         stage_kwerft force
   run_stage handoff       "Handoff"       stage_handoff force

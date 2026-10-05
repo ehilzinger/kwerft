@@ -195,3 +195,189 @@ Shared files and who decides: `install.sh`'s main flow and stage list —
 U2 and B1 both add stages; the coordinator merges. `cmd/kwerft/main.go`,
 `internal/server/api.go` registrations, `internal/access`, chart RBAC and
 the web router are touched by several workers in small additive edits.
+
+## As built (B1)
+
+**Pins** (top of `install/install.sh`, dated 2026-10-05):
+`VELERO_VERSION=v1.18.4` (image `docker.io/velero/velero`),
+`VELERO_CHART_VERSION=12.2.0` (`vmware-tanzu/velero` from
+`https://vmware-tanzu.github.io/helm-charts`; the chart's own appVersion is
+1.18.2), `VELERO_PLUGIN_AWS_VERSION=v1.14.4`
+(`docker.io/velero/velero-plugin-for-aws`). The chart's CRD job runs
+`velero install --crds-only --apply` from the v1.18.4 image, so the cluster
+has **the CRDs of Velero v1.18.4**: vendor those for envtest
+(`config/crd/v1/bases` at tag `v1.18.4` of `vmware-tanzu/velero`; they
+differ from the chart's `crds/` folder, e.g. Restore gained
+`spec.resourcePolicy` in 1.18.3/4).
+
+**Stage `backups`** (forced, after Observability; console installs only —
+agent clusters get neither Velero nor the etcd drop-in):
+- Velero in namespace `velero`, release `velero`: node agent (Kopia) on
+  every node (tolerates all taints: build pools), `defaultVolumesToFsBackup`,
+  the AWS plugin as init container, `--default-backup-storage-location=kwerft`,
+  no BackupStorageLocation, no VolumeSnapshotLocation, no cloud credentials
+  (`credentials.useSecret=false`). Requests 50m/128Mi for the server and the
+  node agent (memory limits 512Mi and 1Gi), repository maintenance jobs
+  50m/128Mi (limit 1Gi), 3 kept. Metrics on :8085 with the chart's
+  `prometheus.io/*` pod annotations; no ServiceMonitor — the scrape for the
+  alerts (VMPodScrape/VMServiceScrape) is B2's.
+- `--lite` skips Velero (summary "Velero off (--lite)") but keeps the etcd
+  snapshot settings. `--restore --lite` is refused.
+- etcd snapshots: drop-in `/etc/rancher/k3s/config.yaml.d/50-kwerft-etcd-snapshots.yaml`
+  (0600), on the first server only (`cluster-init: true`):
+  `etcd-snapshot-schedule-cron`, `etcd-snapshot-retention`,
+  `etcd-snapshot-compress: true`, `etcd-s3: true`,
+  `etcd-s3-config-secret: kwerft-etcd-s3`. Schedule and retention come from
+  `spec.backups.etcdSnapshots` (invalid values warn and fall back), else
+  `0 */6 * * *` and 28 — always, not only once a target exists (the type's
+  comment "nil keeps k3s's defaults (local only)" says otherwise; one of the
+  two should change). The stage restarts k3s only when the drop-in changed,
+  as for registries.yaml; a first install writes it before k3s first starts.
+- **k3s behaviour, read in the source of v1.37.1+k3s1** (`pkg/etcd/snapshot.go`,
+  `pkg/etcd/s3/s3.go`, `pkg/etcd/s3/config_secret.go`): the local snapshot is
+  saved and local retention applied first; only then is the S3 client built
+  from the Secret, which is **read at every snapshot** (writing or changing
+  it needs no restart). A missing Secret is `ErrNoConfigSecret`: a warning in
+  k3s's log, no failed snapshot record, local snapshots go on. The Secret is
+  ignored (with a warning) as soon as any other `etcd-s3-*` option is set in
+  the config, so the installer sets none. The cron schedule is read when k3s
+  starts: a changed schedule takes effect with the next installer run, which
+  restarts k3s.
+
+**What the console (B2) must write** (names fixed by the installer and
+`--restore`):
+- `kube-system/kwerft-etcd-s3` (Opaque, or type
+  `etcd.k3s.cattle.io/s3-config-secret`): `etcd-s3-endpoint` = host[:port]
+  **without** `https://` (k3s hands it to minio; TLS is the default),
+  `etcd-s3-region`, `etcd-s3-bucket`, `etcd-s3-folder` = `<prefix>/etcd`,
+  `etcd-s3-access-key`, `etcd-s3-secret-key`, and `etcd-s3-retention` (the
+  same number; k3s uses the local retention otherwise). The installer never
+  writes it.
+- `velero/velero-repo-credentials`, key `repository-password` = the recovery
+  key **normalized**: its 52 base32 characters, upper case, without spaces,
+  dashes or line breaks (`recovery_key` in install.sh; the file the owner
+  downloads may hold the grouped form). Velero creates this Secret at start
+  with a built-in default password when it is missing, so the reconciler
+  must write it **before** the first BackupStorageLocation, i.e. before
+  Velero initializes the Kopia repository.
+- `velero/kwerft-bsl-credentials`, key `cloud`:
+  `[default]\naws_access_key_id=…\naws_secret_access_key=…\n`.
+- BackupStorageLocation `velero/kwerft`: `provider: aws`, `default: true`,
+  `objectStorage: {bucket, prefix: <prefix>/velero}`, `credential: {name:
+  kwerft-bsl-credentials, key: cloud}`, `config: {region, s3Url: <endpoint
+  with https://>, s3ForcePathStyle: "true", checksumAlgorithm: ""}` (the
+  empty checksum algorithm keeps S3-compatible stores working that reject
+  the AWS SDK's default checksum headers). After `--restore` the location
+  exists already (the installer's, switched to ReadWrite at the end of the
+  stage): the reconciler adopts it and should set `accessMode: ReadWrite`
+  explicitly.
+- Cluster backups carry `kwerft.dev/backup-scope=Cluster` and include
+  `kwerft-system` with the pod of Deployment `kwerft` (it carries the hook)
+  and its PVC `kwerft-data`.
+
+**Console database:** `kwerft db-snapshot [--data-dir /var/lib/kwerft]`
+(`cmd/kwerft/dbsnapshot.go`) opens the live database (the same binary as
+the console beside it, so nothing migrates; a missing database is an error,
+never created), `VACUUM INTO` a temp file in `backup/`, fsync, rename to
+`backup/kwerft.db`, fsync the directory. Chart pod annotations (console mode
+only; `make helm-lint` checks them): `pre.hook.backup.velero.io/container:
+kwerft`, `…/command: '["/usr/local/bin/kwerft", "db-snapshot",
+"--data-dir=/var/lib/kwerft"]'`, `…/on-error: Fail`, `…/timeout: 2m`. At
+start, before `store.Open`, with `backup/RESTORE` present the console copies
+`backup/kwerft.db` to `kwerft.db.restoring`, removes `kwerft.db-wal`, `-shm`
+and `-journal`, renames the copy over `kwerft.db`, and removes the marker
+last (an interrupted swap repeats on the next start). A marker without a
+valid SQLite copy stops the console with an error that says to remove the
+marker to keep the current database. The copy stays; the next backup's hook
+replaces it.
+
+**`install.sh --restore latest|<backup>`** — exit code **60** for restore
+failures (usage errors stay 2):
+- Needs `--config` with the `backups` block. `region` defaults to the first
+  label of a `*.your-objectstorage.com` endpoint (else `us-east-1`),
+  `prefix` to `--domain`; without either the prefix is required. The
+  recovery key's format is checked up front, never printed. Refused with
+  `--agent`, `--join`, `--lite`, and on a server that has run the Kwerft,
+  Handoff or Kwerft agent stage, unless its Restore stage is done (so the
+  same command resumes after a failure). `KWERFT_RESTORE` works like the
+  flag.
+- Stages: … Observability, Backups, **Restore**, Kwerft, Handoff. Restore is
+  not forced (once done it is skipped):
+  1. applies Kwerft's CRDs (the restored kwerft.dev objects need them);
+  2. writes the two Velero Secrets (keys through a 0700 temp dir, never in
+     arguments or the log) and the BSL `kwerft` with `accessMode: ReadOnly`;
+  3. waits (10 min, `KWERFT_RESTORE_SYNC_TIMEOUT`) for the BSL to be
+     `Available` with `status.lastSyncedTime` set; an unavailable location
+     exits 60 with Velero's `status.message`;
+  4. picks the newest `Completed` backup labelled
+     `kwerft.dev/backup-scope=Cluster` (by completionTimestamp), or the named
+     one (it must exist, be of scope Cluster and be Completed;
+     PartiallyFailed warns and goes on);
+  5. creates Restore `velero/restore-<backup>` (a re-run waits for the same
+     one): `includedNamespaces: ["*"]`; `excludedNamespaces` kube-system,
+     kube-public, kube-node-lease, velero, cert-manager, traefik,
+     kwerft-observability; `excludedResources` nodes, events, leases,
+     endpoints, endpointslices, jobs.batch (a restored Job would run again),
+     CRDs, storageclasses, CSI objects, APIServices, webhook configurations,
+     Cilium's endpoints, identities and nodes, cert-manager's
+     CertificateRequests, Orders and Challenges; `includeClusterResources:
+     true`, `existingResourcePolicy: none`, `restorePVs: true`, and
+     `restoreStatus` for builds, tasks, upgrades and restores (kwerft.dev),
+     whose empty status would start work again;
+  6. waits (4 h, `KWERFT_RESTORE_TIMEOUT`; a progress line every minute) for
+     Completed; PartiallyFailed warns with the error count, Failed and
+     FailedValidation exit 60. On Cloud servers it installs the CSI driver
+     during the restore once the restored Cloud API token appears (without
+     `hcloud.tokenFile` in the config the Hetzner Cloud stage had no token);
+  7. fixes up for Helm: deletes the restored `kwerft-system/kwerft-registry`
+     Service when its cluster IP is not 10.43.0.50 (Velero gives restored
+     Services new IPs; the field is immutable and the chart recreates it),
+     and deletes release Secrets of `kwerft` in a pending state;
+  8. finds the `kwerft-data` PV's host path (`spec.hostPath.path` or
+     `spec.local.path`: local-path storage is required), checks that
+     `backup/kwerft.db` is there, scales Deployment `kwerft` to 0, waits for
+     its pods to go, writes `backup/RESTORE` ("restored from backup <name>
+     at <time>"), `chown -R 65532:65532` the volume, scales back to 1;
+  9. switches the BSL to ReadWrite.
+- Helm adoption: the restored `kwerft-system` holds the release's history
+  Secrets, so the Kwerft stage's `helm upgrade --install` upgrades the
+  restored release over objects that carry Helm's labels and annotations;
+  objects missing from the backup are created; the data key is kept (the
+  chart's `lookup`). `apply_console_settings` finds the restored
+  ConsoleSettings and changes nothing unless `--domain` was given;
+  `write_join_secret` replaces the old server's join material.
+- The console hostname: without `--domain` the stages before Restore use the
+  temporary sslip.io name (it only lands in k3s's `tls-san`); after Restore
+  the installer reads the restored `spec.consoleDomain`.
+- Handoff: `setup_token_state` is `restored` (no setup token); the summary
+  says to sign in with the existing accounts, and either that Kwerft moves
+  its DNS records by itself (`dns.manageRecords`) or which names to point at
+  the new address.
+
+**Trying it on a real server** (the coordinator's, on the test project):
+1. Install a build with this code on server A with `--domain`, create a
+   bucket in Hetzner Object Storage, save the target in Settings › Backups
+   (needs B2) and keep the recovery key file. Deploy an App with a Volume,
+   write data, "Back up now" on plan `cluster`, wait for Completed
+   (`kubectl -n velero get backups`), and check
+   `kubectl -n kwerft-system exec deploy/kwerft -- /usr/local/bin/kwerft db-snapshot`
+   prints a size. Without B2: the two Secrets and the BSL by hand as above,
+   then a Velero Backup of every namespace but the excluded ones, labelled
+   `kwerft.dev/backup-scope=Cluster`.
+2. `cat /etc/rancher/k3s/config.yaml.d/50-kwerft-etcd-snapshots.yaml`,
+   `k3s etcd-snapshot ls` (local snapshots go on without the Secret); once
+   B2 writes the Secret, `k3s etcd-snapshot save` lands in `<prefix>/etcd`.
+3. On a fresh server B (DNS moved, or `dns.records`):
+   `install.sh --config kwerft.yaml --restore latest --yes` with a config of
+   just the `backups` block and the three key files (plus `hcloud.tokenFile`
+   for Cloud Volumes). Expect the Restore summary line, Kwerft, Handoff
+   "accounts from the backup"; sign in with an old account, the App's data
+   is there, `kubectl -n velero get bsl kwerft -o yaml` says ReadWrite.
+4. Failure paths worth one run: a wrong secret key (exit 60, "Cannot read
+   the backups"), `--restore` again on server A (exit 2).
+
+Open points: Velero and the etcd drop-in are not set up in agent mode or on
+joined control-plane servers (their snapshots keep k3s's defaults); a
+restore brings NodePools and Clusters back as objects, but a multi-node
+restore (pools re-creating servers) is not covered; a console volume that is
+not on local-path storage makes `--restore` exit 60.
