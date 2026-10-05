@@ -12,7 +12,8 @@ the same plan in long form.
 | Hosting target | **Hetzner Cloud and dedicated, both first-class** | Installer detects the platform (Cloud metadata service). Storage, private networking and firewall defaults differ per platform. CI covers both. |
 | Users | **One team** | Single organization with projects and roles; no tenant isolation in v1. Records carry an organization ID so tenancy can be added later without a migration. |
 | Sources | **Registry images and Git repositories in v1** | Adds Phase 2: the `Build` resource, rootless BuildKit, Railpack, an in-cluster zot registry. |
-| License | **To be decided before the public beta** | All dependencies chosen so far are Apache-2.0 or MIT, so every option stays open. No LICENSE file until then. |
+| License (2026-10-05) | **AGPLv3 for everything, with a commercial license on request; a CLA before the first outside contribution; "Kwerft" registered as a trademark.** LICENSE file, CLA and trademark filing before the public beta (Phase 6) | Anyone may self-host, modify and fork; whoever offers Kwerft as a hosted service must publish their changes, which protects the hosted console (Business model). All dependencies are Apache-2.0 or MIT, which AGPLv3 may include. Dual licensing needs every line to be ours: today it is, so the CLA must be in place before outside code is merged. Source-available licenses (BSL, FSL, Elastic) were rejected: they are not open source. Apache-2.0 would spread faster but lets anyone sell a hosted Kwerft without giving back. The CLA and trademark want a lawyer's review. |
+| Business model (2026-10-05) | **Every feature stays open; revenue from a hosted console ("Kwerft Cloud"), support subscriptions and the Mac app's App Store distribution.** Details: License and business model | Matches what customers pay for: Kwerft's users run production on a few Hetzner servers and pay for not operating the console, not for features. The agent architecture already separates console and clusters, so a hosted console needs no new security model. Gating features would break trust: SSO, two-factor sign-in and the audit log are already open and stay open. |
 | Jobs | **One-off and scheduled jobs in v1** (`Task`, `Schedule`) | Added to Phase 1. Real workloads are more than long-running services: the first pilot (hatchure, 2026-10-04) has eight cron jobs and a dozen jobs started by hand next to its six services. |
 | Local development | **Kwerft for Mac, a native app on Apple's `container`, after the beta** (Phase 7) | Runs the same Kwerft binary and resources in a local Kubernetes VM, so a Project developed on a Mac can be pushed to a Hetzner instance unchanged except for per-target overrides. Apple silicon and macOS 26+ only. |
 | Local cluster for Kwerft for Mac | **k3s in an Apple `container machine`, set up by `install.sh`, on Kwerft's own kernel** (spike, 2026-10-04: `docs/spike-mac.md`) | The machine survives restarts with its volumes; `container k8s` (kind) cannot come back after a stop. The production stack runs unchanged through the same installer. Neither kernel `container` offers runs Cilium, so the app ships a kernel built from Apple's config plus `hack/spike-mac/kernel/kwerft.config`. |
@@ -246,6 +247,18 @@ Exit codes: 0 ok · 2 usage · 10 preflight · 20 network/DNS · 30 Kubernetes �
 - Exec sessions role-gated, time-limited and recorded.
 - Default-deny between projects, WireGuard between nodes, host firewall with lock-out protection.
 - API tokens scoped, expiring, stored hashed. Signed images, pinned digests, SBOMs.
+
+## License and business model
+
+Decided 2026-10-05 (decision table: License, Business model).
+
+- **Open, all of it.** One AGPLv3 codebase, no closed "enterprise" build. Security features (SSO, two-factor sign-in, passkeys, audit log, recorded shells) are never paid.
+- **Kwerft Cloud — the main revenue.** We run the console; customers' servers join as remote clusters through `kwerft-agent` (outbound mTLS, Kubernetes API stays private), so workloads, data and the Hetzner bill stay theirs. Priced per node or cluster per month; self-hosting stays free. Start with one dedicated console per customer on a small Hetzner server (no multi-tenancy needed); the organization ID on records keeps a shared, multi-tenant console possible later. Needs: console backups and upgrades (Phase 6), billing, a sign-up flow that creates a console and hands out the agent command.
+- **Support subscriptions.** Yearly, with a response time, upgrade and restore help, an onboarding call; the commercial license for companies that cannot use AGPL comes with it.
+- **Kwerft for Mac (Phase 7).** Open source; the signed, notarised, auto-updating App Store build is paid.
+- **Later, only if larger customers ask:** paid add-ons that only organisations need (SAML/SCIM, long audit retention and SIEM export, compliance reports, fleet-scale cluster management) — never anything a single team needs to run safely.
+- **Not a business:** Hetzner's referral program pays in account credit; sponsorships are welcome but not planned for.
+- **Before the public beta:** LICENSE file and license headers, CLA (with a CLA check on pull requests), trademark registration for "Kwerft", a "Support & hosting — get in touch" section on kwerft.dev to test demand before building billing.
 
 ## Roadmap (~28 weeks to the public beta, then 8 for the Mac app; 1–2 engineers)
 
