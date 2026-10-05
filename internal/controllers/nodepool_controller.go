@@ -48,7 +48,11 @@ import (
 //     time; one is removed at a time, only while every other control-plane
 //     node is Ready, after k3s took it out of etcd.
 //   - Worker and builds pools replace nodes that stay NotReady for
-//     RepairAfter; control-plane nodes are only replaced by hand.
+//     RepairAfter, one at a time, and none while most of the cluster's
+//     nodes are NotReady (a cluster or network problem, which new servers
+//     would not fix); control-plane nodes are only replaced by hand.
+//   - The Node of a deleted server is deleted once the server is gone:
+//     k3s registers a Node again while its server is still shutting down.
 //   - Builds pools are tainted kwerft.dev/builds=true:NoSchedule and scale
 //     between zero and spec.count with the build Jobs in their cluster.
 type NodePoolReconciler struct {
@@ -219,7 +223,10 @@ type poolRun struct {
 	target  client.Client // nil while the cluster cannot be reached
 	nodes   []corev1.Node // every node of the cluster
 	servers []hetzner.Server
-	now     time.Time
+	// listed: names of every server of the pool at Hetzner, those being
+	// deleted included.
+	listed map[string]bool
+	now    time.Time
 	// busy: something is in flight; reconcile again soon.
 	busy bool
 	// removing: servers being removed (before this pass chose more).
@@ -336,9 +343,14 @@ func (r *NodePoolReconciler) reconcile(ctx context.Context, pool *kwerftv1.NodeP
 	if err != nil {
 		return run, fmt.Errorf("list servers: %w", err)
 	}
+	run.listed = map[string]bool{}
 	for _, s := range all {
 		// Belt and braces: the selector already says so.
-		if s.Labels[hetzner.LabelCluster] == pool.Spec.Cluster && s.Labels[hetzner.LabelPool] == pool.Name && s.Status != hetzner.ServerDeleting {
+		if s.Labels[hetzner.LabelCluster] != pool.Spec.Cluster || s.Labels[hetzner.LabelPool] != pool.Name {
+			continue
+		}
+		run.listed[s.Name] = true
+		if s.Status != hetzner.ServerDeleting {
 			run.servers = append(run.servers, s)
 		}
 	}
@@ -418,9 +430,15 @@ func validatePool(pool *kwerftv1.NodePool) error {
 }
 
 // serverPrefix is <cluster>-<pool>, made a hostname and short enough for
-// a 6-character suffix.
+// a 6-character suffix. A pool already named <cluster>-<name>, as the
+// console names them, is not prefixed twice (servers created before were
+// <cluster>-<cluster>-<name>-…; they are found by their labels).
 func serverPrefix(cluster, pool string) string {
-	p := strings.ToLower(strings.ReplaceAll(cluster+"-"+pool, ".", "-"))
+	p := pool
+	if !strings.HasPrefix(pool, cluster+"-") {
+		p = cluster + "-" + pool
+	}
+	p = strings.ToLower(strings.ReplaceAll(p, ".", "-"))
 	if len(p) > 56 {
 		p = p[:56]
 	}
@@ -498,6 +516,9 @@ type entry struct {
 	// removing: a drain/removal is under way or was asked for.
 	removing bool
 	force    bool
+	// broken: NotReady for longer than RepairAfter, to be replaced
+	// (chooseRepairs decides when).
+	broken bool
 }
 
 func (e *entry) ready() bool { return e.node != nil && NodeReady(e.node) }
@@ -532,9 +553,7 @@ func (r *NodePoolReconciler) classify(run *poolRun) []*entry {
 			e.phase = PoolNodeReady
 		case e.node != nil && run.now.Sub(nodeReadyChanged(e.node)) > orDuration(r.RepairAfter, DefaultRepairAfter):
 			e.phase, e.message = PoolNodeFailed, "Kubernetes has reported the node NotReady since "+nodeReadyChanged(e.node).UTC().Format(time.RFC3339)+"."
-			if pool.Spec.Role != kwerftv1.NodeControlPlane {
-				e.removing, e.message = true, e.message+" Replacing it."
-			}
+			e.broken = pool.Spec.Role != kwerftv1.NodeControlPlane
 		case e.node != nil:
 			e.phase, e.message = PoolNodeJoining, "Node registered, not Ready yet."
 		case run.target != nil && run.now.Sub(s.Created) > orDuration(r.JoinTimeout, DefaultJoinTimeout):
@@ -566,6 +585,10 @@ func (r *NodePoolReconciler) scale(ctx context.Context, run *poolRun) error {
 		}
 	}
 
+	if err := r.deleteGoneNodes(ctx, run); err != nil {
+		return err
+	}
+	r.chooseRepairs(run, entries)
 	if err := r.progressRemovals(ctx, run, entries); err != nil {
 		return err
 	}
@@ -600,6 +623,76 @@ func (r *NodePoolReconciler) scale(ctx context.Context, run *poolRun) error {
 		return err
 	}
 	return r.syncBuildMarker(ctx, run)
+}
+
+// chooseRepairs starts replacing a broken (long NotReady) server: one at
+// a time, the next only once nothing else is being removed or joining, and
+// none while most of the cluster's nodes are NotReady. Nodes failing
+// together point at the cluster or its network (an upgrade, a firewall, the
+// control plane), not at their servers: replacing them all at once only
+// loses what they hold.
+func (r *NodePoolReconciler) chooseRepairs(run *poolRun, entries []*entry) {
+	var broken []*entry
+	for _, e := range entries {
+		if e.broken && !e.removing {
+			broken = append(broken, e)
+		}
+	}
+	if len(broken) == 0 || run.target == nil {
+		return
+	}
+	notReady := 0
+	for i := range run.nodes {
+		if !NodeReady(&run.nodes[i]) {
+			notReady++
+		}
+	}
+	if notReady*2 > len(run.nodes) {
+		for _, e := range broken {
+			e.message += fmt.Sprintf(" Not replaced: %d of the cluster's %d nodes are NotReady, which points at the cluster or its network. "+
+				"Remove the server by hand if it is broken.", notReady, len(run.nodes))
+		}
+		run.notes = append(run.notes, fmt.Sprintf("%d of %d nodes are NotReady: broken servers are not replaced now.", notReady, len(run.nodes)))
+		return
+	}
+	if slices.ContainsFunc(entries, func(e *entry) bool {
+		return e.removing || !e.broken && (e.phase == PoolNodeCreating || e.phase == PoolNodeJoining)
+	}) {
+		for _, e := range broken {
+			e.message += " Replaced once the server being replaced now is done."
+		}
+		return
+	}
+	// The one broken longest first.
+	slices.SortStableFunc(broken, func(a, b *entry) int { return nodeReadyChanged(a.node).Compare(nodeReadyChanged(b.node)) })
+	broken[0].removing, broken[0].message = true, broken[0].message+" Replacing it."
+	for _, e := range broken[1:] {
+		e.message += " Replaced after " + broken[0].srv.Name + "."
+	}
+}
+
+// deleteGoneNodes deletes the Nodes this pool's servers left behind: Nodes
+// labelled with the pool, NotReady, whose server Hetzner no longer lists
+// (not even as being deleted). The removal deletes the Node before the
+// server, but k3s registers it again while the server shuts down, and a
+// server deleted by hand leaves its Node too. Ready Nodes are never
+// touched.
+func (r *NodePoolReconciler) deleteGoneNodes(ctx context.Context, run *poolRun) error {
+	if run.target == nil || run.listed == nil {
+		return nil
+	}
+	for i := range run.nodes {
+		n := &run.nodes[i]
+		if n.Labels[hetzner.LabelPool] != run.pool.Name || run.listed[n.Name] || NodeReady(n) || !n.DeletionTimestamp.IsZero() {
+			continue
+		}
+		uid := n.UID
+		if err := run.target.Delete(ctx, n, client.Preconditions{UID: &uid}); client.IgnoreNotFound(err) != nil && !apierrors.IsConflict(err) {
+			return fmt.Errorf("delete node %s: %w", n.Name, err)
+		}
+		log.FromContext(ctx).Info("deleted the node of a deleted server", "pool", run.pool.Name, "node", n.Name)
+	}
+	return nil
 }
 
 // checkControlPlaneCount refuses a control-plane pool size that leaves the
@@ -1143,6 +1236,9 @@ func (r *NodePoolReconciler) finalize(ctx context.Context, run *poolRun) error {
 			e.removing = true
 		}
 		return r.progressRemovals(ctx, run, entries)
+	}
+	if err := r.deleteGoneNodes(ctx, run); err != nil {
+		return err
 	}
 	if err := r.dropBuildMarker(ctx, run); err != nil {
 		return err

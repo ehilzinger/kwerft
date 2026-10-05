@@ -235,7 +235,7 @@ func TestNodePoolGrowJoinShrinkDelete(t *testing.T) {
 		t.Fatalf("servers = %d, requeue %v", len(servers), res.RequeueAfter)
 	}
 	for _, s := range servers {
-		if !strings.HasPrefix(s.Name, "np1-np1-workers-n") || s.Image.Name != "ubuntu-26.04" || s.PlacementGroup == nil ||
+		if !strings.HasPrefix(s.Name, "np1-workers-n") || s.Image.Name != "ubuntu-26.04" || s.PlacementGroup == nil ||
 			len(s.PrivateNet) != 1 || s.Labels[hetzner.LabelRole] != "worker" {
 			t.Fatalf("server = %+v", s)
 		}
