@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
-  durationText, inline, needsTypedConfirmation, noticeText, notesBlocks, parseSSE, phasePill, progressLines, summaryLine, updateNotices, windowText,
+  durationText, enablesAutoPatch, fleetLine, fleetSteps, inline, needsTypedConfirmation, noticeText, notesBlocks, parseSSE, phasePill, progressLines,
+  summaryLine, updateNotices, windowText,
   type Upgrade,
 } from "./updates";
 import { conditions, describeCondition } from "./alerts";
@@ -139,6 +140,40 @@ describe("release notes", () => {
 
   it("drops emphasis, links and HTML inline", () => {
     expect(inline("*one* __two__ ![img](x.png) [three](y) <b>four</b> snake_case_name")).toBe("one two img three four snake_case_name");
+  });
+});
+
+describe("upgrade all", () => {
+  it("lists the console first, then the agent clusters", () => {
+    const plan = { version: "0.6.0", console: true, clusters: ["edge-1", "edge-2"], skipped: [{ cluster: "away", reason: "not connected", warning: true }] };
+    expect(fleetSteps(plan, "0.5.0")).toEqual(["The console: Kwerft 0.5.0 → 0.6.0", "edge-1: its agent to 0.6.0", "edge-2: its agent to 0.6.0"]);
+    expect(fleetSteps({ ...plan, console: false })).toEqual(["edge-1: its agent to 0.6.0", "edge-2: its agent to 0.6.0"]);
+  });
+
+  it("follows the agent clusters on the console's upgrade", () => {
+    expect(fleetLine(base)).toBeUndefined();
+    const running = up({ phase: "Succeeded", agentClusters: { finished: false, stopped: false, message: "Agent clusters (edge-1: Running, edge-2: waiting)." } });
+    expect(fleetLine(running)).toEqual({ mark: "run", label: "Agent clusters", detail: "edge-1: Running, edge-2: waiting." });
+    expect(marks(running).at(-1)).toBe("run Agent clusters");
+    const stopped = up({ phase: "Succeeded", agentClusters: { finished: true, stopped: true,
+      message: "Agent clusters (edge-1: RolledBack, edge-2: Cancelled). Stopped: edge-1 ended RolledBack." } });
+    expect(fleetLine(stopped)).toEqual({ mark: "fail", label: "Agent clusters", detail: "edge-1: RolledBack, edge-2: Cancelled. Stopped: edge-1 ended RolledBack." });
+    expect(fleetLine(up({ agentClusters: { finished: true, stopped: false, message: "Agent clusters (edge-1: Succeeded)." } }))!.mark).toBe("ok");
+  });
+});
+
+describe("the update policy", () => {
+  it("asks for the password when unattended upgrades are turned on, not off", () => {
+    const notify = { policy: "Notify" as const, kubernetesPatches: false };
+    const auto = { policy: "AutoPatch" as const, kubernetesPatches: false };
+    const autoK8s = { policy: "AutoPatch" as const, kubernetesPatches: true };
+    expect(enablesAutoPatch(notify, auto)).toBe(true);
+    expect(enablesAutoPatch(auto, autoK8s)).toBe(true);
+    expect(enablesAutoPatch(notify, autoK8s)).toBe(true);
+    expect(enablesAutoPatch(auto, auto)).toBe(false);
+    expect(enablesAutoPatch(autoK8s, auto)).toBe(false);
+    expect(enablesAutoPatch(autoK8s, notify)).toBe(false);
+    expect(enablesAutoPatch({ policy: "Off", kubernetesPatches: false }, notify)).toBe(false);
   });
 });
 
