@@ -31,18 +31,39 @@ type fakePreflight struct {
 	mu     sync.Mutex
 	checks []kwerftv1.UpgradeCheck
 	calls  []kwerftv1.UpgradeSpec
+	// remote: agent clusters upgrades can be started in (local always).
+	remote map[string]bool
+	// clusters the checks ran in, and Kubernetes targets asked for.
+	in      []string
+	targets []string
 }
 
-func (f *fakePreflight) Supports(cluster string) bool { return cluster == clusters.Local }
+func (f *fakePreflight) Supports(cluster string) bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return cluster == clusters.Local || f.remote[cluster]
+}
 
 func (f *fakePreflight) Preflight(_ context.Context, cluster string, spec kwerftv1.UpgradeSpec) ([]kwerftv1.UpgradeCheck, error) {
-	if cluster != clusters.Local {
+	if !f.Supports(cluster) {
 		return nil, ErrUpgradeUnsupported
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.calls = append(f.calls, spec)
+	f.in = append(f.in, cluster)
 	return slices.Clone(f.checks), nil
+}
+
+// KubernetesTarget offers v1.37.2+k3s1 to agents of 0.5.x on v1.37.1.
+func (f *fakePreflight) KubernetesTarget(_ context.Context, kwerft, kubernetes string) *kwerftv1.AvailableUpdate {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.targets = append(f.targets, kwerft+"/"+kubernetes)
+	if strings.HasPrefix(kwerft, "0.5.") && kubernetes == "v1.37.1+k3s1" {
+		return &kwerftv1.AvailableUpdate{Component: kwerftv1.UpgradeKubernetes, Version: "v1.37.2+k3s1", Kind: "Patch", Allowed: true}
+	}
+	return nil
 }
 
 func (f *fakePreflight) set(checks ...kwerftv1.UpgradeCheck) {
@@ -277,6 +298,18 @@ func TestUpdatePolicy(t *testing.T) {
 	var got updatePolicyJSON
 	body := map[string]any{"policy": "AutoPatch", "channel": "edge", "kubernetesPatches": true,
 		"window": map[string]any{"days": []string{"sun", "Sat", "sun"}, "start": "03:00", "duration": "90m", "timeZone": "Europe/Berlin"}}
+	// Turning AutoPatch on authorizes unattended upgrades: the password.
+	for _, pw := range []string{"", "wrong password"} {
+		body["password"] = pw
+		var refused apiError
+		if code := e.owner.do(t, "PUT", "/api/v1/settings/updates", body, &refused); code != http.StatusBadRequest || refused.Field != "password" {
+			t.Errorf("AutoPatch with password %q: %d %+v", pw, code, refused)
+		}
+	}
+	if u := settingsNow(t).Spec.Updates; u != nil && u.Policy == kwerftv1.UpdatesAutoPatch {
+		t.Fatal("AutoPatch turned on without the password")
+	}
+	body["password"] = testPassword
 	if code := e.owner.do(t, "PUT", "/api/v1/settings/updates", body, &got); code != http.StatusOK {
 		t.Fatalf("save: %d", code)
 	}
@@ -295,6 +328,21 @@ func TestUpdatePolicy(t *testing.T) {
 	var view updatesJSON
 	if code := e.admin.do(t, "GET", "/api/v1/updates", nil, &view); code != http.StatusOK || view.Policy.Window == nil || view.NextWindow == nil {
 		t.Errorf("read back: %d %+v", code, view.Policy)
+	}
+	// While AutoPatch stays on, a new window or Kubernetes patches off need
+	// no password; Kubernetes patches on again do.
+	body = map[string]any{"policy": "AutoPatch", "channel": "edge", "window": map[string]any{"start": "04:00"}}
+	if code := e.owner.do(t, "PUT", "/api/v1/settings/updates", body, nil); code != http.StatusOK {
+		t.Errorf("AutoPatch without Kubernetes patches: %d", code)
+	}
+	body["kubernetesPatches"] = true
+	var refused apiError
+	if code := e.owner.do(t, "PUT", "/api/v1/settings/updates", body, &refused); code != http.StatusBadRequest || refused.Field != "password" {
+		t.Errorf("Kubernetes patches on without the password: %d %+v", code, refused)
+	}
+	body["password"] = testPassword
+	if code := e.owner.do(t, "PUT", "/api/v1/settings/updates", body, nil); code != http.StatusOK || !settingsNow(t).Spec.Updates.KubernetesPatches {
+		t.Errorf("Kubernetes patches on: %d", code)
 	}
 	// Every day is no days; the window may stay while Notify.
 	body = map[string]any{"policy": "Notify", "window": map[string]any{"days": []string{"Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"}, "start": "23:30"}}

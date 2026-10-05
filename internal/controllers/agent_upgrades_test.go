@@ -151,8 +151,8 @@ func TestFleetWaitsForTheConsoleThenGoesOneByOne(t *testing.T) {
 		t.Errorf("condition = %+v", cond)
 	}
 
-	// edge-1 rolled back: the fleet goes on with edge-2.
-	e.setRemotePhase(t, "edge-1", m1, kwerftv1.UpgradeRolledBack)
+	// edge-1 succeeded: edge-2 goes, and the fleet is done with it.
+	e.setRemotePhase(t, "edge-1", m1, kwerftv1.UpgradeSucceeded)
 	e.reconcile(t)
 	if e.remote(t, "edge-2", m2).Annotations[kwerftv1.AnnotationHold] != "" {
 		t.Fatal("edge-2 not released after edge-1")
@@ -164,8 +164,47 @@ func TestFleetWaitsForTheConsoleThenGoesOneByOne(t *testing.T) {
 	if err := e.mgmt.Get(context.Background(), client.ObjectKey{Name: console}, &c); err != nil {
 		t.Fatal(err)
 	}
-	if !meta.IsStatusConditionTrue(c.Status.Conditions, ConditionAgentClusters) {
-		t.Errorf("conditions = %+v", c.Status.Conditions)
+	if cond := meta.FindStatusCondition(c.Status.Conditions, ConditionAgentClusters); cond == nil || cond.Status != metav1.ConditionTrue || cond.Reason != "Finished" {
+		t.Errorf("condition = %+v", cond)
+	}
+}
+
+// A member that fails or rolls back stops the rest of the fleet: the held
+// ones are cancelled, naming the cluster that failed.
+func TestFleetStopsWhenAMemberFails(t *testing.T) {
+	for _, phase := range []kwerftv1.UpgradePhase{kwerftv1.UpgradeRolledBack, kwerftv1.UpgradeFailed} {
+		const console = "kwerft-0.6.0-x7k2p"
+		e := newFleetEnv(t, consoleUpgrade(console, kwerftv1.UpgradeSucceeded), map[string]string{"edge-1": "0.5.2", "edge-2": "0.5.0", "edge-3": "0.5.0"})
+		m1 := e.member(t, "edge-1", console, console, 0)
+		m2 := e.member(t, "edge-2", console, console, 1)
+		m3 := e.member(t, "edge-3", console, console, 2)
+		e.reconcile(t)
+		e.setRemotePhase(t, "edge-1", m1, phase)
+		if res := e.reconcile(t); res.RequeueAfter == 0 {
+			t.Errorf("%s: no requeue while the cancelled members finish", phase)
+		}
+		for cluster, name := range map[string]string{"edge-2": m2, "edge-3": m3} {
+			u := e.remote(t, cluster, name)
+			if u.Annotations[kwerftv1.AnnotationHold] == "" {
+				t.Errorf("%s: %s released after edge-1 ended %s", phase, cluster, phase)
+			}
+			if by, want := u.Annotations[kwerftv1.AnnotationCancelRequested], "of edge-1 ended "+string(phase); !strings.Contains(by, want) {
+				t.Errorf("%s: %s cancel = %q, want %q", phase, cluster, by, want)
+			}
+		}
+		e.setRemotePhase(t, "edge-2", m2, kwerftv1.UpgradeCancelled)
+		e.setRemotePhase(t, "edge-3", m3, kwerftv1.UpgradeCancelled)
+		if res := e.reconcile(t); res.RequeueAfter != 0 {
+			t.Errorf("%s: requeue after the fleet stopped: %v", phase, res)
+		}
+		var c kwerftv1.Upgrade
+		if err := e.mgmt.Get(context.Background(), client.ObjectKey{Name: console}, &c); err != nil {
+			t.Fatal(err)
+		}
+		cond := meta.FindStatusCondition(c.Status.Conditions, ConditionAgentClusters)
+		if cond == nil || cond.Status != metav1.ConditionTrue || cond.Reason != "Stopped" || !strings.Contains(cond.Message, "Stopped: edge-1 ended "+string(phase)) {
+			t.Errorf("%s: condition = %+v", phase, cond)
+		}
 	}
 }
 

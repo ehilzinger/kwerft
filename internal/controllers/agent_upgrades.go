@@ -38,8 +38,9 @@ import (
 //  2. AgentUpgradesReconciler (here, the console) watches those Upgrades
 //     in every connected cluster. Once the console's Upgrade Succeeded it
 //     releases one member (removes the hold) and waits until it finished
-//     before the next. If the console's Upgrade ended otherwise, it
-//     cancels the held members. Releasing and cancelling are the
+//     before the next. If the console's Upgrade ended otherwise, or a
+//     member ended Failed or RolledBack, it cancels the held members.
+//     Releasing and cancelling are the
 //     controller's own doing on objects the owner created, under Kwerft's
 //     identity there.
 //  3. Disconnected clusters are skipped (their members wait, and go when
@@ -211,6 +212,16 @@ func (r *AgentUpgradesReconciler) fleet(ctx context.Context, fleet string, membe
 			return r.unfinished(members), nil
 		}
 	}
+	// A member that failed or rolled back stops the rest: the same release
+	// would likely fail the same way elsewhere (coordinator decision,
+	// docs/phase6-upgrades.md › As built (G1)).
+	if failed := failedMember(members); failed != nil {
+		by := fmt.Sprintf("kwerft (the upgrade %s of %s ended %s)", failed.u.Name, failed.cluster, failed.u.Status.Phase)
+		if err := r.cancelHeld(ctx, members, by); err != nil {
+			return false, err
+		}
+		return r.unfinished(members), nil
+	}
 	var next *fleetMember
 	for _, m := range members {
 		switch {
@@ -243,6 +254,17 @@ func (r *AgentUpgradesReconciler) fleet(ctx context.Context, fleet string, membe
 		}
 	}
 	return true, nil
+}
+
+// failedMember is the first member, in order, that ended Failed or
+// RolledBack.
+func failedMember(members []*fleetMember) *fleetMember {
+	for _, m := range members {
+		if p := m.u.Status.Phase; p == kwerftv1.UpgradeFailed || p == kwerftv1.UpgradeRolledBack {
+			return m
+		}
+	}
+	return nil
 }
 
 func (r *AgentUpgradesReconciler) unfinished(members []*fleetMember) bool {
@@ -300,8 +322,15 @@ func (r *AgentUpgradesReconciler) summarize(ctx context.Context, console *kwerft
 	}
 	cond := metav1.Condition{Type: ConditionAgentClusters, Status: metav1.ConditionFalse, Reason: "Upgrading",
 		Message: "Agent clusters (" + strings.Join(parts, ", ") + ").", ObservedGeneration: console.Generation}
+	if failed := failedMember(members); failed != nil {
+		cond.Reason = "Stopped"
+		cond.Message += fmt.Sprintf(" Stopped: %s ended %s.", failed.cluster, failed.u.Status.Phase)
+	}
 	if done {
-		cond.Status, cond.Reason = metav1.ConditionTrue, "Finished"
+		cond.Status = metav1.ConditionTrue
+		if cond.Reason != "Stopped" {
+			cond.Reason = "Finished"
+		}
 	}
 	orig := console.DeepCopy()
 	meta.SetStatusCondition(&console.Status.Conditions, cond)

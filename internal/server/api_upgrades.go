@@ -39,8 +39,15 @@ import (
 // rolled back. The preflight the Upgrade controller runs is run first,
 // synchronously (Config.Upgrades), and blocking checks refuse the request.
 //
-// Audited: upgrade.start, upgrade.cancel, updates.policy,
-// updates.autopatch_resumed.
+// "Upgrade all" (POST /api/v1/upgrades/all) upgrades the console, then
+// every connected agent cluster one after another: the console's Upgrade
+// and a held member per agent cluster, all created as the user
+// (controllers.FleetMember); the AgentUpgrades reconciler releases them.
+// Turning AutoPatch on takes the password too: it authorizes unattended
+// upgrades.
+//
+// Audited: upgrade.start, upgrade.start_all, upgrade.cancel,
+// updates.policy, updates.autopatch_resumed.
 
 // UpgradePreflight runs the checks the Upgrade controller runs before it
 // changes anything, for an Upgrade that does not exist yet: the dialog's
@@ -53,10 +60,14 @@ type UpgradePreflight interface {
 	// Preflight checks spec in the cluster; ErrUpgradeUnsupported when
 	// Supports is false.
 	Preflight(ctx context.Context, cluster string, spec kwerftv1.UpgradeSpec) ([]kwerftv1.UpgradeCheck, error)
+	// KubernetesTarget is the k3s version offered to an agent cluster that
+	// runs Kwerft release kwerft and Kubernetes kubernetes (nil: none). It
+	// may read the install repository: never asked with the policy Off.
+	KubernetesTarget(ctx context.Context, kwerft, kubernetes string) *kwerftv1.AvailableUpdate
 }
 
 // ErrUpgradeUnsupported: this console cannot start upgrades of the cluster.
-var ErrUpgradeUnsupported = errors.New("upgrades of this cluster cannot be started from the console")
+var ErrUpgradeUnsupported = controllers.ErrUpgradeUnsupported
 
 type upgradesAPI struct {
 	*api
@@ -66,10 +77,12 @@ type upgradesAPI struct {
 	poll, ping, maxStream time.Duration
 	streams               *slots
 	preflights            *limiter
+	// version is the console's own release (runningKwerft).
+	version string
 }
 
 func (a *api) registerUpgrades(mux *http.ServeMux) {
-	u := &upgradesAPI{api: a, poll: 2 * time.Second, ping: 15 * time.Second, maxStream: time.Hour,
+	u := &upgradesAPI{api: a, poll: 2 * time.Second, ping: 15 * time.Second, maxStream: time.Hour, version: runningKwerft(),
 		streams: newSlots(8, 200), preflights: newLimiter(60, 15*time.Minute, a.now)}
 	if a.cfg.upgradesHook != nil {
 		a.cfg.upgradesHook(u)
@@ -90,6 +103,7 @@ func (a *api) registerUpgrades(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/v1/upgrades", read(u.list))
 	mux.HandleFunc("POST /api/v1/upgrades/preflight", owner(u.preflight))
 	mux.HandleFunc("POST /api/v1/upgrades", owner(u.start))
+	mux.HandleFunc("POST /api/v1/upgrades/all", owner(u.startAll))
 	mux.HandleFunc("GET /api/v1/upgrades/{name}", read(u.get))
 	mux.HandleFunc("GET /api/v1/upgrades/{name}/events", read(u.events))
 	mux.HandleFunc("GET /api/v1/upgrades/{name}/log", read(u.log))
@@ -153,12 +167,28 @@ type upgradeJSON struct {
 	Reason    string             `json:"reason,omitempty"`
 	Message   string             `json:"message,omitempty"`
 	// CancelRequestedBy: an owner asked to cancel; the controller decides.
-	CancelRequestedBy string     `json:"cancelRequestedBy,omitempty"`
-	Cancellable       bool       `json:"cancellable"`
-	Finished          bool       `json:"finished"`
-	CreatedAt         time.Time  `json:"createdAt"`
-	StartedAt         *time.Time `json:"startedAt,omitempty"`
-	FinishedAt        *time.Time `json:"finishedAt,omitempty"`
+	CancelRequestedBy string `json:"cancelRequestedBy,omitempty"`
+	// Fleet names the "Upgrade all" an agent cluster's Upgrade belongs to;
+	// Held: it waits for its turn (Message says for what).
+	Fleet string `json:"fleet,omitempty"`
+	Held  bool   `json:"held,omitempty"`
+	// AgentClusters: on the console's Upgrade of an "Upgrade all", how its
+	// agent clusters fare (the AgentClusters condition).
+	AgentClusters *agentClustersJSON `json:"agentClusters,omitempty"`
+	Cancellable   bool               `json:"cancellable"`
+	Finished      bool               `json:"finished"`
+	CreatedAt     time.Time          `json:"createdAt"`
+	StartedAt     *time.Time         `json:"startedAt,omitempty"`
+	FinishedAt    *time.Time         `json:"finishedAt,omitempty"`
+}
+
+// agentClustersJSON sums up the agent clusters of an "Upgrade all".
+type agentClustersJSON struct {
+	// Finished: every member finished; Stopped: one failed or rolled back,
+	// and the rest were cancelled.
+	Finished bool   `json:"finished"`
+	Stopped  bool   `json:"stopped"`
+	Message  string `json:"message"`
 }
 
 // cancellable: only before the installer (Kwerft) or the Plans
@@ -202,6 +232,14 @@ func upgradeView(cluster string, u *kwerftv1.Upgrade) upgradeJSON {
 	}
 	if b := st.Backup; b != nil {
 		out.Backup = &upgradeBackupJSON{EtcdSnapshot: b.EtcdSnapshot, Database: b.Database, HelmRevisions: b.HelmRevisions}
+	}
+	out.Fleet = u.Labels[kwerftv1.LabelFleet]
+	if hold := u.Annotations[kwerftv1.AnnotationHold]; hold != "" && !out.Finished {
+		out.Held = true
+		out.Message = cmp.Or(out.Message, hold)
+	}
+	if c := meta.FindStatusCondition(st.Conditions, controllers.ConditionAgentClusters); c != nil {
+		out.AgentClusters = &agentClustersJSON{Finished: c.Status == metav1.ConditionTrue, Stopped: c.Reason == "Stopped", Message: c.Message}
 	}
 	return out
 }
@@ -275,6 +313,27 @@ type updatesJSON struct {
 	Clusters  []clusterUpdatesJSON `json:"clusters"`
 	// CanUpgrade: the user may start upgrades and change the policy.
 	CanUpgrade bool `json:"canUpgrade"`
+	// UpgradeAll: what "Upgrade all" would do now; absent when no agent
+	// cluster needs it (the button is shown only with it).
+	UpgradeAll *upgradeAllJSON `json:"upgradeAll,omitempty"`
+}
+
+// fleetSkipJSON is a cluster an "Upgrade all" leaves out, and why.
+// Warning: it should be upgraded but cannot be now.
+type fleetSkipJSON struct {
+	Cluster string `json:"cluster"`
+	Reason  string `json:"reason"`
+	Warning bool   `json:"warning,omitempty"`
+}
+
+// upgradeAllJSON is the plan of an "Upgrade all".
+type upgradeAllJSON struct {
+	Version string `json:"version"`
+	// Console: the console upgrades to Version first.
+	Console bool `json:"console"`
+	// Clusters: the agent clusters that follow, one after another, in order.
+	Clusters []string        `json:"clusters"`
+	Skipped  []fleetSkipJSON `json:"skipped"`
 }
 
 func formatDuration(d time.Duration) string {
@@ -329,7 +388,7 @@ func availableView(in []kwerftv1.AvailableUpdate) []availableJSON {
 	return out
 }
 
-// runningKwerft is the console's own release.
+// runningKwerft is the console's own release (upgradesAPI.version).
 func runningKwerft() string { return strings.TrimPrefix(version.Version, "v") }
 
 // oldestKubelet is the oldest kubelet version of the nodes ("" when none
@@ -417,7 +476,7 @@ func (u *upgradesAPI) overview(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	out := updatesJSON{Available: []availableJSON{}, Clusters: []clusterUpdatesJSON{},
-		CanUpgrade: access.Allowed(p.user.Role, access.Upgrades), Current: versionsJSON{Kwerft: runningKwerft()}}
+		CanUpgrade: access.Allowed(p.user.Role, access.Upgrades), Current: versionsJSON{Kwerft: u.version}}
 	var spec *kwerftv1.UpdateSettings
 	if cs != nil {
 		spec = cs.Spec.Updates
@@ -457,14 +516,14 @@ func (u *upgradesAPI) overview(w http.ResponseWriter, r *http.Request) {
 		row := clusterUpdatesJSON{Name: st.name, Connected: st.conn != nil, Available: []availableJSON{}}
 		row.Upgradable = u.cfg.Upgrades != nil && u.cfg.Upgrades.Supports(st.name)
 		if st.name == clusters.Local {
-			row.Kwerft = runningKwerft()
+			row.Kwerft = u.version
 			row.Available = out.Available
 		} else if i := slices.IndexFunc(remote.Items, func(cl kwerftv1.Cluster) bool { return cl.Name == st.name }); i >= 0 {
 			cl := remote.Items[i].Status
 			row.Kwerft, row.Kubernetes = strings.TrimPrefix(cl.AgentVersion, "v"), cl.KubernetesVersion
 			// Agents follow the console: its release is their target
 			// (docs/phase6-upgrades.md › Agent clusters).
-			if t := agentTarget(row.Kwerft); t != nil {
+			if t := agentTarget(u.version, row.Kwerft); t != nil {
 				row.Available = append(row.Available, *t)
 			}
 		}
@@ -498,16 +557,91 @@ func (u *upgradesAPI) overview(w http.ResponseWriter, r *http.Request) {
 		}
 		if st.name == clusters.Local {
 			out.Current.Kubernetes = row.Kubernetes
+		} else if row.Upgradable && out.Policy.Policy != string(kwerftv1.UpdatesOff) {
+			// The agent's release pins its k3s (discovery covers only the
+			// console's): read from the install repository, cached.
+			if k := u.cfg.Upgrades.KubernetesTarget(ctx, row.Kwerft, row.Kubernetes); k != nil {
+				row.Available = append(row.Available, availableView([]kwerftv1.AvailableUpdate{*k})...)
+			}
 		}
 		out.Clusters = append(out.Clusters, row)
+	}
+	if out.CanUpgrade {
+		out.UpgradeAll = u.upgradeAllOffer(&out, remote.Items)
 	}
 	writeJSON(w, http.StatusOK, out)
 }
 
+// upgradeAllOffer is what "Upgrade all" would do now: the console to its
+// newest allowed release (or staying where it is), then every agent
+// cluster behind that. Nil when no agent cluster would be upgraded (a
+// console alone has its own Upgrade… button) or the console is upgrading.
+func (u *upgradesAPI) upgradeAllOffer(out *updatesJSON, remote []kwerftv1.Cluster) *upgradeAllJSON {
+	console := u.version
+	cv, err := upgrades.ParseVersion(console)
+	if err != nil || !upgrades.IsRelease(console) {
+		return nil
+	}
+	target := cv
+	for _, a := range out.Available {
+		if v, err := upgrades.ParseVersion(a.Version); err == nil && a.Component == string(kwerftv1.UpgradeKwerft) && a.Allowed && target.Less(v) {
+			target = v
+		}
+	}
+	busy := map[string]string{}
+	connected := map[string]bool{}
+	for _, row := range out.Clusters {
+		if row.Active != nil && row.Active.Component == string(kwerftv1.UpgradeKwerft) {
+			if row.Name == clusters.Local {
+				return nil
+			}
+			busy[row.Name] = row.Active.Name
+		}
+		connected[row.Name] = row.Connected
+	}
+	queue, skipped := u.planFleet(target.String(), remote, connected, busy)
+	if len(queue) == 0 {
+		return nil
+	}
+	return &upgradeAllJSON{Version: target.String(), Console: cv.Less(target), Clusters: queue, Skipped: skipped}
+}
+
+// planFleet is which agent clusters an "Upgrade all" to version takes
+// along, in order (upgrades.PlanFleet over the Cluster objects), and which
+// it leaves out: not connected, already there, upgrades not possible from
+// the console, or a Kwerft upgrade under way there (busy).
+func (u *upgradesAPI) planFleet(version string, remote []kwerftv1.Cluster, connected map[string]bool, busy map[string]string) ([]string, []fleetSkipJSON) {
+	var agents []upgrades.AgentCluster
+	for _, cl := range remote {
+		if cl.Name == clusters.Local {
+			continue
+		}
+		agents = append(agents, upgrades.AgentCluster{Name: cl.Name, AgentVersion: strings.TrimPrefix(cl.Status.AgentVersion, "v"),
+			Connected: cl.Status.Phase == controllers.ClusterConnected && connected[cl.Name]})
+	}
+	planned, skips := upgrades.PlanFleet(version, agents)
+	skipped := []fleetSkipJSON{}
+	for _, s := range skips {
+		skipped = append(skipped, fleetSkipJSON{Cluster: s.Cluster, Reason: s.Reason, Warning: s.Warning})
+	}
+	queue := []string{}
+	for _, a := range planned {
+		switch {
+		case u.cfg.Upgrades == nil || !u.cfg.Upgrades.Supports(a.Name):
+			skipped = append(skipped, fleetSkipJSON{Cluster: a.Name, Warning: true,
+				Reason: "its agent cannot be upgraded from the console: re-run the installer of " + version + " on its server"})
+		case busy[a.Name] != "":
+			skipped = append(skipped, fleetSkipJSON{Cluster: a.Name, Warning: true, Reason: "upgrade " + busy[a.Name] + " is under way there"})
+		default:
+			queue = append(queue, a.Name)
+		}
+	}
+	return queue, skipped
+}
+
 // agentTarget: an agent behind the console is offered the console's own
 // release.
-func agentTarget(agent string) *availableJSON {
-	console := runningKwerft()
+func agentTarget(console, agent string) *availableJSON {
 	if !upgrades.IsRelease(console) {
 		return nil
 	}
@@ -767,7 +901,7 @@ func (u *upgradesAPI) resolve(w http.ResponseWriter, r *http.Request, req *upgra
 		return nil, false
 	}
 	if comp == kwerftv1.UpgradeKwerft {
-		t.from = runningKwerft()
+		t.from = u.version
 		if !conn.isLocal() {
 			t.from = ""
 			var cl kwerftv1.Cluster
@@ -878,27 +1012,59 @@ func (u *upgradesAPI) start(w http.ResponseWriter, r *http.Request) {
 	if !u.confirmIdentity(w, r, p.user, req.Password) {
 		return
 	}
-	// One unfinished Upgrade per component and cluster: a second one would
-	// only fail its preflight once the first is done.
-	ctx, cancel := context.WithTimeout(t.ctx, kubeTimeout)
-	existing, err := clusterUpgrades(ctx, t.c, t.conn.name)
-	cancel()
-	if err != nil {
-		u.kubeError(w, r.WithContext(t.ctx), p, "upgrade.start", "upgrades", "Upgrades not found.", err)
+	up, pf, ok := u.checkAndCreate(w, r, t, "upgrade.start")
+	if !ok {
 		return
 	}
-	for _, e := range existing {
-		if !e.Finished && e.Component == string(t.spec.Component) {
-			writeJSON(w, http.StatusConflict, map[string]any{
-				"error":   fmt.Sprintf("Upgrade %s to %s is %s. Wait for it or cancel it first.", e.Name, e.Version, strings.ToLower(e.Phase)),
-				"upgrade": e,
-			})
-			return
+	u.audit(r, p.user.Email, "upgrade.start", up.Name, t.detail())
+	writeJSON(w, http.StatusCreated, map[string]any{"upgrade": upgradeView(t.conn.name, up), "preflight": pf})
+}
+
+func (t *upgradeTarget) detail() string {
+	detail := fmt.Sprintf("%s %s → %s on %s", t.spec.Component, cmp.Or(t.from, "?"), t.spec.Version, t.conn.name)
+	if t.spec.AcceptDataRollback {
+		detail += "; data rollback accepted"
+	}
+	return detail
+}
+
+// unfinished is the cluster's unfinished Upgrade of the component, if any:
+// one at a time per component and cluster (a second one would only fail
+// its preflight once the first is done).
+func unfinished(ctx context.Context, c client.Client, cluster string, component kwerftv1.UpgradeComponent) (*upgradeJSON, error) {
+	ctx, cancel := context.WithTimeout(ctx, kubeTimeout)
+	defer cancel()
+	existing, err := clusterUpgrades(ctx, c, cluster)
+	if err != nil {
+		return nil, err
+	}
+	for i, e := range existing {
+		if !e.Finished && e.Component == string(component) {
+			return &existing[i], nil
 		}
+	}
+	return nil, nil
+}
+
+// checkAndCreate refuses a second unfinished Upgrade, runs the preflight
+// and creates the Upgrade as the user. On false it has answered.
+func (u *upgradesAPI) checkAndCreate(w http.ResponseWriter, r *http.Request, t *upgradeTarget, action string) (*kwerftv1.Upgrade, preflightJSON, bool) {
+	p := principalOf(r)
+	e, err := unfinished(t.ctx, t.c, t.conn.name, t.spec.Component)
+	if err != nil {
+		u.kubeError(w, r.WithContext(t.ctx), p, action, "upgrades", "Upgrades not found.", err)
+		return nil, preflightJSON{}, false
+	}
+	if e != nil {
+		writeJSON(w, http.StatusConflict, map[string]any{
+			"error":   fmt.Sprintf("Upgrade %s to %s is %s. Wait for it or cancel it first.", e.Name, e.Version, strings.ToLower(e.Phase)),
+			"upgrade": e,
+		})
+		return nil, preflightJSON{}, false
 	}
 	pf, ok := u.runPreflight(w, r, t)
 	if !ok {
-		return
+		return nil, pf, false
 	}
 	if pf.Blocked {
 		var msgs []string
@@ -908,7 +1074,7 @@ func (u *upgradesAPI) start(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		writeJSON(w, http.StatusConflict, map[string]any{"error": "The preflight failed: " + strings.Join(msgs, " "), "preflight": pf})
-		return
+		return nil, pf, false
 	}
 	up := &kwerftv1.Upgrade{
 		ObjectMeta: metav1.ObjectMeta{
@@ -917,18 +1083,165 @@ func (u *upgradesAPI) start(w http.ResponseWriter, r *http.Request) {
 		},
 		Spec: t.spec,
 	}
-	ctx, cancel = context.WithTimeout(t.ctx, kubeTimeout)
+	ctx, cancel := context.WithTimeout(t.ctx, kubeTimeout)
 	defer cancel()
 	if err := t.c.Create(ctx, up); err != nil {
-		u.kubeError(w, r.WithContext(t.ctx), p, "upgrade.start", string(t.spec.Component)+" "+t.spec.Version, "Upgrade not found.", err)
+		u.kubeError(w, r.WithContext(t.ctx), p, action, string(t.spec.Component)+" "+t.spec.Version, "Upgrade not found.", err)
+		return nil, pf, false
+	}
+	return up, pf, true
+}
+
+type upgradeAllRequest struct {
+	Version            string `json:"version"`
+	AcceptDataRollback bool   `json:"acceptDataRollback"`
+	Password           string `json:"password"`
+}
+
+// upgradeAllAnswer: the console's Upgrade (when it upgrades) with its
+// preflight, the fleet, the members created in agent clusters, and the
+// clusters left out.
+type upgradeAllAnswer struct {
+	Upgrade   *upgradeJSON    `json:"upgrade,omitempty"`
+	Preflight *preflightJSON  `json:"preflight,omitempty"`
+	Fleet     string          `json:"fleet"`
+	Members   []upgradeJSON   `json:"members"`
+	Skipped   []fleetSkipJSON `json:"skipped"`
+}
+
+// startAll is "Upgrade all" (docs/phase6-upgrades.md › As built (G1)): the
+// console's own Upgrade to the version (refused, created and audited as
+// for one cluster) unless it runs it already, then a held member in every
+// connected agent cluster behind it, created as the user. The
+// AgentUpgrades reconciler starts them one after another once the
+// console's upgrade succeeded.
+func (u *upgradesAPI) startAll(w http.ResponseWriter, r *http.Request) {
+	p := principalOf(r)
+	var req upgradeAllRequest
+	if !decode(w, r, &req) {
 		return
 	}
-	detail := fmt.Sprintf("%s %s → %s on %s", t.spec.Component, cmp.Or(t.from, "?"), t.spec.Version, t.conn.name)
-	if t.spec.AcceptDataRollback {
-		detail += "; data rollback accepted"
+	req.Version = strings.TrimSpace(req.Version)
+	v, err := upgrades.ParseVersion(req.Version)
+	if err != nil || strings.HasPrefix(req.Version, "v") || len(req.Version) > 64 {
+		writeFieldError(w, "version", "Enter a Kwerft release, like 0.6.0.")
+		return
 	}
-	u.audit(r, p.user.Email, "upgrade.start", up.Name, detail)
-	writeJSON(w, http.StatusCreated, map[string]any{"upgrade": upgradeView(t.conn.name, up), "preflight": pf})
+	console := u.version
+	cv, err := upgrades.ParseVersion(console)
+	switch {
+	case err != nil || !upgrades.IsRelease(console):
+		writeError(w, http.StatusConflict, "This console runs development build "+console+": it upgrades nothing. Use make dev-server.")
+		return
+	case v.Less(cv):
+		writeFieldError(w, "version", "The console runs "+console+": choose it or a newer release.")
+		return
+	case u.cfg.Upgrades == nil:
+		writeError(w, http.StatusConflict, "Upgrades cannot be started from this console.")
+		return
+	}
+	if !u.confirmIdentity(w, r, p.user, req.Password) {
+		return
+	}
+
+	// The agent clusters behind the version, as the user sees them.
+	mc, err := u.managementClient(p)
+	if err != nil {
+		u.internalError(w, r, err)
+		return
+	}
+	lctx, cancel := context.WithTimeout(r.Context(), kubeTimeout)
+	var remote kwerftv1.ClusterList
+	err = mc.List(lctx, &remote)
+	cancel()
+	if err != nil && !meta.IsNoMatchError(err) {
+		u.kubeError(w, r, p, "upgrade.start_all", "clusters", "Clusters not found.", err)
+		return
+	}
+	connected := map[string]bool{}
+	for _, st := range u.clusters.states() {
+		connected[st.name] = st.conn != nil
+	}
+	queue, skipped := u.planFleet(v.String(), remote.Items, connected, nil)
+	// Each agent cluster as the user; one with a Kwerft upgrade under way
+	// is left out.
+	type fleetTarget struct {
+		name string
+		c    client.Client
+		ctx  context.Context
+	}
+	var targets []fleetTarget
+	for _, name := range queue {
+		skip := func(reason string) {
+			skipped = append(skipped, fleetSkipJSON{Cluster: name, Reason: reason, Warning: true})
+		}
+		conn, err := u.clusters.byName(name)
+		if err != nil {
+			skip("not connected: upgrade it when it is back")
+			continue
+		}
+		c, err := conn.kube.For(p.user.Email, p.user.Role)
+		if err != nil {
+			u.internalError(w, r, err)
+			return
+		}
+		cctx := withCluster(r.Context(), conn, true)
+		e, err := unfinished(cctx, c, name, kwerftv1.UpgradeKwerft)
+		switch {
+		case err != nil:
+			skip("its upgrades cannot be read: " + kubeMessage(err, "not found"))
+		case e != nil:
+			skip("upgrade " + e.Name + " is under way there")
+		default:
+			targets = append(targets, fleetTarget{name: name, c: c, ctx: cctx})
+		}
+	}
+	needConsole := cv.Less(v)
+	if !needConsole && len(targets) == 0 {
+		writeJSON(w, http.StatusConflict, map[string]any{"error": "Nothing to upgrade: the console runs " + console +
+			" and no connected agent cluster can follow it now.", "skipped": skipped})
+		return
+	}
+
+	out := upgradeAllAnswer{Fleet: upgrades.NewFleetID(), Members: []upgradeJSON{}, Skipped: skipped}
+	after := ""
+	var parts []string
+	if needConsole {
+		t, ok := u.resolve(w, r, &upgradeRequest{Component: string(kwerftv1.UpgradeKwerft), Version: v.String(), AcceptDataRollback: req.AcceptDataRollback}, r.Context())
+		if !ok {
+			return
+		}
+		up, pf, ok := u.checkAndCreate(w, r, t, "upgrade.start_all")
+		if !ok {
+			return
+		}
+		view := upgradeView(clusters.Local, up)
+		out.Upgrade, out.Preflight, out.Fleet, after = &view, &pf, up.Name, up.Name
+		parts = append(parts, t.detail())
+	}
+	for i, t := range targets {
+		m := controllers.FleetMember(out.Fleet, after, i, v.String(), p.user.Email)
+		ctx, cancel := context.WithTimeout(t.ctx, kubeTimeout)
+		err := t.c.Create(ctx, m)
+		cancel()
+		if err != nil {
+			out.Skipped = append(out.Skipped, fleetSkipJSON{Cluster: t.name, Warning: true,
+				Reason: "its upgrade could not be created: " + kubeMessage(err, "not found")})
+			continue
+		}
+		out.Members = append(out.Members, upgradeView(t.name, m))
+		parts = append(parts, t.name)
+	}
+	detail := "Kwerft " + v.String() + ": " + cmp.Or(strings.Join(parts, ", then "), "nothing")
+	if len(out.Skipped) > 0 {
+		var left []string
+		for _, s := range out.Skipped {
+			left = append(left, s.Cluster+" ("+s.Reason+")")
+		}
+		detail += "; skipped " + strings.Join(left, ", ")
+	}
+	u.audit(r, p.user.Email, "upgrade.start_all", out.Fleet, detail)
+	writeJSON(w, http.StatusCreated, out)
 }
 
 // cancel asks the controller to stop an Upgrade that has not reached
@@ -1029,11 +1342,28 @@ func describePolicy(p updatePolicyJSON) string {
 	return s
 }
 
+// policyRequest is a new policy; turning AutoPatch (or its Kubernetes
+// patches) on takes the password or a current authenticator code, as
+// starting an upgrade does: it authorizes upgrades nobody clicks.
+type policyRequest struct {
+	updatePolicyJSON
+	Password string `json:"password,omitempty"`
+}
+
+// enablesAutoPatch: after turns on unattended upgrades before did not
+// allow (AutoPatch, or Kubernetes patches with it). Turning them off, or
+// changing the window or channel, does not need the password.
+func enablesAutoPatch(before, after updatePolicyJSON) bool {
+	auto := string(kwerftv1.UpdatesAutoPatch)
+	return after.Policy == auto && before.Policy != auto || after.KubernetesPatches && !before.KubernetesPatches
+}
+
 func (u *upgradesAPI) setPolicy(w http.ResponseWriter, r *http.Request) {
-	var req updatePolicyJSON
-	if !decode(w, r, &req) {
+	var body policyRequest
+	if !decode(w, r, &body) {
 		return
 	}
+	req := body.updatePolicyJSON
 	switch kwerftv1.UpdatePolicy(req.Policy) {
 	case kwerftv1.UpdatesOff, kwerftv1.UpdatesNotify, kwerftv1.UpdatesAutoPatch:
 	default:
@@ -1072,6 +1402,9 @@ func (u *upgradesAPI) setPolicy(w http.ResponseWriter, r *http.Request) {
 	before := policyView(nil)
 	if cs != nil {
 		before = policyView(cs.Spec.Updates)
+	}
+	if enablesAutoPatch(before, policyView(spec)) && !u.confirmIdentity(w, r, p.user, body.Password) {
+		return
 	}
 	if err := patchConsoleSettings(ctx, c, cs, map[string]any{"spec": map[string]any{"updates": updatesPatch(spec)}}); err != nil {
 		u.kubeError(w, r, p, "updates.policy", "updates", "Settings not found.", err)

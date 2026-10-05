@@ -343,6 +343,13 @@ func KwerftAllowed(m *Manifest, cur Version, k3sMinors []Version) (bool, string)
 	return true, ""
 }
 
+// KubernetesTarget is the k3s version offered to a cluster that runs the
+// Kwerft release of installed (its manifest) and Kubernetes running, or
+// nil: an agent cluster's, which discovery does not cover.
+func KubernetesTarget(installed *Manifest, running string) *kwerftv1.AvailableUpdate {
+	return kubernetesTarget(installed, running)
+}
+
 // kubernetesTarget: the installed release's pinned k3s, when it is newer
 // than the running version and at most one minor ahead. k3s versions come
 // only from Kwerft manifests, never from k3s's channel server.

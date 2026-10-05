@@ -288,8 +288,8 @@ func main() {
 	}
 
 	var preflight server.UpgradePreflight
-	if upgradeChecks != nil {
-		preflight = &upgradePreflight{local: upgradeChecks}
+	if upgradeChecks != nil && mgr != nil {
+		preflight = newUpgradePreflight(mgr, upgradeChecks, hub)
 	}
 
 	srv := server.New(server.Config{
