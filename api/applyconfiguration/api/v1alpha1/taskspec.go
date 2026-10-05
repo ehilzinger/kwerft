@@ -45,6 +45,12 @@ type TaskSpecApplyConfiguration struct {
 	Volumes []AppVolumeApplyConfiguration `json:"volumes,omitempty"`
 	// Timeout stops the run (all retries together) after this long, e.g. 30m.
 	Timeout *metav1.Duration `json:"timeout,omitempty"`
+	// StopSeconds is how long a run gets to finish after it is told to stop
+	// (the Task deleted, its timeout reached, the node drained): the time
+	// between SIGTERM and SIGKILL. Default 30. A job that saves its progress
+	// on SIGTERM, such as a long import or a reseed finishing the work in
+	// hand, needs more.
+	StopSeconds *int32 `json:"stopSeconds,omitempty"`
 	// Retries is how often a failed run is started again.
 	Retries *int32 `json:"retries,omitempty"`
 	// TTLSecondsAfterFinished is how long a finished run (its pod and logs)
@@ -147,6 +153,14 @@ func (b *TaskSpecApplyConfiguration) WithVolumes(values ...*AppVolumeApplyConfig
 // If called multiple times, the Timeout field is set to the value of the last call.
 func (b *TaskSpecApplyConfiguration) WithTimeout(value metav1.Duration) *TaskSpecApplyConfiguration {
 	b.Timeout = &value
+	return b
+}
+
+// WithStopSeconds sets the StopSeconds field in the declarative configuration to the given value
+// and returns the receiver, so that objects can be built by chaining "With" function invocations.
+// If called multiple times, the StopSeconds field is set to the value of the last call.
+func (b *TaskSpecApplyConfiguration) WithStopSeconds(value int32) *TaskSpecApplyConfiguration {
+	b.StopSeconds = &value
 	return b
 }
 

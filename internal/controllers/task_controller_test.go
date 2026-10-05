@@ -221,6 +221,24 @@ func TestTaskRendersJob(t *testing.T) {
 	}
 }
 
+// A Task's stopSeconds is its pod's grace period; without it Kubernetes'
+// default (30 s) stands, as before the field existed.
+func TestTaskStopSeconds(t *testing.T) {
+	requireEnvtest(t)
+	projectNamespace(t, "stopping")
+	long := imageTask("ghcr.io/acme/reseed:1")
+	long.StopSeconds = ptr.To[int32](600)
+	createTask(t, "stopping", "reseed", long)
+	createTask(t, "stopping", "quick", imageTask("ghcr.io/acme/quick:1"))
+
+	if g := waitForJob(t, "stopping", "reseed").Spec.Template.Spec.TerminationGracePeriodSeconds; g == nil || *g != 600 {
+		t.Errorf("reseed: terminationGracePeriodSeconds = %v, want 600", g)
+	}
+	if g := waitForJob(t, "stopping", "quick").Spec.Template.Spec.TerminationGracePeriodSeconds; g != nil && *g != 30 {
+		t.Errorf("quick: terminationGracePeriodSeconds = %v, want the default", *g)
+	}
+}
+
 func TestTaskStatusFollowsJobAndPod(t *testing.T) {
 	requireEnvtest(t)
 	projectNamespace(t, "runs")

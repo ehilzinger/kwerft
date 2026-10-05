@@ -86,6 +86,16 @@ type TaskSpec struct {
 	// +optional
 	Timeout *metav1.Duration `json:"timeout,omitempty"`
 
+	// StopSeconds is how long a run gets to finish after it is told to stop
+	// (the Task deleted, its timeout reached, the node drained): the time
+	// between SIGTERM and SIGKILL. Default 30. A job that saves its progress
+	// on SIGTERM, such as a long import or a reseed finishing the work in
+	// hand, needs more.
+	// +kubebuilder:validation:Minimum=1
+	// +kubebuilder:validation:Maximum=3600
+	// +optional
+	StopSeconds *int32 `json:"stopSeconds,omitempty"`
+
 	// Retries is how often a failed run is started again.
 	// +kubebuilder:validation:Minimum=0
 	// +kubebuilder:validation:Maximum=10

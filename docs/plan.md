@@ -141,7 +141,7 @@ Exit codes: 0 ok · 2 usage · 10 preflight · 20 network/DNS · 30 Kubernetes �
   and health checks, so the console form and the reconciler code are shared.
   It runs under the project's quota, Pod Security level and default-deny
   policy like any App.
-- **Task** fields beyond that: `timeout` (`activeDeadlineSeconds`),
+- **Task** fields beyond that: `timeout` (`activeDeadlineSeconds`), `stopSeconds` (the pod's grace period after SIGTERM, 1–3600, default 30: a job that saves its progress on SIGTERM gets the time it needs; hatchure's reseed, 2026-10-05),
   `retries` (`backoffLimit`, default 0), `onSuccess.restart` (Apps in the
   same project to roll out once it succeeds, e.g. a server that has to
   reopen a file the job replaced). The reconciler does the restart, so a job

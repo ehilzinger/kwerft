@@ -144,6 +144,9 @@ func (r *taskRun) job() *batchv1ac.JobApplyConfiguration {
 		volumes:    r.volumes,
 		labels:     r.labels(),
 	}
+	if s := r.task.Spec.StopSeconds; s != nil {
+		pod.stopSeconds = *s
+	}
 	tmpl := pod.template()
 	tmpl.Spec.
 		WithRestartPolicy(corev1.RestartPolicyNever).

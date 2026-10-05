@@ -52,6 +52,8 @@ export type TaskSpec = {
   /** A Go duration: 30m, 1h30m. */
   timeout?: string;
   retries?: number;
+  /** Seconds between SIGTERM and SIGKILL when the run is stopped (default 30). */
+  stopSeconds?: number;
   ttlSecondsAfterFinished?: number;
   onSuccess?: { restart?: string[] };
 };

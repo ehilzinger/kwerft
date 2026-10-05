@@ -45,6 +45,9 @@ type podShape struct {
 	annotations map[string]string
 	// drainSeconds delays SIGTERM by a preStop sleep; 0 for Tasks.
 	drainSeconds int32
+	// stopSeconds replaces the default time between SIGTERM and SIGKILL
+	// (TaskSpec.StopSeconds); 0 keeps it.
+	stopSeconds int32
 }
 
 // stopSeconds is what a container gets between SIGTERM and SIGKILL after it
@@ -115,9 +118,13 @@ func (p *podShape) template() *corev1ac.PodTemplateSpecApplyConfiguration {
 		WithEnableServiceLinks(false).
 		WithSecurityContext(corev1ac.PodSecurityContext().
 			WithSeccompProfile(corev1ac.SeccompProfile().WithType(corev1.SeccompProfileTypeRuntimeDefault)))
-	if p.drainSeconds > 0 {
+	if p.drainSeconds > 0 || p.stopSeconds > 0 {
+		stop := int64(stopSeconds)
+		if p.stopSeconds > 0 {
+			stop = int64(p.stopSeconds)
+		}
 		// The grace period counts from the start of preStop.
-		spec.WithTerminationGracePeriodSeconds(int64(p.drainSeconds) + stopSeconds)
+		spec.WithTerminationGracePeriodSeconds(int64(p.drainSeconds) + stop)
 	}
 	if p.pullSecret != "" {
 		spec.WithImagePullSecrets(corev1ac.LocalObjectReference().WithName(p.pullSecret))

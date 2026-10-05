@@ -264,6 +264,10 @@ func TestTaskValidationNamesTheField(t *testing.T) {
 			"source": map[string]any{"image": map[string]any{"ref": "busybox"}}, "onSuccess": map[string]any{"restart": []string{"nope"}}}}, "spec.onSuccess.restart[0]"},
 		{"too many retries", map[string]any{"spec": map[string]any{
 			"source": map[string]any{"image": map[string]any{"ref": "busybox"}}, "retries": 11}}, "spec.retries"},
+		{"no time to stop", map[string]any{"spec": map[string]any{
+			"source": map[string]any{"image": map[string]any{"ref": "busybox"}}, "stopSeconds": 0}}, "spec.stopSeconds"},
+		{"too long to stop", map[string]any{"spec": map[string]any{
+			"source": map[string]any{"image": map[string]any{"ref": "busybox"}}, "stopSeconds": 3601}}, "spec.stopSeconds"},
 		{"bad name", map[string]any{"name": "Bad_Name", "spec": map[string]any{"source": map[string]any{"image": map[string]any{"ref": "busybox"}}}}, "name"},
 	} {
 		var e apiError

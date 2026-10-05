@@ -575,6 +575,17 @@ spec:
                 x-kubernetes-validations:
                 - message: set exactly one of image or git
                   rule: has(self.image) != has(self.git)
+              stopSeconds:
+                description: |-
+                  StopSeconds is how long a run gets to finish after it is told to stop
+                  (the Task deleted, its timeout reached, the node drained): the time
+                  between SIGTERM and SIGKILL. Default 30. A job that saves its progress
+                  on SIGTERM, such as a long import or a reseed finishing the work in
+                  hand, needs more.
+                format: int32
+                maximum: 3600
+                minimum: 1
+                type: integer
               timeout:
                 description: Timeout stops the run (all retries together) after this
                   long, e.g. 30m.

@@ -2677,6 +2677,11 @@ func (in *TaskSpec) DeepCopyInto(out *TaskSpec) {
 		*out = new(v1.Duration)
 		**out = **in
 	}
+	if in.StopSeconds != nil {
+		in, out := &in.StopSeconds, &out.StopSeconds
+		*out = new(int32)
+		**out = **in
+	}
 	if in.Retries != nil {
 		in, out := &in.Retries, &out.Retries
 		*out = new(int32)

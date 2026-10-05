@@ -463,6 +463,10 @@ func (a *api) taskGet(w http.ResponseWriter, r *http.Request) {
 // references to Apps or Volumes that do not exist. A missing Secret is left
 // to the pod, which waits for it. prefix is the spec's field path.
 func validateTaskSpec(ctx context.Context, w http.ResponseWriter, c client.Client, project, prefix string, spec *kwerftv1.TaskSpec) bool {
+	if n := spec.StopSeconds; n != nil && (*n < 1 || *n > 3600) {
+		invalid(w, prefix+".stopSeconds", "A run gets 1 to 3600 seconds to stop.")
+		return false
+	}
 	for _, list := range []struct {
 		name string
 		vars []corev1.EnvVar

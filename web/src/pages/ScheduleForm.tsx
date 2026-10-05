@@ -44,6 +44,7 @@ type Form = {
   keepFailed: string;
   timeout: string;
   retries: string;
+  stopSeconds: string;
   restart: string[];
   mounts: Mount[];
   size: "" | Size;
@@ -91,6 +92,7 @@ function formOf(name: string, project: string, spec: ScheduleSpec): Form {
     keepFailed: String(spec.history?.failed ?? 3),
     timeout: prettyDuration(t.timeout),
     retries: String(t.retries ?? 0),
+    stopSeconds: t.stopSeconds ? String(t.stopSeconds) : "",
     restart: t.onSuccess?.restart ?? [],
     mounts: mountsOf(t.volumes),
     size: t.size ?? "",
@@ -128,6 +130,8 @@ function specOf(f: Form, base: ScheduleSpec): ScheduleSpec {
   if (f.timeout.trim()) t.timeout = f.timeout.trim();
   else delete t.timeout;
   t.retries = Number(f.retries);
+  if (f.stopSeconds.trim()) t.stopSeconds = Number(f.stopSeconds);
+  else delete t.stopSeconds;
   if (f.restart.length) t.onSuccess = { ...t.onSuccess, restart: f.restart };
   else delete t.onSuccess;
   if (f.size) t.size = f.size;
@@ -164,6 +168,10 @@ function check(f: Form, creating: boolean): Problem | undefined {
   if (f.timeout.trim() && !DURATION_RE.test(f.timeout.trim())) return { field: "timeout", message: "A duration such as 30m, 1h or 1h30m." };
   const r = Number(f.retries);
   if (!Number.isInteger(r) || r < 0 || r > 10 || f.retries.trim() === "") return { field: "retries", message: "A whole number from 0 to 10." };
+  if (f.stopSeconds.trim()) {
+    const st = Number(f.stopSeconds);
+    if (!Number.isInteger(st) || st < 1 || st > 3600) return { field: "stopSeconds", message: "A whole number of seconds from 1 to 3600." };
+  }
   const m = checkMounts(f.mounts);
   if (m) return { field: `mounts[${m[0]}]`, message: m[1] };
   return undefined;
@@ -185,6 +193,7 @@ function locate(field?: string): string | undefined {
   if (field.startsWith("spec.task.onSuccess")) return "restart";
   if (field === "spec.task.timeout") return "timeout";
   if (field === "spec.task.retries") return "retries";
+  if (field === "spec.task.stopSeconds") return "stopSeconds";
   if (field === "spec.history.succeeded") return "keepSucceeded";
   if (field === "spec.history.failed") return "keepFailed";
   return undefined;
@@ -498,6 +507,8 @@ function ScheduleForm({ schedule, initial: start }: { schedule?: Schedule; initi
                   hint="Stops the run (all retries) after this long: 30m, 2h." />
                 <Field id="s-retries" label="Retries" type="number" min={0} max={10} value={f.retries} onChange={(e) => set("retries", e.target.value)} error={err("retries")}
                   hint="How often a failed run starts again." />
+                <Field id="s-stop" label="Time to stop" type="number" min={1} max={3600} value={f.stopSeconds} onChange={(e) => set("stopSeconds", e.target.value)} placeholder="30" error={err("stopSeconds")}
+                  hint="Seconds a run gets to finish after it is stopped, before it is killed." />
                 <Field id="s-keep-ok" label="Keep succeeded runs" type="number" min={0} max={100} value={f.keepSucceeded} onChange={(e) => set("keepSucceeded", e.target.value)} error={err("keepSucceeded")} />
                 <Field id="s-keep-bad" label="Keep failed runs" type="number" min={0} max={100} value={f.keepFailed} onChange={(e) => set("keepFailed", e.target.value)} error={err("keepFailed")}
                   hint="With their logs; older ones are removed." />

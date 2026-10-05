@@ -124,6 +124,7 @@ export function TaskDetail() {
               <dt>Size</dt><dd>{size ? `${size.label} · ${size.note}` : spec.size === "custom" ? "Custom" : spec.fromApp ? `Same as ${spec.fromApp}` : "Small"}</dd>
               <dt>Timeout</dt><dd>{spec.timeout ? prettyDuration(spec.timeout) : <span className="dim">none</span>}</dd>
               <dt>Retries</dt><dd>{spec.retries ?? 0}</dd>
+              <dt>Time to stop</dt><dd>{spec.stopSeconds ?? 30} s</dd>
               {(spec.volumes?.length ?? 0) > 0 && <><dt>Volumes</dt><dd>{spec.volumes!.map(describeMount).join(", ")}</dd></>}
               <dt>On success</dt>
               <dd>
