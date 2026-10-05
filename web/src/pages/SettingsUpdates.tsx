@@ -8,9 +8,9 @@ import { Icon } from "../components/Icon";
 import { ago } from "../workloads";
 import { LOCAL, useClusters } from "../clusters";
 import {
-  DAYS, durationText, localTimeZone, needsTypedConfirmation, noticeText, notesBlocks, phasePill, progressLines, streamUpgrade, summaryLine,
-  updateKeys, updateNotices, updatesApi, windowText,
-  type Available, type ClusterUpdates, type Line, type Policy, type Upgrade, type UpdatePolicy, type Updates,
+  DAYS, durationText, enablesAutoPatch, fleetSteps, localTimeZone, needsTypedConfirmation, noticeText, notesBlocks, phasePill, progressLines,
+  streamUpgrade, summaryLine, updateKeys, updateNotices, updatesApi, windowText,
+  type Available, type ClusterUpdates, type Line, type Policy, type Preflight, type Upgrade, type UpgradeAll, type UpdatePolicy, type Updates,
 } from "../updates";
 import "../styles/workloads.css";
 import "../styles/jobs.css";
@@ -77,6 +77,7 @@ export function SettingsUpdates() {
   });
   const history = useQuery({ queryKey: updateKeys.history, queryFn: () => updatesApi.history(), enabled: canRead, refetchInterval: 15000 });
   const [dialog, setDialog] = useState<Target>();
+  const [all, setAll] = useState<UpgradeAll>();
   const [picked, setPicked] = useState<Watch>();
 
   // The upgrade in view: the one picked (started here or chosen in the
@@ -112,7 +113,7 @@ export function SettingsUpdates() {
       {updates.data && (
         <>
           <PausedBanner u={updates.data} onResumed={refresh} />
-          <VersionsCard u={updates.data} onUpgrade={setDialog} onWatch={setPicked} />
+          <VersionsCard u={updates.data} onUpgrade={setDialog} onUpgradeAll={setAll} onWatch={setPicked} />
           {watch && <ProgressCard key={`${watch.cluster}/${watch.name}`} watch={watch} canCancel={updates.data.canUpgrade} onFinished={refresh}
             onClose={picked ? () => setPicked(undefined) : undefined} />}
           <NotesCard u={updates.data} />
@@ -124,6 +125,12 @@ export function SettingsUpdates() {
         onStarted={(u) => {
           setDialog(undefined);
           setPicked({ cluster: u.cluster, name: u.name });
+          refresh();
+        }} />}
+      {all && <UpgradeAllDialog plan={all} current={updates.data?.current.kwerft} onClose={() => setAll(undefined)}
+        onStarted={(w) => {
+          setAll(undefined);
+          if (w) setPicked(w);
           refresh();
         }} />}
     </section>
@@ -160,7 +167,9 @@ function PausedBanner({ u, onResumed }: { u: Updates; onResumed: () => void }) {
 
 // ---- versions --------------------------------------------------------------------------------
 
-function VersionsCard({ u, onUpgrade, onWatch }: { u: Updates; onUpgrade: (t: Target) => void; onWatch: (w: Watch) => void }) {
+function VersionsCard({ u, onUpgrade, onUpgradeAll, onWatch }: {
+  u: Updates; onUpgrade: (t: Target) => void; onUpgradeAll: (p: UpgradeAll) => void; onWatch: (w: Watch) => void;
+}) {
   const { multi } = useClusters();
   const queryClient = useQueryClient();
   const [checking, setChecking] = useState(false);
@@ -187,6 +196,12 @@ function VersionsCard({ u, onUpgrade, onWatch }: { u: Updates; onUpgrade: (t: Ta
             {off ? "Updates are off" : u.checking ? "Checking for releases…" : u.checkedAt ? `Checked ${ago(u.checkedAt)}` : "Not checked yet"}
           </span>
           <button className="btn sm" onClick={checkNow} disabled={off || checking || u.checking}>{checking || u.checking ? "Checking…" : "Check now"}</button>
+          {u.upgradeAll && u.canUpgrade && (
+            <button className="btn sm pri" onClick={() => onUpgradeAll(u.upgradeAll!)}
+              title={fleetSteps(u.upgradeAll, u.current.kwerft).join(", then ")}>
+              Upgrade all to {u.upgradeAll.version}…
+            </button>
+          )}
         </span>
       </div>
       {(error || u.error) && <div className="bd"><p className="form-error" role="alert">{error ?? `The last check failed: ${u.error}`}</p></div>}
@@ -204,7 +219,8 @@ function VersionsCard({ u, onUpgrade, onWatch }: { u: Updates; onUpgrade: (t: Ta
         </table>
       </div>
       {u.clusters.length > 1 && (
-        <div className="bd sep"><p className="dim note">The console upgrades itself first, then each connected cluster follows its release. Kubernetes is upgraded per cluster.</p></div>
+        <div className="bd sep"><p className="dim note">The console upgrades itself first, then each connected cluster follows its release, one after another
+          (<b>Upgrade all</b>); a cluster that fails or rolls back stops the rest. Kubernetes is upgraded per cluster.</p></div>
       )}
     </div>
   );
@@ -349,7 +365,15 @@ const marks: Record<Line["mark"], ReactNode> = {
 };
 
 function ProgressCard({ watch, canCancel, onFinished, onClose }: { watch: Watch; canCancel: boolean; onFinished: () => void; onClose?: () => void }) {
-  const { upgrade: u, reconnecting, problem } = useUpgradeStream(watch);
+  const { upgrade: streamed, reconnecting, problem } = useUpgradeStream(watch);
+  // An "Upgrade all" goes on in the agent clusters after the console's own
+  // upgrade finished (and its stream ended): follow them on its line.
+  const followFleet = !!streamed?.finished && !!streamed.agentClusters && !streamed.agentClusters.finished;
+  const polled = useQuery({
+    queryKey: updateKeys.upgrade(watch.cluster, watch.name), queryFn: () => updatesApi.upgrade(watch.name, watch.cluster),
+    enabled: followFleet, refetchInterval: (q) => (q.state.data?.agentClusters?.finished ? false : 5000),
+  });
+  const u = followFleet && polled.data ? polled.data : streamed;
   const queryClient = useQueryClient();
   const loaded = useQuery({ queryKey: ["version"], queryFn: api.version, staleTime: Infinity });
   const [newVersion, setNewVersion] = useState<string>();
@@ -414,7 +438,7 @@ function ProgressCard({ watch, canCancel, onFinished, onClose }: { watch: Watch;
       {u && (
         <div className="term upgrade-term">
           <div className="a">▸ {u.component === "Kwerft" ? `Kwerft ${u.from?.kwerft ?? ""} → ${u.version}` : `Kubernetes ${u.from?.kubernetes ?? ""} → ${u.version}`}
-            <span className="d">  {u.cluster !== LOCAL ? `cluster=${u.cluster} · ` : ""}requested by {u.auto ? "AutoPatch" : u.requestedBy ?? "?"}{u.startedAt ? ` · started ${new Date(u.startedAt).toLocaleTimeString()}` : ""}</span>
+            <span className="d">  {u.cluster !== LOCAL ? `cluster=${u.cluster} · ` : ""}{u.fleet || u.agentClusters ? "Upgrade all · " : ""}requested by {u.auto ? "AutoPatch" : u.requestedBy ?? "?"}{u.startedAt ? ` · started ${new Date(u.startedAt).toLocaleTimeString()}` : ""}</span>
           </div>
           {(u.phase === "Pending" || u.phase === "Queued") && <div className="d">{u.message || "Waiting for the Upgrade controller…"}</div>}
           <ol className="lines">
@@ -534,33 +558,8 @@ function UpgradeDialog({ target, onClose, onStarted }: { target: Target; onClose
           <span className="mono">{target.from || "the running version"}</span> by itself.</p>
       )}
 
-      <div className="field">
-        <span className="label">Preflight</span>
-        {pre.isFetching && !p && <p className="loading"><span className="spin" aria-hidden="true" /> Checking nodes, disk, the release and its image…</p>}
-        {pre.isError && <p className="form-error" role="alert">{errText(pre.error)}</p>}
-        {p && (
-          <ul className="checks" aria-busy={pre.isFetching}>
-            {p.checks.map((c, i) => (
-              <li key={i} className={c.ok ? "c-ok" : c.warning ? "c-warn" : "c-bad"}>
-                <span className="mk" aria-label={c.ok ? "passed" : c.warning ? "warning" : "failed"}>{c.ok ? "✓" : c.warning ? "!" : "✗"}</span>
-                <span><b>{checkLabel(c.check)}</b> {c.message}</span>
-              </li>
-            ))}
-          </ul>
-        )}
-        {p && <button type="button" className="btn sm linkish" onClick={() => void pre.refetch()} disabled={pre.isFetching}>{pre.isFetching ? "Checking…" : "Check again"}</button>}
-      </div>
-
-      {p?.dataRollback && (
-        <label className="check">
-          <input type="checkbox" checked={accept} onChange={(e) => setAccept(e.target.checked)} />
-          <span>
-            <b>Accept a data rollback</b>
-            <small>{a.version} is not rollback-safe: if the upgrade fails, the rollback also restores the console&apos;s database from the copy taken
-              before it, and changes made in between are lost.</small>
-          </span>
-        </label>
-      )}
+      <PreflightField pre={pre} />
+      {p?.dataRollback && <DataRollback version={a.version} accept={accept} onChange={setAccept} />}
       {typed && (
         <Field id="upgrade-confirm" label={`Type ${a.version} to confirm`} className="mono" value={confirm} autoComplete="off" spellCheck={false}
           onChange={(e) => setConfirm(e.target.value)} error={fieldError("confirmVersion")}
@@ -574,9 +573,114 @@ function UpgradeDialog({ target, onClose, onStarted }: { target: Target; onClose
   );
 }
 
+/** The live preflight of a dialog: each check, and Check again. */
+function PreflightField({ pre }: { pre: { data?: Preflight; isFetching: boolean; isError: boolean; error: unknown; refetch: () => Promise<unknown> } }) {
+  const p = pre.data;
+  return (
+    <div className="field">
+      <span className="label">Preflight</span>
+      {pre.isFetching && !p && <p className="loading"><span className="spin" aria-hidden="true" /> Checking nodes, disk, the release and its image…</p>}
+      {pre.isError && <p className="form-error" role="alert">{errText(pre.error)}</p>}
+      {p && (
+        <ul className="checks" aria-busy={pre.isFetching}>
+          {p.checks.map((c, i) => (
+            <li key={i} className={c.ok ? "c-ok" : c.warning ? "c-warn" : "c-bad"}>
+              <span className="mk" aria-label={c.ok ? "passed" : c.warning ? "warning" : "failed"}>{c.ok ? "✓" : c.warning ? "!" : "✗"}</span>
+              <span><b>{checkLabel(c.check)}</b> {c.message}</span>
+            </li>
+          ))}
+        </ul>
+      )}
+      {p && <button type="button" className="btn sm linkish" onClick={() => void pre.refetch()} disabled={pre.isFetching}>{pre.isFetching ? "Checking…" : "Check again"}</button>}
+    </div>
+  );
+}
+
+function DataRollback({ version, accept, onChange }: { version: string; accept: boolean; onChange: (v: boolean) => void }) {
+  return (
+    <label className="check">
+      <input type="checkbox" checked={accept} onChange={(e) => onChange(e.target.checked)} />
+      <span>
+        <b>Accept a data rollback</b>
+        <small>{version} is not rollback-safe: if the upgrade fails, the rollback also restores the console&apos;s database from the copy taken
+          before it, and changes made in between are lost.</small>
+      </span>
+    </label>
+  );
+}
+
+// "Upgrade all": the console first (its preflight, as for one upgrade),
+// then every agent cluster behind it, one after another.
+function UpgradeAllDialog({ plan, current, onClose, onStarted }: {
+  plan: UpgradeAll; current?: string; onClose: () => void; onStarted: (w?: Watch) => void;
+}) {
+  const [accept, setAccept] = useState(false);
+  const [password, setPassword] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<{ field?: string; message: string }>();
+  const pre = useQuery({
+    queryKey: ["upgrade-preflight", LOCAL, "Kwerft", plan.version, accept],
+    queryFn: () => updatesApi.preflight({ cluster: LOCAL, component: "Kwerft", version: plan.version, acceptDataRollback: accept }),
+    enabled: plan.console, retry: false, staleTime: 0, gcTime: 0, refetchOnWindowFocus: false,
+  });
+  const p = pre.data;
+  const ready = !!password && !busy && (!plan.console || (!!p && !p.blocked && (!p.dataRollback || accept)));
+
+  async function submit(e: FormEvent) {
+    e.preventDefault();
+    if (!ready) return;
+    setBusy(true);
+    setError(undefined);
+    try {
+      const res = await updatesApi.startAll({ version: plan.version, acceptDataRollback: accept, password });
+      const first = res.upgrade ?? res.members[0];
+      onStarted(first ? { cluster: first.cluster, name: first.name } : undefined);
+    } catch (err) {
+      setError(err instanceof ApiError ? { field: err.field, message: err.message } : { message: unreachable });
+      if (err instanceof ApiError && err.status === 409 && plan.console) void pre.refetch();
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const steps = fleetSteps(plan, current);
+  return (
+    <Dialog title={`Upgrade all to Kwerft ${plan.version}`} onClose={onClose} onSubmit={submit} wide
+      actions={<>
+        <button type="button" className="btn" onClick={onClose}>Cancel</button>
+        <button type="submit" className="btn pri" disabled={!ready}>{busy ? "Starting…" : `Upgrade ${steps.length} ${steps.length === 1 ? "cluster" : "clusters"}`}</button>
+      </>}>
+      <div className="field">
+        <span className="label">One after another</span>
+        <ol className="fleet-plan">{steps.map((s) => <li key={s}>{s}</li>)}</ol>
+        {plan.skipped.length > 0 && (
+          <ul className="checks">
+            {plan.skipped.map((s) => (
+              <li key={s.cluster} className={s.warning ? "c-warn" : "c-ok"}>
+                <span className="mk" aria-label={s.warning ? "warning" : "skipped"}>{s.warning ? "!" : "–"}</span>
+                <span><b>{s.cluster}</b> left out: {s.reason}.</span>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+      <p className="dim">
+        {plan.console ? "The console upgrades first and restarts for a few seconds; each agent cluster starts once the one before it is done. " : "Each agent cluster starts once the one before it is done. "}
+        Each one rolls back by itself if it fails, and a cluster that fails or rolls back stops the rest: they are cancelled before anything changes there.
+      </p>
+      {plan.console && <PreflightField pre={pre} />}
+      {p?.dataRollback && <DataRollback version={plan.version} accept={accept} onChange={setAccept} />}
+      <Field id="upgrade-all-password" label="Your password" type="password" value={password} autoComplete="current-password"
+        onChange={(e) => setPassword(e.target.value)} error={error?.field === "password" ? error.message : undefined}
+        hint="Or a current code from your authenticator app." />
+      {error && error.field !== "password" && <p className="form-error" role="alert">{error.message}</p>}
+    </Dialog>
+  );
+}
+
 const checkLabels: Record<string, string> = {
   Target: "Release", ImagePullable: "Image", NodesReady: "Nodes", DiskSpace: "Disk", NoOtherOperation: "Other operations",
-  ReleaseInstall: "Install", InstallerNode: "Installer node", AgentSkew: "Agents", DataRollback: "Rollback",
+  ReleaseInstall: "Install", InstallerNode: "Installer node", AgentSkew: "Agents", DataRollback: "Rollback", AgentTarget: "Console",
 };
 const checkLabel = (c: string) => checkLabels[c] ?? c;
 
@@ -602,8 +706,12 @@ function PolicyCard({ u, onSaved }: { u: Updates; onSaved: () => void }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<{ field?: string; message: string }>();
   const [saved, setSaved] = useState(false);
+  const [password, setPassword] = useState("");
   const fieldError = (f: string) => (error?.field === f ? error.message : undefined);
   const needsWindow = policy === "AutoPatch";
+  const kubernetesPatches = policy === "AutoPatch" && k8sPatches;
+  // Turning unattended upgrades on is confirmed like starting one.
+  const needsPassword = enablesAutoPatch(u.policy, { policy, kubernetesPatches });
 
   async function save(e: FormEvent) {
     e.preventDefault();
@@ -611,12 +719,13 @@ function PolicyCard({ u, onSaved }: { u: Updates; onSaved: () => void }) {
     setError(undefined);
     setSaved(false);
     const p: UpdatePolicy = {
-      policy, channel, kubernetesPatches: policy === "AutoPatch" && k8sPatches,
+      policy, channel, kubernetesPatches,
       window: needsWindow || u.policy.window ? { days, start, duration, timeZone: zone.trim() || undefined } : undefined,
     };
     try {
-      await updatesApi.setPolicy(p);
+      await updatesApi.setPolicy(needsPassword ? { ...p, password } : p);
       setSaved(true);
+      setPassword("");
       onSaved();
     } catch (err) {
       setError(err instanceof ApiError ? { field: err.field, message: err.message } : { message: unreachable });
@@ -682,10 +791,15 @@ function PolicyCard({ u, onSaved }: { u: Updates; onSaved: () => void }) {
             </p>
           </fieldset>
         )}
+        {canEdit && needsPassword && (
+          <Field id="upd-password" label="Your password" type="password" value={password} autoComplete="current-password"
+            onChange={(e) => setPassword(e.target.value)} error={fieldError("password")}
+            hint={`${policy === u.policy.policy ? "Kubernetes patches then install" : "Patch releases then install"} without anyone clicking: confirm with your password or a current authenticator code.`} />
+        )}
         {error && (!error.field || error.field === "window" || error.field === "policy" || error.field === "channel") && <p className="form-error" role="alert">{error.message}</p>}
         {canEdit && (
           <div className="actions start">
-            <button type="submit" className="btn pri" disabled={busy}>{busy ? "Saving…" : "Save policy"}</button>
+            <button type="submit" className="btn pri" disabled={busy || (needsPassword && !password)}>{busy ? "Saving…" : "Save policy"}</button>
             {saved && <span className="ok-text" role="status">Saved.</span>}
           </div>
         )}

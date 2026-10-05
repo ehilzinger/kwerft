@@ -13,10 +13,8 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	kwerftv1 "github.com/ehilzinger/kwerft/api/v1alpha1"
 	"github.com/ehilzinger/kwerft/internal/clusters"
 	"github.com/ehilzinger/kwerft/internal/controllers"
-	"github.com/ehilzinger/kwerft/internal/server"
 	"github.com/ehilzinger/kwerft/internal/upgrades"
 	"github.com/ehilzinger/kwerft/internal/version"
 )
@@ -52,6 +50,8 @@ func newUpgradeChecks(mgr ctrl.Manager, opt upgradeOptions, source upgrades.Sour
 		Self:      self,
 		Cluster:   opt.cluster,
 		APIServer: &upgrades.APIServer{REST: disco.RESTClient()},
+		// An agent takes its console's release, whatever channel that is on.
+		FollowsConsole: !opt.console,
 	}
 	if opt.console && opt.database != nil {
 		checks.DataDir = opt.dataDir
@@ -96,29 +96,26 @@ func setupUpgrades(mgr ctrl.Manager, opt upgradeOptions) (*controllers.UpgradeCh
 		Version: strings.TrimPrefix(version.Version, "v")}).SetupWithManager(mgr)
 }
 
-// upgradePreflight is the console API's preflight (server.UpgradePreflight):
-// the Upgrade controller's own checks, run before the API creates an
-// Upgrade.
-type upgradePreflight struct {
-	local *controllers.UpgradeChecks
-}
-
-// Supports: the local cluster only so far.
-// TODO(U4): remote clusters (an Upgrade created there through the tunnel,
-// checked with that cluster's reader and the agent's version).
-func (p *upgradePreflight) Supports(cluster string) bool { return cluster == clusters.Local }
-
-func (p *upgradePreflight) Preflight(ctx context.Context, cluster string, spec kwerftv1.UpgradeSpec) ([]kwerftv1.UpgradeCheck, error) {
-	if !p.Supports(cluster) {
-		return nil, server.ErrUpgradeUnsupported
+// newUpgradePreflight is the console API's preflight
+// (server.UpgradePreflight): the Upgrade controller's own checks, run before
+// the API creates an Upgrade, in the local cluster and, through their
+// tunnels, in connected agent clusters.
+func newUpgradePreflight(mgr ctrl.Manager, local *controllers.UpgradeChecks, registry clusters.Registry) *controllers.ConsolePreflight {
+	return &controllers.ConsolePreflight{
+		Local: local, Management: mgr.GetClient(), Version: strings.TrimPrefix(version.Version, "v"),
+		Clusters: &controllers.RegistryClients{Registry: registry, Scheme: mgr.GetScheme()},
+		APIServer: func(cluster string) (upgrades.APIServerInfo, error) {
+			cfg, err := registry.RESTConfig(cluster)
+			if err != nil {
+				return nil, err
+			}
+			disco, err := discovery.NewDiscoveryClientForConfig(cfg)
+			if err != nil {
+				return nil, err
+			}
+			return &upgrades.APIServer{REST: disco.RESTClient()}, nil
+		},
 	}
-	switch spec.Component {
-	case kwerftv1.UpgradeKwerft:
-		return p.local.Kwerft(ctx, spec, ""), nil
-	case kwerftv1.UpgradeKubernetes:
-		return p.local.Kubernetes(ctx, spec, ""), nil
-	}
-	return nil, fmt.Errorf("unknown component %q", spec.Component)
 }
 
 // selfImage reads the console's own pod (POD_NAME, set by the chart): the

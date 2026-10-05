@@ -81,3 +81,5 @@
   .upgrade-term .lines .dt { grid-column: 2; }
   .updates .t td.row-acts { text-align: left; }
 }
+.fleet-plan { margin: 0; padding-left: 1.4em; display: grid; gap: 4px; font-size: 13px; color: var(--ink-2); }
+.fleet-plan + .checks { margin-top: 8px; }

@@ -991,6 +991,18 @@ cluster_setting() {
 
 is_temp_domain() { [[ "$DOMAIN" == *"$TEMP_DOMAIN_SUFFIX" ]]; }
 
+# temp_domain_notice warns about a temporary <ip>.sslip.io console hostname,
+# saying where it came from: --domain (or KWERFT_DOMAIN, --config), or the
+# fallback when none was given.
+temp_domain_notice() {
+  is_temp_domain || return 0
+  if (( DOMAIN_EXPLICIT )); then
+    warn "$DOMAIN is a temporary hostname (fine for trying Kwerft, not for production)."
+  else
+    warn "No --domain given: using temporary hostname $DOMAIN (fine for trying Kwerft, not for production)."
+  fi
+}
+
 # ---------------------------------------------------------------------------
 # Stage: preflight
 # ---------------------------------------------------------------------------
@@ -3025,7 +3037,7 @@ main() {
     say "Restoring backup $RESTORE_FROM from $(bucket_url)$( (( DOMAIN_EXPLICIT )) || echo '; the console hostname comes from the backup')."
     echo
   elif [[ "$MODE" == "install" ]] && is_temp_domain; then
-    warn "No --domain given: using temporary hostname $DOMAIN (fine for trying Kwerft, not for production)."
+    temp_domain_notice
     echo
   fi
   if [[ "$MODE" != "join" && "$ACME_SERVER" == "$ACME_STAGING_URL" ]]; then

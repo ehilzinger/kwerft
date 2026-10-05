@@ -117,6 +117,23 @@ setup() {
   is_temp_domain
 }
 
+@test "temp_domain_notice: an explicit sslip.io --domain is not 'No --domain given'" {
+  run "$SCRIPT" --dry-run --platform cloud --domain 203.0.113.24.sslip.io
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"No --domain given"* ]]
+  [[ "$output" == *"203.0.113.24.sslip.io is a temporary hostname"* ]]
+}
+
+@test "temp_domain_notice: the fallback says no --domain was given" {
+  KWERFT_SOURCED=1 source "$SCRIPT"
+  DOMAIN="203.0.113.24.sslip.io"; DOMAIN_EXPLICIT=0
+  run temp_domain_notice
+  [[ "$output" == *"No --domain given: using temporary hostname 203.0.113.24.sslip.io"* ]]
+  DOMAIN="ops.example.com"
+  run temp_domain_notice
+  [ -z "$output" ]
+}
+
 @test "--image needs a tag" {
   run "$SCRIPT" --image ghcr.io/ehilzinger/kwerft
   [ "$status" -eq 2 ]

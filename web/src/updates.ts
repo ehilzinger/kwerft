@@ -35,6 +35,11 @@ export type Upgrade = {
   reason?: string;
   message?: string;
   cancelRequestedBy?: string;
+  /** The "Upgrade all" an agent cluster's Upgrade belongs to; held: waiting for its turn. */
+  fleet?: string;
+  held?: boolean;
+  /** On the console's Upgrade of an "Upgrade all": how its agent clusters fare. */
+  agentClusters?: { finished: boolean; stopped: boolean; message: string };
   cancellable: boolean;
   finished: boolean;
   createdAt: string;
@@ -78,7 +83,17 @@ export type Updates = {
   available: Available[];
   clusters: ClusterUpdates[];
   canUpgrade: boolean;
+  /** What "Upgrade all" would do now; absent when no agent cluster needs it. */
+  upgradeAll?: UpgradeAll;
 };
+
+/** A cluster an "Upgrade all" leaves out; warning: it should be upgraded but cannot be now. */
+export type FleetSkip = { cluster: string; reason: string; warning?: boolean };
+
+/** The console to version (when console), then the agent clusters one after another. */
+export type UpgradeAll = { version: string; console: boolean; clusters: string[]; skipped: FleetSkip[] };
+
+export type UpgradeAllAnswer = { upgrade?: Upgrade; preflight?: Preflight; fleet: string; members: Upgrade[]; skipped: FleetSkip[] };
 
 export type UpgradeRequest = {
   cluster?: string;
@@ -116,12 +131,15 @@ export const updatesApi = {
   overview: () => request<Updates>("/updates"),
   check: () => request<{ requestedAt: string }>("/updates/check", { method: "POST" }),
   resumeAutoPatch: () => request<{ resumed: string }>("/updates/resume-autopatch", { method: "POST" }),
-  setPolicy: (p: UpdatePolicy) => request<UpdatePolicy>("/settings/updates", { method: "PUT", json: p }),
+  /** Turning AutoPatch on takes the password (enablesAutoPatch). */
+  setPolicy: (p: UpdatePolicy & { password?: string }) => request<UpdatePolicy>("/settings/updates", { method: "PUT", json: p }),
   history: (cluster?: string) => request<Upgrade[]>(`/upgrades${clusterQuery(cluster)}`),
   upgrade: (name: string, cluster?: string) => request<Upgrade>(`/upgrades/${enc(name)}${clusterQuery(cluster)}`),
   log: (name: string, cluster?: string) => request<{ log: string; truncated: boolean }>(`/upgrades/${enc(name)}/log${clusterQuery(cluster)}`),
   preflight: (r: UpgradeRequest) => request<Preflight>("/upgrades/preflight", { method: "POST", json: r }),
   start: (r: UpgradeRequest) => request<{ upgrade: Upgrade; preflight: Preflight }>("/upgrades", { method: "POST", json: r }),
+  startAll: (r: { version: string; acceptDataRollback?: boolean; password: string }) =>
+    request<UpgradeAllAnswer>("/upgrades/all", { method: "POST", json: r }),
   cancel: (name: string, cluster?: string) => request<Upgrade>(`/upgrades/${enc(name)}${clusterQuery(cluster)}`, { method: "DELETE" }),
 };
 
@@ -266,7 +284,29 @@ export function progressLines(u: Upgrade): Line[] {
   else if (verifyFailed) lines.push({ mark: "fail", label: "Verify", detail: u.message });
   if (u.phase === "RollingBack") lines.push({ mark: "run", label: "Rollback", detail: u.message });
   else if (u.phase === "RolledBack") lines.push({ mark: "ok", label: "Rollback", detail: `back on ${u.from?.kwerft ?? "the previous version"}` });
+  const fleet = fleetLine(u);
+  if (fleet) lines.push(fleet);
   return lines;
+}
+
+/** The agent clusters of an "Upgrade all", on the console's Upgrade (its AgentClusters condition). */
+export function fleetLine(u: Upgrade): Line | undefined {
+  const a = u.agentClusters;
+  if (!a) return undefined;
+  const detail = a.message.replace(/^Agent clusters \((.*)\)\.(.*)$/, "$1.$2");
+  return { mark: a.stopped ? "fail" : a.finished ? "ok" : "run", label: "Agent clusters", detail };
+}
+
+/** The steps of an "Upgrade all", in order. */
+export function fleetSteps(ua: UpgradeAll, consoleVersion?: string): string[] {
+  const out = ua.console ? [`The console: Kwerft ${consoleVersion ?? "?"} → ${ua.version}`] : [];
+  for (const c of ua.clusters) out.push(`${c}: its agent to ${ua.version}`);
+  return out;
+}
+
+/** Turning AutoPatch (or its Kubernetes patches) on asks for the password, as the server does; turning it off does not. */
+export function enablesAutoPatch(before: Pick<UpdatePolicy, "policy" | "kubernetesPatches">, after: Pick<UpdatePolicy, "policy" | "kubernetesPatches">): boolean {
+  return (after.policy === "AutoPatch" && before.policy !== "AutoPatch") || (after.kubernetesPatches && !before.kubernetesPatches);
 }
 
 /** "3m 41s", "52s", "1h 4m". */

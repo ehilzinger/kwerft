@@ -70,6 +70,14 @@ type UpgradeChecks struct {
 	// APIServer answers the Kubernetes preflight's etcd and deprecated-API
 	// questions (k3s_preflight.go); nil fails those checks.
 	APIServer upgrades.APIServerInfo
+	// NodePools reads the NodePools, which live in the management cluster;
+	// nil reads them with Reader (the console's own cluster).
+	NodePools client.Reader
+	// FollowsConsole: an agent cluster, which takes its console's release
+	// (the console never offers one past its own): the channel is not
+	// checked (an agent has no update settings), agent skew is the
+	// console's check, and there is no database to roll back.
+	FollowsConsole bool
 }
 
 // Facts the checks gathered, for the controller.
@@ -152,11 +160,13 @@ func (c *UpgradeChecks) kwerft(ctx context.Context, spec kwerftv1.UpgradeSpec, s
 	out = append(out, c.operationsCheck(ctx, self))
 	out = append(out, c.releaseInstallCheck(ctx))
 	out = append(out, installerNodeCheck(nodes.Items))
-	if terr == nil {
+	if terr == nil && !c.FollowsConsole {
 		out = append(out, c.agentSkewChecks(ctx, target)...)
 	}
 	switch m := facts.manifest; {
 	case m == nil:
+	case c.FollowsConsole:
+		out = append(out, check(CheckDataRollback, true, "An agent keeps no database: a rollback loses nothing."))
 	case !m.IsRollbackSafe() && !spec.AcceptDataRollback:
 		out = append(out, check(CheckDataRollback, false, m.Version+" is not rollback-safe: a rollback restores the database copy and loses what changed since. Accept that to continue."))
 	case !m.IsRollbackSafe():
@@ -192,7 +202,7 @@ func (c *UpgradeChecks) targetCheck(ctx context.Context, target, cur upgrades.Ve
 	switch {
 	case i < 0:
 		return check(CheckTarget, false, target.String()+" is not a published release.")
-	case !upgrades.OnChannel(releases[i].Channel, channel):
+	case !c.FollowsConsole && !upgrades.OnChannel(releases[i].Channel, channel):
 		return check(CheckTarget, false, fmt.Sprintf("%s is on the %s channel; this console follows %s.", target, releases[i].Channel, channel))
 	}
 	m, err := c.Releases.Manifest(ctx, target.String())
@@ -304,7 +314,11 @@ func (c *UpgradeChecks) operationsCheck(ctx context.Context, self string) kwerft
 		}
 	}
 	var pools kwerftv1.NodePoolList
-	if err := c.Reader.List(ctx, &pools); err != nil && !meta.IsNoMatchError(err) {
+	poolReader := c.NodePools
+	if poolReader == nil {
+		poolReader = c.Reader
+	}
+	if err := poolReader.List(ctx, &pools); err != nil && !meta.IsNoMatchError(err) {
 		return check(CheckNoOtherOperation, false, "Cannot list node pools: "+err.Error())
 	}
 	cluster := c.Cluster
