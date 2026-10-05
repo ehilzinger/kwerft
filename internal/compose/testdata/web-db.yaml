@@ -1,0 +1,66 @@
+# A typical app: a web service, a worker, its database and a cache.
+name: shop
+
+x-env: &common-env
+  NODE_ENV: production
+  LOG_LEVEL: ${LOG_LEVEL:-info}
+
+services:
+  web:
+    image: ghcr.io/acme/shop-web:2.3.1
+    command: ["node", "server.js", "--port", "3000"]
+    ports:
+      - "8080:3000"
+    environment:
+      <<: *common-env
+      DATABASE_URL: postgres://shop:${DB_PASSWORD}@db:5432/shop
+      REDIS_HOST: cache
+      STRIPE_SECRET_KEY: sk_test_123
+      SESSION_SECRET:
+      GREETING: "costs $$5"
+    depends_on:
+      db:
+        condition: service_healthy
+      cache:
+        condition: service_started
+    deploy:
+      replicas: 2
+      resources:
+        limits:
+          memory: 512M
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/healthz"]
+      interval: 10s
+
+  worker:
+    image: ghcr.io/acme/shop-web:2.3.1
+    entrypoint: node
+    command: worker.js --queue "high priority"
+    environment:
+      - DATABASE_URL=postgres://shop:${DB_PASSWORD}@db:5432/shop
+      - QUEUE=default
+
+  db:
+    image: postgres:17.6
+    environment:
+      POSTGRES_USER: shop
+      POSTGRES_DB: shop
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+    volumes:
+      - db_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U shop"]
+      interval: 5s
+
+  cache:
+    image: redis:8.2-alpine
+    command: redis-server --appendonly yes
+    volumes:
+      - cache-data:/data
+
+volumes:
+  db_data:
+    x-kwerft:
+      size: 20Gi
+      class: hcloud-volume
+  cache-data:

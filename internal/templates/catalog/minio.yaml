@@ -1,0 +1,82 @@
+# MinIO: S3-compatible object storage on a Volume.
+# MinIO, Inc. stopped publishing community images in 2025 (minio/minio and
+# quay.io/minio/minio are gone). This runs Silo, the community-maintained
+# MinIO fork by Pigsty (AGPLv3, same server and API). Image pinned
+# 2026-10-05: pgsty/minio RELEASE.2026-08-04T00-00-00Z.
+id: minio
+title: MinIO
+category: Storage
+description: S3-compatible object storage (Silo, the maintained MinIO fork) on a Volume of the project, with a generated root password and the S3 API on a public hostname.
+images: [pgsty/minio:RELEASE.2026-08-04T00-00-00Z]
+pinned: "2026-10-05"
+parameters:
+  - key: name
+    label: App name
+    type: name
+    default: minio
+    maxLength: 50
+    hint: Also its hostname in the project. The Volume is <name>-data.
+  - key: user
+    label: Root user
+    type: identifier
+    default: admin
+  - key: disk
+    label: Volume size
+    type: size
+    default: 20Gi
+    min: 1Gi
+    max: 10Ti
+  - key: class
+    label: Disk class
+    type: enum
+    default: local-nvme
+    options: [local-nvme, hcloud-volume]
+  - key: hostname
+    label: S3 API hostname
+    type: hostname
+    hint: Leave empty to keep the S3 API inside the cluster.
+  - key: consoleHostname
+    label: Console hostname
+    type: hostname
+    suffix: -console
+    hint: The web console. Leave empty to keep it inside the cluster.
+  - key: allowFrom
+    label: Apps that may connect
+    type: apps
+    hint: Apps of the cluster that use the S3 API from inside (api, or shop/api).
+objects: |
+  secretSets:
+    - name: {{ quote .name }}
+      description: {{ quote (printf "MinIO %s: root password" .name) }}
+      generate: [ROOT_PASSWORD]
+  volumes:
+    - name: {{ quote (printf "%s-data" .name) }}
+      spec: {size: {{ quote .disk }}, class: {{ quote .class }}}
+  apps:
+    - name: {{ quote .name }}
+      spec:
+        source:
+          image: {ref: "pgsty/minio:RELEASE.2026-08-04T00-00-00Z"}
+        replicas: 1
+        size: medium
+        args: [server, /data, --console-address, ":9001"]
+        env:
+          - {name: MINIO_ROOT_USER, value: {{ quote .user }}}
+          - name: MINIO_ROOT_PASSWORD
+            valueFrom: {secretKeyRef: {name: {{ quote .name }}, key: ROOT_PASSWORD}}
+          {{- if .hostname }}
+          - {name: MINIO_SERVER_URL, value: {{ quote (printf "https://%s" .hostname) }}}
+          {{- end }}
+          {{- if .consoleHostname }}
+          - {name: MINIO_BROWSER_REDIRECT_URL, value: {{ quote (printf "https://%s" .consoleHostname) }}}
+          {{- end }}
+        ports:
+          - {container: 9000{{ if .hostname }}, public: {{ quote .hostname }}{{ end }}}
+          - {container: 9001{{ if .consoleHostname }}, public: {{ quote .consoleHostname }}{{ end }}}
+        allowFrom: {{ apps .allowFrom }}
+        egress: none
+        healthCheck: {http: /minio/health/live, port: 9000}
+        volumes:
+          - {path: /data, volume: {{ quote (printf "%s-data" .name) }}}
+notes: |
+  Sign in{{ if .consoleHostname }} at https://{{ .consoleHostname }}{{ else }} to the console ({{ .name }}:9001){{ end }} as {{ .user }}, with the key ROOT_PASSWORD of the secret set {{ .name }} (owners and admins reveal it on the Secrets page). Create an access key there for each app rather than sharing the root password.

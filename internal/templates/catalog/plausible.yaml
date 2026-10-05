@@ -1,0 +1,115 @@
+# Plausible Community Edition with its PostgreSQL and ClickHouse, as its
+# compose.yml (v3.2.1) has them. Images pinned 2026-10-05: Plausible CE
+# v3.2.1, postgres 16.15 and clickhouse-server 24.12.6.70, the major
+# versions Plausible's own compose file uses.
+#
+# Differences from upstream's compose file: ClickHouse gets a user with a
+# generated password instead of CLICKHOUSE_SKIP_USER_SETUP (only Plausible
+# may connect anyway), and Plausible's TMPDIR is /tmp (no data volume:
+# Plausible keeps everything in its databases).
+id: plausible
+title: Plausible Analytics
+category: Analytics
+description: Privacy-friendly web analytics (Plausible Community Edition) on a public hostname, with its PostgreSQL and ClickHouse. All passwords and the secret key base are generated.
+images: [ghcr.io/plausible/community-edition:v3.2.1, postgres:16.15-alpine, clickhouse/clickhouse-server:24.12.6.70-alpine]
+pinned: "2026-10-05"
+parameters:
+  - key: name
+    label: App name
+    type: name
+    default: plausible
+    maxLength: 50
+    hint: The databases are <name>-db and <name>-events; the secret set <name>.
+  - key: hostname
+    label: Hostname
+    type: hostname
+    required: true
+    hint: Plausible's dashboard and its script are served here over HTTPS.
+  - key: registration
+    label: Registration
+    type: enum
+    default: invite_only
+    options: [invite_only, "true", "false"]
+    hint: invite_only lets the first user register, then only invited ones; true disables it, false leaves it open.
+  - key: disk
+    label: Database disk
+    type: size
+    default: 5Gi
+    min: 1Gi
+    max: 1Ti
+  - key: eventsDisk
+    label: Events disk (ClickHouse)
+    type: size
+    default: 20Gi
+    min: 2Gi
+    max: 4Ti
+objects: |
+  secretSets:
+    - name: {{ quote .name }}
+      description: {{ quote (printf "Plausible %s: database passwords and secret key base" .name) }}
+      generate: [DB_PASSWORD, CLICKHOUSE_PASSWORD, SECRET_KEY_A, SECRET_KEY_B]
+      derived:
+        - key: SECRET_KEY_BASE
+          template: "${SECRET_KEY_A}${SECRET_KEY_B}"
+        - key: DATABASE_URL
+          template: {{ quote (printf "postgres://plausible:${DB_PASSWORD}@%s-db:5432/plausible" .name) }}
+        - key: CLICKHOUSE_DATABASE_URL
+          template: {{ quote (printf "http://plausible:${CLICKHOUSE_PASSWORD}@%s-events:8123/plausible_events" .name) }}
+  apps:
+    - name: {{ quote (printf "%s-db" .name) }}
+      spec:
+        source:
+          image: {ref: "postgres:16.15-alpine"}
+        replicas: 1
+        size: small
+        env:
+          - {name: POSTGRES_USER, value: plausible}
+          - {name: POSTGRES_DB, value: plausible}
+          - {name: PGDATA, value: /var/lib/postgresql/data/pgdata}
+          - name: POSTGRES_PASSWORD
+            valueFrom: {secretKeyRef: {name: {{ quote .name }}, key: DB_PASSWORD}}
+        ports: [{container: 5432}]
+        allowFrom: {{ apps .name }}
+        egress: none
+        healthCheck: {port: 5432}
+        volumes:
+          - {path: /var/lib/postgresql/data, size: {{ quote .disk }}}
+    - name: {{ quote (printf "%s-events" .name) }}
+      spec:
+        source:
+          image: {ref: "clickhouse/clickhouse-server:24.12.6.70-alpine"}
+        replicas: 1
+        size: large
+        env:
+          - {name: CLICKHOUSE_USER, value: plausible}
+          - {name: CLICKHOUSE_DB, value: plausible_events}
+          - name: CLICKHOUSE_PASSWORD
+            valueFrom: {secretKeyRef: {name: {{ quote .name }}, key: CLICKHOUSE_PASSWORD}}
+        ports: [{container: 8123}]
+        allowFrom: {{ apps .name }}
+        egress: none
+        healthCheck: {http: /ping, port: 8123}
+        volumes:
+          - {path: /var/lib/clickhouse, size: {{ quote .eventsDisk }}}
+    - name: {{ quote .name }}
+      spec:
+        source:
+          image: {ref: "ghcr.io/plausible/community-edition:v3.2.1"}
+        replicas: 1
+        size: medium
+        command: [sh, -c, "/entrypoint.sh db createdb && /entrypoint.sh db migrate && /entrypoint.sh run"]
+        env:
+          - {name: BASE_URL, value: {{ quote (printf "https://%s" .hostname) }}}
+          - {name: HTTP_PORT, value: "8000"}
+          - {name: TMPDIR, value: /tmp}
+          - {name: DISABLE_REGISTRATION, value: {{ quote .registration }}}
+          - name: SECRET_KEY_BASE
+            valueFrom: {secretKeyRef: {name: {{ quote .name }}, key: SECRET_KEY_BASE}}
+          - name: DATABASE_URL
+            valueFrom: {secretKeyRef: {name: {{ quote .name }}, key: DATABASE_URL}}
+          - name: CLICKHOUSE_DATABASE_URL
+            valueFrom: {secretKeyRef: {name: {{ quote .name }}, key: CLICKHOUSE_DATABASE_URL}}
+        ports: [{container: 8000, public: {{ quote .hostname }}}]
+        egress: https
+notes: |
+  Open https://{{ .hostname }} and register the first account; with registration invite_only, everyone else needs an invitation. The first start creates and migrates the databases, which takes a minute. Mail (password resets, reports) needs SMTP settings in {{ .name }}'s environment (MAILER_EMAIL, SMTP_HOST_ADDR, …) and outbound access beyond HTTPS.

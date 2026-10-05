@@ -180,6 +180,12 @@ type AppSpec struct {
 	// +optional
 	Command []string `json:"command,omitempty"`
 
+	// Args are passed to the entrypoint (Command, or the image's own when
+	// Command is empty), one argument per item, like a Compose file's
+	// command: ["server", "/data"]. $(VAR) refers to an env variable.
+	// +optional
+	Args []string `json:"args,omitempty"`
+
 	// +optional
 	Env []corev1.EnvVar `json:"env,omitempty"`
 

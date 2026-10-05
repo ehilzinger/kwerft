@@ -35,6 +35,7 @@ type podShape struct {
 	image       string
 	pullSecret  string
 	command     []string
+	args        []string
 	env         []corev1.EnvVar
 	size        string
 	resources   *corev1.ResourceRequirements
@@ -79,6 +80,9 @@ func (p *podShape) containerConfig() *corev1ac.ContainerApplyConfiguration {
 		WithSecurityContext(corev1ac.SecurityContext().WithAllowPrivilegeEscalation(false))
 	if len(p.command) > 0 {
 		c.WithCommand(p.command...)
+	}
+	if len(p.args) > 0 {
+		c.WithArgs(p.args...)
 	}
 	for _, e := range p.env {
 		c.WithEnv(envVar(e))

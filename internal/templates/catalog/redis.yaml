@@ -1,0 +1,57 @@
+# Redis: one server with a password and an append-only file on its own disk.
+# Image pinned 2026-10-05 (redis 8.10.2, Alpine).
+id: redis
+title: Redis
+category: Cache
+description: A Redis 8 server with a generated password, persisting to a disk of its own. Other apps connect with the REDIS_URL key of its secret set.
+images: [redis:8.10.2-alpine]
+pinned: "2026-10-05"
+parameters:
+  - key: name
+    label: App name
+    type: name
+    default: redis
+    hint: Also its hostname in the project, and the name of its secret set.
+  - key: disk
+    label: Disk
+    type: size
+    default: 2Gi
+    min: 1Gi
+    max: 500Gi
+  - key: size
+    label: Size
+    type: enum
+    default: small
+    options: [small, medium, large]
+    hint: Redis keeps its data in memory; small holds about 200 MiB.
+  - key: allowFrom
+    label: Apps that may connect
+    type: apps
+    hint: Apps of this project (api) or of others (shop/api).
+objects: |
+  secretSets:
+    - name: {{ quote .name }}
+      description: {{ quote (printf "Redis %s: password and connection URL" .name) }}
+      generate: [PASSWORD]
+      derived:
+        - key: REDIS_URL
+          template: {{ quote (printf "redis://:${PASSWORD}@%s:6379/0" .name) }}
+  apps:
+    - name: {{ quote .name }}
+      spec:
+        source:
+          image: {ref: "redis:8.10.2-alpine"}
+        replicas: 1
+        size: {{ quote .size }}
+        args: [redis-server, --requirepass, $(REDIS_PASSWORD), --appendonly, "yes", --dir, /data]
+        env:
+          - name: REDIS_PASSWORD
+            valueFrom: {secretKeyRef: {name: {{ quote .name }}, key: PASSWORD}}
+        ports: [{container: 6379}]
+        allowFrom: {{ apps .allowFrom }}
+        egress: none
+        healthCheck: {port: 6379}
+        volumes:
+          - {path: /data, size: {{ quote .disk }}}
+notes: |
+  Apps connect with the key REDIS_URL of the secret set {{ .name }}. Allow them under "Apps that may connect" in {{ .name }}'s settings.

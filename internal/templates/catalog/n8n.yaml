@@ -1,0 +1,84 @@
+# n8n with its own PostgreSQL. Images pinned 2026-10-05: n8nio/n8n 2.41.7
+# (the stable tag that day), postgres 18.6.
+id: n8n
+title: n8n
+category: Automation
+description: The n8n workflow automation tool on a public hostname, with its own PostgreSQL. The database password and n8n's encryption key are generated.
+images: [n8nio/n8n:2.41.7, postgres:18.6-trixie]
+pinned: "2026-10-05"
+parameters:
+  - key: name
+    label: App name
+    type: name
+    default: n8n
+    maxLength: 50
+    hint: The database is <name>-db; the secret set <name>.
+  - key: hostname
+    label: Hostname
+    type: hostname
+    required: true
+    hint: n8n's editor and webhooks are served here over HTTPS.
+  - key: timezone
+    label: Time zone
+    type: text
+    default: Europe/Berlin
+    pattern: "[A-Za-z][A-Za-z_+-]*(/[A-Za-z0-9_+-]+){0,2}"
+    hint: For schedule triggers, like Europe/Berlin or UTC.
+  - key: disk
+    label: Database disk
+    type: size
+    default: 5Gi
+    min: 1Gi
+    max: 1Ti
+objects: |
+  secretSets:
+    - name: {{ quote .name }}
+      description: {{ quote (printf "n8n %s: database password and encryption key" .name) }}
+      generate: [DB_PASSWORD, ENCRYPTION_KEY]
+  apps:
+    - name: {{ quote (printf "%s-db" .name) }}
+      spec:
+        source:
+          image: {ref: "postgres:18.6-trixie"}
+        replicas: 1
+        size: small
+        env:
+          - {name: POSTGRES_USER, value: n8n}
+          - {name: POSTGRES_DB, value: n8n}
+          - name: POSTGRES_PASSWORD
+            valueFrom: {secretKeyRef: {name: {{ quote .name }}, key: DB_PASSWORD}}
+        ports: [{container: 5432}]
+        allowFrom: {{ apps .name }}
+        egress: none
+        healthCheck: {port: 5432}
+        volumes:
+          - {path: /var/lib/postgresql, size: {{ quote .disk }}}
+    - name: {{ quote .name }}
+      spec:
+        source:
+          image: {ref: "n8nio/n8n:2.41.7"}
+        replicas: 1
+        size: medium
+        env:
+          - {name: DB_TYPE, value: postgresdb}
+          - {name: DB_POSTGRESDB_HOST, value: {{ quote (printf "%s-db" .name) }}}
+          - {name: DB_POSTGRESDB_PORT, value: "5432"}
+          - {name: DB_POSTGRESDB_DATABASE, value: n8n}
+          - {name: DB_POSTGRESDB_USER, value: n8n}
+          - name: DB_POSTGRESDB_PASSWORD
+            valueFrom: {secretKeyRef: {name: {{ quote .name }}, key: DB_PASSWORD}}
+          - name: N8N_ENCRYPTION_KEY
+            valueFrom: {secretKeyRef: {name: {{ quote .name }}, key: ENCRYPTION_KEY}}
+          - {name: N8N_HOST, value: {{ quote .hostname }}}
+          - {name: N8N_PORT, value: "5678"}
+          - {name: N8N_PROTOCOL, value: https}
+          - {name: N8N_PROXY_HOPS, value: "1"}
+          - {name: WEBHOOK_URL, value: {{ quote (printf "https://%s/" .hostname) }}}
+          - {name: N8N_EDITOR_BASE_URL, value: {{ quote (printf "https://%s/" .hostname) }}}
+          - {name: GENERIC_TIMEZONE, value: {{ quote .timezone }}}
+          - {name: TZ, value: {{ quote .timezone }}}
+          - {name: N8N_DIAGNOSTICS_ENABLED, value: "false"}
+        ports: [{container: 5678, public: {{ quote .hostname }}}]
+        egress: all
+notes: |
+  Open https://{{ .hostname }} and create the owner account (the first one to sign up becomes the owner, so do it now). Workflows reach any address on the internet (outbound access: unrestricted); narrow it in {{ .name }}'s settings if they do not need to. Keep the key ENCRYPTION_KEY of the secret set {{ .name }}: n8n's stored credentials cannot be read without it.

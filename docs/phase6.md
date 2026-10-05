@@ -837,3 +837,162 @@ Independent of the Kopia password (a different function of the same key);
 - Rotating the key means re-encrypting every object (SSE-C has no rekey,
   and Hetzner cannot copy SSE-C objects): part of the recovery key
   rotation follow-up.
+
+## As built (C1)
+
+**`App.spec.args`** (new field, `make generate`): arguments to the
+entrypoint — the image's own when `command` is empty — like a Compose
+file's `command`; `$(VAR)` refers to an env variable. Rendered into the
+container's `args`; a Task `fromApp` without a command of its own runs the
+App's command with its args. Needed because a Compose `command` keeps the
+image's entrypoint (postgres' `docker-entrypoint.sh`, MinIO's), which
+`command` alone would replace.
+
+**`internal/importplan`**: the shared result of both sources — Apps,
+Volumes, SecretSets (an App's own `<app>-env` with values, or shared with
+`generate`/`derived`), warnings (`warning` | `info`, per service and
+Compose key), renames, notes. Values are `json:"-"`: a plan never carries
+them. App names are DNS-1035 labels of at most 59 characters (room for
+`-env`); clashes get `-2`, `-3`.
+
+**`internal/compose`** (`Convert(file, {AppsDomain, Env})`): a focused
+reader of the Compose subset that maps onto an App, on `go.yaml.in/yaml/v3`
+(already in the module graph; `compose-spec/compose-go` would pull in
+Docker's dependency tree). Compose interpolation (`$$`, `${VAR}`, `:-` `-`
+`:?` `?` `:+` `+`, nested) uses only the values sent with the request (a
+.env), never the console's environment; anchors and `<<` merges work.
+Mapping:
+- `image`; `build` with a Git URL context (`#ref:dir`, `dockerfile`) → a
+  Git source; local `build` with an `image` deploys the image (info),
+  without one the service is skipped (warning). Images without a version
+  tag get an info.
+- `entrypoint` → `command`, `command` → `args` (strings split like a shell);
+  every `$` in commands and plain env values is escaped as `$$` so
+  Kubernetes does not expand `$(…)`.
+- `environment` (map or list; `KEY` without a value takes the .env value):
+  names that look secret (PASSWORD, SECRET, TOKEN, PASSWD, KEY, PASS, PWD,
+  API_KEY, ACCESS_KEY, …, `compose.LooksSecret`) and URLs with a password
+  (`postgres://u:p@…`) go into `<app>-env` as `secretKeyRef`s; a secret
+  without a value is still referenced (the App waits in `SecretMissing`)
+  with a warning. Plain variables without a value are left out (warning).
+- `ports` (short and long syntax): every port inside the cluster;
+  published TCP ports that are not well-known non-HTTP ports (5432, 6379,
+  3306, 25, …), or say `app_protocol: http`, get `<app>.<apps domain>`
+  (further ones `<app>-<port>.…`); 443 stays inside (TLS ends at the
+  gateway), `127.0.0.1:` stays inside, ranges are skipped. `expose` →
+  internal ports. A service without ports gets the port other services name
+  it with (`db:5432` in an env value or command), else its image's usual
+  port (postgres, mysql, redis, …), else a warning if others name it. No
+  apps domain: nothing public, one warning per service.
+- Named volumes → Volumes (5 GiB local-nvme; `x-kwerft: {size, class}` on
+  the top-level volume), mounted as shared Volumes (`ro` kept); `external`
+  volumes mount an existing Volume. Bind mounts, tmpfs, anonymous volumes
+  → warnings; well-known databases without a volume on their data
+  directory → warning.
+- `deploy.replicas`/`scale` → replicas; a memory limit (`deploy.resources`,
+  `mem_limit`) picks the smallest preset that fits, above 2 GiB a custom
+  size; heavy images (mysql, mariadb, wordpress, clickhouse, …) default to
+  medium/large (info).
+- `healthcheck`: curl/wget against localhost → HTTP check, `nc -z` and
+  `/dev/tcp` → TCP, `pg_isready`/`redis-cli`/`mysqladmin`/… → TCP on their
+  port (info); anything else, HTTPS, or a `start_period` of 45 s or more
+  (Kwerft's liveness check would restart it) → warning, no check.
+- `networks`: `allowFrom` = the other imported apps that share a network
+  (Compose's default network: all of them); only `internal: true`
+  networks → egress none. Egress otherwise stays Kwerft's default (HTTPS,
+  one info).
+- Warnings for `depends_on`, `privileged`, `cap_add`, `devices`,
+  `network_mode`, `user`, `working_dir`, `secrets`/`configs`, `env_file`,
+  `links`, `extends`, `restart: "no"`, `profiles` (service skipped), the
+  `deploy` keys not used, top-level `secrets`/`configs`/`include`, volume
+  drivers, and every other key Kwerft does not do (pid, ipc, sysctls,
+  ulimits, …). Silently ignored: labels, cap_drop, logging, init,
+  stop_grace_period and the like. `x-kwerft` on a service: `size`,
+  `egress`, `public` (a hostname, or `false`).
+
+**`internal/templates`**: one embedded YAML per template (`catalog/*.yaml`):
+id, title, category, description, images, the pin date, parameters (types
+`name`, `identifier`, `text` with a pattern, `enum`, `size` with min/max,
+`hostname` — required, or optional with the suggestion `<name><suffix>.<apps
+domain>` when left out and none when sent empty — and `apps`, a list for
+`allowFrom`), and `objects`/`notes` as Go text/templates (`quote`, `apps`
+helpers; values are validated before rendering and quoted). Rendered
+objects are decoded strictly; template sets may only `generate`/`derive`.
+Images pinned 2026-10-05:
+
+| Template | Objects | Images |
+|---|---|---|
+| PostgreSQL | set `<name>` (PASSWORD, DATABASE_URL), App with a disk at /var/lib/postgresql (PG 18 layout), egress none, TCP check | postgres:18.6-trixie |
+| Redis | set (PASSWORD, REDIS_URL), App with args `--requirepass $(REDIS_PASSWORD) --appendonly yes`, own disk | redis:8.10.2-alpine |
+| MinIO | set (ROOT_PASSWORD), Volume `<name>-data`, App with API and console hostnames (optional) | pgsty/minio:RELEASE.2026-08-04T00-00-00Z |
+| n8n | set (DB_PASSWORD, ENCRYPTION_KEY), `<name>-db` PostgreSQL (allowFrom n8n), n8n on a required hostname, egress all | n8nio/n8n:2.41.7, postgres:18.6-trixie |
+| Plausible | set (DB_PASSWORD, CLICKHOUSE_PASSWORD, SECRET_KEY_A/B; derived SECRET_KEY_BASE = A+B (≥ 64 bytes), DATABASE_URL, CLICKHOUSE_DATABASE_URL), `<name>-db` (postgres 16), `<name>-events` (ClickHouse with its own user, HTTP /ping check), Plausible on a required hostname | ghcr.io/plausible/community-edition:v3.2.1, postgres:16.15-alpine, clickhouse/clickhouse-server:24.12.6.70-alpine |
+
+Slow first starts (n8n, Plausible: migrations) have no health check: the
+liveness probe would restart them after about a minute.
+
+**API** (`internal/server/api_import.go`, all as the user):
+
+| Route | Body → answer |
+|---|---|
+| `GET /api/v1/templates` | → `[template]` (everyone signed in; project-scoped tokens too) |
+| `POST /api/v1/projects/{p}/import/compose` | `{compose, env?: {VAR: value}, dryRun}` → plan |
+| `POST /api/v1/projects/{p}/templates/{id}` | `{parameters: {key: value}, dryRun}` → plan; 422 `parameters.<key>`; 404 unknown id |
+
+The plan answer is `{apps, volumes, secretSets, warnings, renames, notes?,
+dryRun, problems: [{object, field?, message}], created: ["Kind/name"]}`.
+Every object first passes the single-object endpoints' own checks
+(`validateSpec`, `validateSetSpec`, the Volume checks incl. hcloud-volume
+availability), then a server-side dry run (`dryRun=All`) as the user in
+order: a viewer gets 403 (`*.denied` audited), names taken and schema
+refusals become `problems`. A dry run answers 200 with them; an apply with
+problems creates nothing (409 for taken names, else 422, `error` plus the
+plan). Apply creates Volumes, shared sets, Apps, then each App's own set
+(owner reference with the App's UID) and writes its values through
+`writeKeys` (metadata endpoint, like the env editor); a failure deletes
+what was created, newest first, with its own deadline, and answers
+502/403/409/422 "Creating X failed, so the import was undone: …" (or names
+what could not be removed). Audit: the single-object actions
+(`app.create`, `volume.create`, `secret_set.create`, `secret.set` with
+detail `imported`), then `import.compose` / `template.apply` (detail
+`template <id> (n apps, n volumes, n secret sets)`), `*.failed`, rollback
+deletions with `rollback of …`. Public hostnames go under the project's
+cluster's apps domain, else the console's.
+
+**UI** (`pages/DeployImport.tsx`, `imports.ts`, `styles/imports.css`): the
+wizard's Docker Compose source — paste or upload (≤ 256 KiB), optional
+.env values, Check (dry run), Review (objects in creation order with
+public URLs, renames, warnings grouped by service, problems), Create, then
+the created objects with links (apps, secret sets) — and the Template
+source — catalog cards, a settings form per template (hostnames follow the
+name until edited), Review with the template's notes, Create. Changing the
+input drops the reviewed plan.
+
+**Tests:** `internal/compose` (fixtures web+db, WordPress, every
+unsupported key, Plausible CE's compose.yml; interpolation, shell
+splitting, secret names, port syntax, names, x-kwerft),
+`internal/importplan`, `internal/templates` (every template renders with
+its defaults: pinned images match the catalog, size presets, references
+to the sets' keys, Volumes and allowed apps exist; parameter validation;
+hostnames), `controllers/app_args_test.go`, envtest
+`internal/server/import_test.go` (a dry run creates nothing and returns no
+values; apply creates in order with the App owning its set and the values
+in the Secret, audited without values; importing twice is 409 with
+nothing created; viewers 403, owners and developers allowed; rollback
+after an injected failure leaves nothing, also when the values fail;
+templates: catalog, 403/404/422, generated and derived keys; every
+template applied as a developer and its pods admitted under the
+namespace's Pod Security baseline — a privileged pod is refused there),
+`web/src/imports.test.ts`.
+
+**Open questions:**
+- MinIO, Inc. no longer publishes images (`minio/minio` and
+  `quay.io/minio/minio` are gone); the template runs Pigsty's maintained
+  fork Silo (`pgsty/minio`, AGPLv3). Keep it, or switch the object storage
+  template to Garage or SeaweedFS?
+- Kwerft's liveness probe has no start period, so templates and imports
+  leave slow starters without a check. A start period on HealthCheck (a
+  startup probe) would let them have one.
+- Compose egress stays Kwerft's HTTPS-only default rather than Compose's
+  unrestricted network; SMTP and database clients to outside hosts need
+  `x-kwerft: {egress: all}` or a change in settings afterwards.

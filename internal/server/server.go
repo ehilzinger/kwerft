@@ -132,6 +132,9 @@ type Config struct {
 	// podsHook lets tests swap Kubernetes and the limits of the pod
 	// endpoints (logs, shells) for fakes; see api_pods.go.
 	podsHook func(*podsAPI)
+	// importFault lets tests fail an import right after it created an
+	// object (Kind/name), to see it undone; see api_import.go.
+	importFault func(object string) error
 	// settingsHook lets tests replace DNS lookups and the Hetzner API; see
 	// api_settings.go.
 	settingsHook func(*settingsAPI)

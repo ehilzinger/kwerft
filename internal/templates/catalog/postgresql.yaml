@@ -1,0 +1,73 @@
+# PostgreSQL: one server with a disk of its own and a generated password.
+# Image pinned 2026-10-05 (postgres 18.6, Debian trixie). PostgreSQL 18's
+# image keeps its data under /var/lib/postgresql/18/docker, so the disk is
+# mounted at /var/lib/postgresql.
+id: postgresql
+title: PostgreSQL
+category: Database
+description: A PostgreSQL 18 server with a disk of its own. Its password is generated; other apps connect with the DATABASE_URL key of its secret set.
+images: [postgres:18.6-trixie]
+pinned: "2026-10-05"
+parameters:
+  - key: name
+    label: App name
+    type: name
+    default: postgres
+    hint: Also its hostname in the project, and the name of its secret set.
+  - key: database
+    label: Database
+    type: identifier
+    default: app
+  - key: user
+    label: User
+    type: identifier
+    default: app
+  - key: disk
+    label: Disk
+    type: size
+    default: 10Gi
+    min: 1Gi
+    max: 2Ti
+    hint: local-nvme disks cannot grow later; hcloud-volume disks can.
+  - key: class
+    label: Disk class
+    type: enum
+    default: local-nvme
+    options: [local-nvme, hcloud-volume]
+  - key: size
+    label: Size
+    type: enum
+    default: small
+    options: [small, medium, large]
+  - key: allowFrom
+    label: Apps that may connect
+    type: apps
+    hint: Apps of this project (api) or of others (shop/api). You can change this in the app's settings later.
+objects: |
+  secretSets:
+    - name: {{ quote .name }}
+      description: {{ quote (printf "PostgreSQL %s: password and connection URL" .name) }}
+      generate: [PASSWORD]
+      derived:
+        - key: DATABASE_URL
+          template: {{ quote (printf "postgres://%s:${PASSWORD}@%s:5432/%s" .user .name .database) }}
+  apps:
+    - name: {{ quote .name }}
+      spec:
+        source:
+          image: {ref: "postgres:18.6-trixie"}
+        replicas: 1
+        size: {{ quote .size }}
+        env:
+          - {name: POSTGRES_USER, value: {{ quote .user }}}
+          - {name: POSTGRES_DB, value: {{ quote .database }}}
+          - name: POSTGRES_PASSWORD
+            valueFrom: {secretKeyRef: {name: {{ quote .name }}, key: PASSWORD}}
+        ports: [{container: 5432}]
+        allowFrom: {{ apps .allowFrom }}
+        egress: none
+        healthCheck: {port: 5432}
+        volumes:
+          - {path: /var/lib/postgresql, size: {{ quote .disk }}, class: {{ quote .class }}}
+notes: |
+  Apps connect with the key DATABASE_URL of the secret set {{ .name }} (a reference to it in their environment), or to {{ .name }}:5432 as {{ .user }}. Allow them under "Apps that may connect" in {{ .name }}'s settings.

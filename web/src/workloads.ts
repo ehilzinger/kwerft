@@ -78,6 +78,8 @@ export type AppSpec = {
   size?: Size;
   resources?: unknown;
   command?: string[];
+  /** Arguments to the entrypoint (command, or the image's own). */
+  args?: string[];
   env?: EnvVar[];
   ports?: AppPort[];
   allowFrom?: string[];

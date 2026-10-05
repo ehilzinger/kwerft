@@ -15,6 +15,7 @@ import {
   type CheckQuery, type CheckResult, type Connection,
 } from "../builds";
 import { Toggle } from "../components/LogViewer";
+import { ImportFlow } from "./DeployImport";
 import "../styles/workloads.css";
 import "../styles/builds.css";
 
@@ -31,7 +32,8 @@ const steps: { id: Step; title: string }[] = [
 type Form = {
   name: string;
   project: string;
-  source: "image" | "git";
+  /** compose and template are their own flows (DeployImport.tsx). */
+  source: "image" | "git" | "compose" | "template";
   image: string;
   pullSecret: string;
   repo: string;
@@ -290,11 +292,63 @@ export function Deploy() {
   const spec = specOf(form);
   const yaml = `apiVersion: kwerft.dev/v1alpha1\nkind: App\nmetadata:\n  name: ${f.name || "my-app"}\n  namespace: ${project || "my-project"}\nspec:\n${toYAML(spec, 1)}`;
 
+  const choice = (
+    <div className="choice" role="group" aria-label="Source">
+      <button type="button" className="opt" aria-pressed={f.source === "image"} onClick={() => set("source", "image")}><b>Container image</b><span>Any registry, public or private</span></button>
+      <button type="button" className="opt" aria-pressed={f.source === "git"} onClick={() => set("source", "git")}><b>Git repository</b><span>Built in-cluster, redeployed on every push</span></button>
+      <button type="button" className="opt" aria-pressed={f.source === "compose"} onClick={() => set("source", "compose")}><b>Docker Compose</b><span>Paste a compose file; services become apps</span></button>
+      <button type="button" className="opt" aria-pressed={f.source === "template"} onClick={() => set("source", "template")}><b>Template</b><span>PostgreSQL, Redis, MinIO, n8n, Plausible…</span></button>
+    </div>
+  );
+  const projectField = (
+    <div className="field">
+      <label htmlFor="d-proj">Project</label>
+      <select id="d-proj" className="input" value={project} aria-invalid={!!err("project")}
+        onChange={(e) => (e.target.value === "+new" ? setCreatingProject(true) : set("project", e.target.value))}>
+        {!project && <option value="">Choose a project…</option>}
+        {projects.data?.map((p) => (
+          <option key={p.name} value={p.name}>
+            {p.displayName ? `${p.name} — ${p.displayName}` : p.name}{multi ? ` · cluster ${p.cluster ?? LOCAL}` : ""}
+          </option>
+        ))}
+        {can.manageProjects && <option value="+new">New project…</option>}
+      </select>
+      {err("project") ? <span className="field-error" role="alert">{err("project")}</span>
+        : projects.data?.length === 0 ? <span className="hint">No projects yet{can.manageProjects ? "; create one first." : ". Ask an owner or admin to create one."}</span>
+        : multi && chosenProject ? <span className="hint">Runs in cluster <b>{chosenProject.cluster ?? LOCAL}</b>{unreachable.includes(chosenProject.cluster ?? LOCAL) ? ", which cannot be reached right now" : ""}.</span> : null}
+    </div>
+  );
+
   if (!can.deploy && session.isSuccess) {
     return (
       <section className="view">
         <div className="ph"><div><h1>Deploy an app</h1></div></div>
         <div className="empty"><h2>Your role cannot deploy</h2><p>Viewers can see apps but not create them. Ask an owner or admin for the developer role.</p><Link to="/apps" className="btn">Back to apps</Link></div>
+      </section>
+    );
+  }
+
+  if (f.source === "compose" || f.source === "template") {
+    return (
+      <section className="view">
+        <div className="ph">
+          <div>
+            <h1>Deploy an app</h1>
+            <p className="sub">
+              {f.source === "compose"
+                ? <>Each service of the file becomes an <code>App</code>; Kwerft shows what it creates, and what it does differently, before anything exists.</>
+                : <>Ready-made apps with pinned versions and generated passwords, created as <code>App</code>, <code>Volume</code> and <code>SecretSet</code> resources.</>}
+            </p>
+          </div>
+        </div>
+        <ImportFlow key={f.source} kind={f.source} project={project} appsDomain={appsDomain}
+          top={<>{choice}<div className="card"><div className="bd fields">{projectField}</div></div></>}
+          requireProject={() => {
+            if (project) return true;
+            setProblem({ field: "project", message: "Choose a project." });
+            return false;
+          }} />
+        {creatingProject && <CreateProjectDialog onClose={() => setCreatingProject(false)} onCreated={(p) => set("project", p.name)} />}
       </section>
     );
   }
@@ -320,31 +374,11 @@ export function Deploy() {
       <form className="tabpanel" onSubmit={submit} noValidate>
         {step === "source" && (
           <>
-            <div className="choice" role="group" aria-label="Source">
-              <button type="button" className="opt" aria-pressed={f.source === "image"} onClick={() => set("source", "image")}><b>Container image</b><span>Any registry, public or private</span></button>
-              <button type="button" className="opt" aria-pressed={f.source === "git"} onClick={() => set("source", "git")}><b>Git repository</b><span>Built in-cluster, redeployed on every push</span></button>
-              <button type="button" className="opt" aria-pressed="false" disabled><b>Docker Compose</b><span>Paste a compose file; services become apps</span><span className="pill mute nodot">Later</span></button>
-              <button type="button" className="opt" aria-pressed="false" disabled><b>Template</b><span>PostgreSQL, Redis, MinIO, n8n, Plausible…</span><span className="pill mute nodot">Later</span></button>
-            </div>
+            {choice}
             <div className="card"><div className="bd fields">
               <Field id="d-name" label="App name" className="mono" value={f.name} onChange={(e) => set("name", e.target.value.toLowerCase())} placeholder="invoice-renderer"
                 autoFocus autoComplete="off" spellCheck={false} maxLength={63} error={err("name")} hint="Also the in-cluster hostname. Lowercase letters, digits and dashes." />
-              <div className="field">
-                <label htmlFor="d-proj">Project</label>
-                <select id="d-proj" className="input" value={project} aria-invalid={!!err("project")}
-                  onChange={(e) => (e.target.value === "+new" ? setCreatingProject(true) : set("project", e.target.value))}>
-                  {!project && <option value="">Choose a project…</option>}
-                  {projects.data?.map((p) => (
-                    <option key={p.name} value={p.name}>
-                      {p.displayName ? `${p.name} — ${p.displayName}` : p.name}{multi ? ` · cluster ${p.cluster ?? LOCAL}` : ""}
-                    </option>
-                  ))}
-                  {can.manageProjects && <option value="+new">New project…</option>}
-                </select>
-                {err("project") ? <span className="field-error" role="alert">{err("project")}</span>
-                  : projects.data?.length === 0 ? <span className="hint">No projects yet{can.manageProjects ? "; create one first." : ". Ask an owner or admin to create one."}</span>
-                  : multi && chosenProject ? <span className="hint">Runs in cluster <b>{chosenProject.cluster ?? LOCAL}</b>{unreachable.includes(chosenProject.cluster ?? LOCAL) ? ", which cannot be reached right now" : ""}.</span> : null}
-              </div>
+              {projectField}
               {f.source === "image" ? (
                 <>
                   <div className="full">

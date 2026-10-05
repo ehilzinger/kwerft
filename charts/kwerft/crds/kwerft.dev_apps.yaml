@@ -62,6 +62,14 @@ spec:
                 items:
                   type: string
                 type: array
+              args:
+                description: |-
+                  Args are passed to the entrypoint (Command, or the image's own when
+                  Command is empty), one argument per item, like a Compose file's
+                  command: ["server", "/data"]. $(VAR) refers to an env variable.
+                items:
+                  type: string
+                type: array
               command:
                 description: |-
                   Command replaces the image's entrypoint, one argument per item:
