@@ -120,6 +120,7 @@ LITE=0
 PUBLIC_IP=""
 PRIVATE_IP=""
 PRIVATE_CIDR=""
+PRIVATE_NETWORK=""      # the whole private network the nodes share (private_network)
 HCLOUD_NETWORK_ID=""    # the Cloud Network of PRIVATE_IP (metadata service), for the CCM
 HCLOUD_NETWORK_RANGE="" # its IP range: Traefik accepts the PROXY protocol from it (Load Balancer)
 CURRENT_STAGE="startup"
@@ -514,6 +515,31 @@ detect_hcloud_network() {
   return 0
 }
 
+# private_network sets PRIVATE_NETWORK, where the other nodes' private
+# addresses are: the Cloud Network's whole range (from the metadata service;
+# it also holds vSwitch subnets), else the route through the private
+# interface (Hetzner Cloud hands out /32 addresses with a route to the
+# network), else the interface's own network. Never just this server's /32:
+# the firewall would then refuse every other node.
+private_network() {
+  PRIVATE_NETWORK=""
+  [[ -n "$PRIVATE_CIDR" ]] || return 0
+  if [[ -n "$HCLOUD_NETWORK_RANGE" ]]; then
+    PRIVATE_NETWORK=$HCLOUD_NETWORK_RANGE
+    return 0
+  fi
+  if [[ "${PRIVATE_CIDR#*/}" == "32" ]]; then
+    local route
+    route=$(ip -4 route show dev "$PRIVATE_IFACE" 2>/dev/null \
+      | awk '$1 ~ /^[0-9.]+\/[0-9]+$/ && $1 !~ /\/32$/ {print $1; exit}' || true)
+    if [[ -n "$route" ]]; then
+      PRIVATE_NETWORK=$(network_of "$route")
+      return 0
+    fi
+  fi
+  PRIVATE_NETWORK=$(network_of "$PRIVATE_CIDR")
+}
+
 # hcloud_network_field <metadata yaml> <ip> <key> prints key of the entry of
 # the metadata's private-networks list whose ip is <ip>:
 #   - ip: 10.0.0.2
@@ -663,7 +689,7 @@ EOF
 # installer never opens a window without a firewall.
 firewall_ruleset() {
   local priv_rule="# no private network detected"
-  [[ -n "$PRIVATE_CIDR" ]] && priv_rule="ip saddr $(network_of "$PRIVATE_CIDR") accept"
+  [[ -n "$PRIVATE_NETWORK" ]] && priv_rule="ip saddr $PRIVATE_NETWORK accept"
   cat <<EOF
 # Managed by Kwerft — edit rules in the console (Network → Server firewall).
 # Rescue: install.sh --reset-firewall (removes this table and pauses the
@@ -1616,7 +1642,7 @@ stage_kwerft() {
   [[ -n "$ACME_SERVER" ]] && acme_args=(--set acme.server="$ACME_SERVER")
   # Shown in the required firewall rule cluster-private (Network → Server firewall).
   local firewall_args=(--set firewall.privateNetwork="")
-  [[ -n "$PRIVATE_CIDR" ]] && firewall_args=(--set firewall.privateNetwork="$(network_of "$PRIVATE_CIDR")")
+  [[ -n "$PRIVATE_NETWORK" ]] && firewall_args=(--set firewall.privateNetwork="$PRIVATE_NETWORK")
   # Settings › Hetzner Cloud API: whether the CCM runs, and where a Load
   # Balancer may connect from (Traefik's PROXY protocol).
   local hcloud_args=(--set hcloud.ccm=false --set hcloud.proxyNetwork="$HCLOUD_NETWORK_RANGE")
@@ -1673,7 +1699,7 @@ stage_kwerft_agent() {
     image_args=(--set image.tag="$KWERFT_VERSION")
   fi
   local firewall_args=(--set firewall.privateNetwork="")
-  [[ -n "$PRIVATE_CIDR" ]] && firewall_args=(--set firewall.privateNetwork="$(network_of "$PRIVATE_CIDR")")
+  [[ -n "$PRIVATE_NETWORK" ]] && firewall_args=(--set firewall.privateNetwork="$PRIVATE_NETWORK")
   # Where a Hetzner Load Balancer in front of this cluster's ingress may
   # connect from (the console's settings for this cluster turn it on).
   local hcloud_args=(--set hcloud.ccm=false --set hcloud.proxyNetwork="$HCLOUD_NETWORK_RANGE")
@@ -2008,6 +2034,7 @@ main() {
   detect_platform
   detect_addresses
   detect_hcloud_network
+  private_network
   [[ "$MODE" == "join" || "$MODE" == "agent" ]] || resolve_domain
   # A server keeps the mode it was installed in: a console is not turned
   # into an agent (or back) by re-running with other flags.

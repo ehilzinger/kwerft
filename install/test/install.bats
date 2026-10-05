@@ -244,6 +244,32 @@ secret_expires() { printf '%s' "$1" | base64; }
   [ "$PRIVATE_IFACE" = "enp0s31f6.4000" ] && [ "$PRIVATE_CIDR" = "10.0.64.2/24" ]
 }
 
+@test "private_network: the whole network the nodes share, never this server's /32" {
+  KWERFT_SOURCED=1 source "$SCRIPT"
+  ROUTES=""
+  ip() { [[ "$*" == *"route show dev enp7s0"* ]] && printf '%b' "$ROUTES"; return 0; }
+  # Hetzner Cloud: the metadata service's network range wins.
+  PRIVATE_CIDR="10.0.0.2/32"; PRIVATE_IFACE=enp7s0; HCLOUD_NETWORK_RANGE="10.0.0.0/16"
+  private_network
+  [ "$PRIVATE_NETWORK" = "10.0.0.0/16" ]
+  # Without metadata: the route through the private interface.
+  HCLOUD_NETWORK_RANGE=""; ROUTES="10.0.0.0/16 via 10.0.0.1 proto dhcp src 10.0.0.2 metric 1003\n10.0.0.1 proto dhcp scope link src 10.0.0.2 metric 1003\n"
+  private_network
+  [ "$PRIVATE_NETWORK" = "10.0.0.0/16" ]
+  # A vSwitch VLAN interface: its own subnet.
+  PRIVATE_CIDR="10.0.64.2/24"; PRIVATE_IFACE=vlan4000; ROUTES=""
+  private_network
+  [ "$PRIVATE_NETWORK" = "10.0.64.0/24" ]
+  # None.
+  PRIVATE_CIDR=""
+  private_network
+  [ -z "$PRIVATE_NETWORK" ]
+  # The firewall admits the whole network.
+  PRIVATE_CIDR="10.0.0.2/32"; PRIVATE_IFACE=enp7s0; HCLOUD_NETWORK_RANGE="10.0.0.0/16"
+  private_network
+  firewall_ruleset | grep -q "ip saddr 10.0.0.0/16 accept"
+}
+
 @test "--version accepts a leading v" {
   run "$SCRIPT" --dry-run --platform cloud --domain ops.example.com --version v0.2.0
   [ "$status" -eq 0 ]
@@ -826,7 +852,8 @@ JSON
 # base chain decides everything else, in this order.
 @test "firewall_ruleset: the base chain keeps the baseline and jumps to Kwerft's chains" {
   KWERFT_SOURCED=1 source "$SCRIPT"
-  PRIVATE_CIDR="10.0.1.3/16"
+  PRIVATE_CIDR="10.0.1.3/16"; HCLOUD_NETWORK_RANGE=""
+  private_network
   run firewall_ruleset
   [ "$status" -eq 0 ]
   grep -q '^  chain managed_ssh {$' <<<"$output"
