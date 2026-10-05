@@ -125,7 +125,7 @@ func main() {
 			go flows.Run(ctx, hubble.NewRelay(*hubbleRelay))
 			traffic.Counts = flows
 		}
-		return newManager(log, *leaderElect, *metricsListen, *privateNetwork, traffic, &controllers.DomainReconciler{
+		mgr, err := newManager(log, *leaderElect, *metricsListen, *privateNetwork, traffic, &controllers.DomainReconciler{
 			ConsoleDomain: *consoleDomain,
 			GatewayClass:  *gatewayClass,
 			ClusterIssuer: *clusterIssuer,
@@ -136,6 +136,20 @@ func main() {
 			Timeout:             *buildTimeout,
 			AppArmorProfile:     *buildAppArmor,
 		})
+		if err != nil {
+			return nil, err
+		}
+		// This cluster's name in Cloud labels: local for the console's,
+		// the agent token's cluster otherwise.
+		name := clusters.Local
+		if agentMode {
+			token, err := readToken(*agentTokenFile)()
+			if err != nil {
+				return nil, err
+			}
+			name, _ = clusters.AgentTokenCluster(token)
+		}
+		return mgr, setupEveryCluster(mgr, name, *hcloudProxyNetwork)
 	}
 	if agentMode {
 		os.Exit(runAgent(ctx, log, agentOptions{consoleURL: *consoleURL, tokenFile: *agentTokenFile, namespace: namespace, listen: *listen}, newControllers))
@@ -181,15 +195,6 @@ func main() {
 		registry = hub
 		if err := setupClusters(mgr, hub, namespace, *consoleDomain); err != nil {
 			log.Error("cannot start the cluster reconciler", "err", err)
-			os.Exit(1)
-		}
-		// Hetzner Cloud (Phase 5): the Cloud Firewall, the Load Balancer in
-		// front of the ingress, the CSI driver's token. KWERFT_CLUSTER_NAME
-		// names this cluster in Cloud labels (agent mode sets it; default local).
-		hcloud := &controllers.HetznerCloudReconciler{Client: mgr.GetClient(), APIReader: mgr.GetAPIReader(),
-			ClusterName: cmp.Or(os.Getenv("KWERFT_CLUSTER_NAME"), "local"), ProxyNetwork: *hcloudProxyNetwork}
-		if err := hcloud.SetupWithManager(mgr); err != nil {
-			log.Error("cannot start the Hetzner Cloud controller", "err", err)
 			os.Exit(1)
 		}
 		// Node pools (Cloud servers as nodes) of every cluster, reached

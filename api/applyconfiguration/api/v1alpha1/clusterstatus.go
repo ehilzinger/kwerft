@@ -16,12 +16,16 @@ type ClusterStatusApplyConfiguration struct {
 	ObservedGeneration *int64                    `json:"observedGeneration,omitempty"`
 	Phase              *apiv1alpha1.ClusterPhase `json:"phase,omitempty"`
 	// LastSeen is when the agent last answered.
-	LastSeen          *v1.Time                             `json:"lastSeen,omitempty"`
-	AgentVersion      *string                              `json:"agentVersion,omitempty"`
-	KubernetesVersion *string                              `json:"kubernetesVersion,omitempty"`
-	Nodes             *int32                               `json:"nodes,omitempty"`
-	ReadyNodes        *int32                               `json:"readyNodes,omitempty"`
-	Conditions        []metav1.ConditionApplyConfiguration `json:"conditions,omitempty"`
+	LastSeen          *v1.Time `json:"lastSeen,omitempty"`
+	AgentVersion      *string  `json:"agentVersion,omitempty"`
+	KubernetesVersion *string  `json:"kubernetesVersion,omitempty"`
+	Nodes             *int32   `json:"nodes,omitempty"`
+	ReadyNodes        *int32   `json:"readyNodes,omitempty"`
+	// HetznerCloud is what the cluster's own Hetzner Cloud reconciler last
+	// reported (its Cloud Firewall and Load Balancer); hetzner-cloud
+	// clusters only, copied through the agent's tunnel.
+	HetznerCloud *HetznerCloudStatusApplyConfiguration `json:"hetznerCloud,omitempty"`
+	Conditions   []metav1.ConditionApplyConfiguration  `json:"conditions,omitempty"`
 }
 
 // ClusterStatusApplyConfiguration constructs a declarative configuration of the ClusterStatus type for use with
@@ -83,6 +87,14 @@ func (b *ClusterStatusApplyConfiguration) WithNodes(value int32) *ClusterStatusA
 // If called multiple times, the ReadyNodes field is set to the value of the last call.
 func (b *ClusterStatusApplyConfiguration) WithReadyNodes(value int32) *ClusterStatusApplyConfiguration {
 	b.ReadyNodes = &value
+	return b
+}
+
+// WithHetznerCloud sets the HetznerCloud field in the declarative configuration to the given value
+// and returns the receiver, so that objects can be built by chaining "With" function invocations.
+// If called multiple times, the HetznerCloud field is set to the value of the last call.
+func (b *ClusterStatusApplyConfiguration) WithHetznerCloud(value *HetznerCloudStatusApplyConfiguration) *ClusterStatusApplyConfiguration {
+	b.HetznerCloud = value
 	return b
 }
 

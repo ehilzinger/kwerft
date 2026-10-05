@@ -2,6 +2,7 @@
 // cluster runs Kwerft in agent mode and connects to the console; the console
 // reaches its API through that connection. Owners and admins only.
 import { request } from "./api";
+import type { HCloudStatus } from "./settings";
 
 export type ClusterProvider = "local" | "hetzner-cloud" | "adopted";
 export type ClusterPhase = "Pending" | "Provisioning" | "Connected" | "Disconnected" | "Failed" | "";
@@ -11,6 +12,8 @@ export type Cluster = {
   displayName?: string;
   provider: ClusterProvider;
   hetznerCloud?: { location: string; serverType: string; controlPlanes: number };
+  /** A Hetzner Cloud cluster's Cloud Firewall and Load Balancer. */
+  cloud?: ClusterCloud;
   phase: ClusterPhase;
   message?: string;
   /** The agent is connected now (always for the local cluster). */
@@ -29,6 +32,14 @@ export type Cluster = {
   conditions?: { type: string; status: string; reason: string; message: string }[];
 };
 
+/** Settings of a Hetzner Cloud cluster's own Cloud Firewall and Load
+ * Balancer, and what Kwerft in that cluster last reported. */
+export type ClusterCloud = {
+  firewall: "sync" | "off";
+  loadBalancer: { enabled: boolean; type?: string; location?: string };
+  status?: HCloudStatus;
+};
+
 export type ClusterInput =
   | { name: string; displayName?: string; provider: "adopted" }
   | { name: string; displayName?: string; provider: "hetzner-cloud"; hetznerCloud: { location: string; serverType: string; controlPlanes: 1 | 3 } };
@@ -44,6 +55,8 @@ export const clustersApi = {
   create: (c: ClusterInput) => request<{ cluster: Cluster } & Partial<AgentInstall>>("/clusters", { method: "POST", json: c }),
   remove: (name: string) => request<void>(`/clusters/${encodeURIComponent(name)}`, { method: "DELETE" }),
   rotateToken: (name: string) => request<AgentInstall>(`/clusters/${encodeURIComponent(name)}/token`, { method: "POST" }),
+  saveCloud: (name: string, s: Pick<ClusterCloud, "firewall" | "loadBalancer">) =>
+    request<{ cloud: ClusterCloud }>(`/settings/hcloud?cluster=${encodeURIComponent(name)}`, { method: "PUT", json: s }).then((r) => r.cloud),
 };
 
 /** Hetzner Cloud locations a cluster's control plane can be created in. */

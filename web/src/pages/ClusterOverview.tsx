@@ -7,6 +7,7 @@ import { Field } from "../components/Field";
 import { Icon } from "../components/Icon";
 import { clusterState, clustersApi, clustersKey, nodesText, providerLabel, type AgentInstall, type Cluster } from "../clusterAdmin";
 import { ago } from "../workloads";
+import { ClusterCloudCard } from "./ClusterCloud";
 import { ClusterLayout } from "./Clusters";
 import { InstallCommand } from "./ClustersList";
 
@@ -121,6 +122,7 @@ function Overview({ c }: { c: Cluster }) {
           </div>
         </div>
       </div>
+      {c.cloud && !c.deleting && <ClusterCloudCard c={c} cloud={c.cloud} />}
     </>
   );
 }

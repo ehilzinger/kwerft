@@ -79,10 +79,13 @@ func (c *clustersAPI) connect(w http.ResponseWriter, r *http.Request) {
 // ---- views --------------------------------------------------------------------
 
 type clusterJSON struct {
-	Name         string             `json:"name"`
-	DisplayName  string             `json:"displayName,omitempty"`
-	Provider     string             `json:"provider"`
-	HetznerCloud *hetznerSpecJSON   `json:"hetznerCloud,omitempty"`
+	Name         string           `json:"name"`
+	DisplayName  string           `json:"displayName,omitempty"`
+	Provider     string           `json:"provider"`
+	HetznerCloud *hetznerSpecJSON `json:"hetznerCloud,omitempty"`
+	// Cloud: a hetzner-cloud cluster's Cloud Firewall and Load Balancer
+	// (api_hcloud.go).
+	Cloud        *clusterCloudJSON  `json:"cloud,omitempty"`
 	Phase        string             `json:"phase"`
 	Message      string             `json:"message,omitempty"`
 	Connected    bool               `json:"connected"`
@@ -131,6 +134,7 @@ func (c *clustersAPI) view(cl *kwerftv1.Cluster) clusterJSON {
 	}
 	if h := cl.Spec.HetznerCloud; h != nil {
 		out.HetznerCloud = &hetznerSpecJSON{Location: h.Location, ServerType: h.ServerType, ControlPlanes: cmp.Or(h.ControlPlanes, 1)}
+		out.Cloud = clusterCloudView(cl)
 	}
 	if cl.Status.LastSeen != nil {
 		t := cl.Status.LastSeen.Time

@@ -157,7 +157,8 @@ func (r *ClusterReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	}
 	r.setRemoteStatus(&c, agent, connected, problem)
 	if connected && r.Remote != nil {
-		remote, err := r.Remote(c.Name)
+		remote, connErr := r.Remote(c.Name)
+		err := connErr
 		if err == nil {
 			err = r.mirror(ctx, remote)
 		}
@@ -165,6 +166,16 @@ func (r *ClusterReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 			log.FromContext(ctx).Info("copying channels and Git connections into the cluster failed", "cluster", c.Name, "err", err.Error())
 		}
 		setMirrored(&c, err)
+		if c.Spec.Provider == kwerftv1.ClusterHetznerCloud && c.Spec.HetznerCloud != nil {
+			note, err := "", connErr
+			if err == nil {
+				note, err = r.syncCloud(ctx, remote, &c)
+			}
+			if err != nil {
+				log.FromContext(ctx).Info("handing the Hetzner Cloud settings to the cluster failed", "cluster", c.Name, "err", err.Error())
+			}
+			setCloudSynced(&c, note, err)
+		}
 	}
 	if err := r.writeStatus(ctx, &c, orig); err != nil {
 		return ctrl.Result{}, err
@@ -466,7 +477,10 @@ func (r *ClusterReconciler) SetupWithManager(mgr ctrl.Manager) error {
 			return out
 		})
 		changed := builder.WithPredicates(predicate.Or(predicate.GenerationChangedPredicate{}, predicate.AnnotationChangedPredicate{}))
-		b = b.Watches(&kwerftv1.NotificationChannel{}, all, changed).Watches(&kwerftv1.GitConnection{}, all, changed)
+		b = b.Watches(&kwerftv1.NotificationChannel{}, all, changed).Watches(&kwerftv1.GitConnection{}, all, changed).
+			// A new Cloud API token (Settings marks it on ConsoleSettings):
+			// hand it to the Cloud clusters at once.
+			Watches(&kwerftv1.ConsoleSettings{}, all, builder.WithPredicates(predicate.AnnotationChangedPredicate{}))
 	}
 	if r.Tunnel != nil {
 		events := make(chan event.GenericEvent)

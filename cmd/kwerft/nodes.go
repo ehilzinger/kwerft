@@ -13,14 +13,23 @@ import (
 	"github.com/ehilzinger/kwerft/internal/version"
 )
 
-// setupNodes adds the node pool reconciler (Cloud servers as nodes of any
-// cluster, management cluster only: it holds the NodePools and the Cloud
-// token) and the node removal reconciler (drain and remove nodes on
-// request, in every cluster). docs/phase5.md, W2.
-func setupNodes(mgr ctrl.Manager, namespace string, dataKey []byte, registry clusters.Registry, consoleURL func() string) error {
+// setupEveryCluster adds the reconcilers of every cluster, the console's
+// and remote ones (agent mode): node removal (drain and remove nodes on
+// request; docs/phase5.md, W2) and Hetzner Cloud (the Cloud Firewall, the
+// Load Balancer in front of the ingress, the CCM's and CSI driver's token;
+// W1), which names its Cloud resources after the cluster.
+func setupEveryCluster(mgr ctrl.Manager, cluster, proxyNetwork string) error {
 	if err := (&controllers.NodeRemovalReconciler{Client: mgr.GetClient(), APIReader: mgr.GetAPIReader()}).SetupWithManager(mgr); err != nil {
 		return err
 	}
+	return (&controllers.HetznerCloudReconciler{Client: mgr.GetClient(), APIReader: mgr.GetAPIReader(),
+		ClusterName: cluster, ProxyNetwork: proxyNetwork}).SetupWithManager(mgr)
+}
+
+// setupNodes adds the node pool reconciler: Cloud servers as nodes of any
+// cluster, in the management cluster only (it holds the NodePools and the
+// Cloud token). docs/phase5.md, W2.
+func setupNodes(mgr ctrl.Manager, namespace string, dataKey []byte, registry clusters.Registry, consoleURL func() string) error {
 	return (&controllers.NodePoolReconciler{
 		Client: mgr.GetClient(), APIReader: mgr.GetAPIReader(), Namespace: namespace,
 		Clusters:     &controllers.RegistryClients{Registry: registry, Scheme: mgr.GetScheme()},

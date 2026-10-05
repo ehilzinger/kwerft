@@ -67,15 +67,30 @@ func (r *HetznerCloudReconciler) mirrorToken(ctx context.Context, token string) 
 		client.RawPatch(types.MergePatchType, patch)); err != nil {
 		return err
 	}
+	if err := restartHCloudDeployments(ctx, r.Client, token); err != nil {
+		return err
+	}
+	log.FromContext(ctx).Info("gave the hcloud CCM and CSI driver the new Cloud API token")
+	return nil
+}
+
+// tokenSum is a short digest of a Cloud API token: restart annotations and
+// change markers carry it, never the token.
+func tokenSum(token string) string {
 	sum := sha256.Sum256([]byte(token))
+	return hex.EncodeToString(sum[:6])
+}
+
+// restartHCloudDeployments restarts the CCM and CSI controller (they read
+// the token only when they start); missing ones are skipped.
+func restartHCloudDeployments(ctx context.Context, c client.Client, token string) error {
 	restart, _ := json.Marshal(map[string]any{"spec": map[string]any{"template": map[string]any{"metadata": map[string]any{
-		"annotations": map[string]string{annotationHCloudTokenSum: hex.EncodeToString(sum[:6])}}}}})
+		"annotations": map[string]string{annotationHCloudTokenSum: tokenSum(token)}}}}})
 	for _, name := range hcloudDeployments {
 		d := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Namespace: HCloudSystemNamespace, Name: name}}
-		if err := r.Patch(ctx, d, client.RawPatch(types.StrategicMergePatchType, restart)); err != nil && !apierrors.IsNotFound(err) {
+		if err := c.Patch(ctx, d, client.RawPatch(types.StrategicMergePatchType, restart)); err != nil && !apierrors.IsNotFound(err) {
 			return err
 		}
 	}
-	log.FromContext(ctx).Info("gave the hcloud CCM and CSI driver the new Cloud API token")
 	return nil
 }

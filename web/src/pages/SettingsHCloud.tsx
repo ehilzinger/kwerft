@@ -200,7 +200,7 @@ export function FirewallState({ f }: { f?: CloudFirewallStatus }) {
   );
 }
 
-function LBState({ lb, enabled }: { lb?: LoadBalancerStatus; enabled: boolean }) {
+export function LBState({ lb, enabled }: { lb?: LoadBalancerStatus; enabled: boolean }) {
   if (!lb) return <span className="dim">{enabled ? "Being created…" : "Off"}</span>;
   const pill = { Active: "ok", Waiting: "info", Creating: "info", Draining: "warn", Error: "bad" }[lb.state] ?? "info";
   return (

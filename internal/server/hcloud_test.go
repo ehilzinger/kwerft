@@ -166,7 +166,37 @@ func TestHCloudSettings(t *testing.T) {
 		t.Errorf("token for another cluster: %d %+v", code, bad)
 	}
 	if code := c.owner.do(t, "PUT", "/api/v1/settings/hcloud?cluster=second", map[string]any{"firewall": "off"}, nil); code != http.StatusNotFound {
-		t.Errorf("another cluster: %d", code)
+		t.Errorf("unknown cluster: %d", code)
+	}
+	// A remote Cloud cluster's settings go to its Cluster object (the Cluster
+	// reconciler hands them over); an adopted cluster has none here.
+	ctx := context.Background()
+	cloudy := &kwerftv1.Cluster{ObjectMeta: metav1.ObjectMeta{Name: "cloudy"}, Spec: kwerftv1.ClusterSpec{Provider: kwerftv1.ClusterHetznerCloud,
+		HetznerCloud: &kwerftv1.HetznerClusterSpec{Location: "fsn1", ServerType: "cx23", ControlPlanes: 1}}}
+	adopted := &kwerftv1.Cluster{ObjectMeta: metav1.ObjectMeta{Name: "adopted-1"}, Spec: kwerftv1.ClusterSpec{Provider: kwerftv1.ClusterAdopted}}
+	for _, cl := range []*kwerftv1.Cluster{cloudy, adopted} {
+		if err := cluster.admin.Create(ctx, cl); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = cluster.admin.Delete(context.Background(), cl) })
+	}
+	var cloudView struct {
+		Cloud clusterCloudJSON `json:"cloud"`
+	}
+	if code := c.owner.do(t, "PUT", "/api/v1/settings/hcloud?cluster=cloudy", map[string]any{"firewall": "off", "loadBalancer": map[string]any{"enabled": true, "type": "LB11"}}, &cloudView); code != http.StatusOK ||
+		cloudView.Cloud.Firewall != "off" || !cloudView.Cloud.LoadBalancer.Enabled || cloudView.Cloud.LoadBalancer.Type != "lb11" {
+		t.Errorf("cloud cluster: %d %+v", code, cloudView)
+	}
+	var got kwerftv1.Cluster
+	if err := cluster.admin.Get(ctx, client.ObjectKey{Name: "cloudy"}, &got); err != nil || got.Spec.HetznerCloud.Firewall != kwerftv1.CloudFirewallOff ||
+		got.Spec.HetznerCloud.LoadBalancer == nil || !got.Spec.HetznerCloud.LoadBalancer.Enabled || got.Spec.HetznerCloud.ServerType != "cx23" {
+		t.Errorf("cluster spec %+v %v", got.Spec.HetznerCloud, err)
+	}
+	if code := c.dev.do(t, "PUT", "/api/v1/settings/hcloud?cluster=cloudy", map[string]any{"firewall": "sync"}, nil); code != http.StatusForbidden {
+		t.Errorf("developer on a cluster: %d", code)
+	}
+	if code := c.owner.do(t, "PUT", "/api/v1/settings/hcloud?cluster=adopted-1", map[string]any{"firewall": "off"}, &bad); code != http.StatusBadRequest || !strings.Contains(bad.Error, "Hetzner Cloud clusters") {
+		t.Errorf("adopted cluster: %d %+v", code, bad)
 	}
 	if code := c.owner.do(t, "PUT", "/api/v1/settings/hcloud?cluster=a.b", map[string]any{"firewall": "off"}, &bad); code != http.StatusBadRequest || bad.Field != "cluster" {
 		t.Errorf("bad cluster name: %d %+v", code, bad)

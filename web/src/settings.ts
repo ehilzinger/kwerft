@@ -82,6 +82,15 @@ export type LoadBalancerStatus = {
 
 export type CloudServer = { node: string; id: number; name: string; location?: string; labelled?: boolean };
 
+/** What a cluster's Hetzner Cloud reconciler last reported. */
+export type HCloudStatus = {
+  servers?: CloudServer[];
+  firewall?: CloudFirewallStatus;
+  loadBalancer?: LoadBalancerStatus;
+  message?: string;
+  syncedAt?: string;
+};
+
 export type HCloud = {
   tokenSet: boolean;
   platform: "cloud" | "dedicated" | string;
@@ -93,13 +102,7 @@ export type HCloud = {
   loadBalancerReady: boolean;
   firewall: "sync" | "off";
   loadBalancer: { enabled: boolean; type?: string; location?: string };
-  status?: {
-    servers?: CloudServer[];
-    firewall?: CloudFirewallStatus;
-    loadBalancer?: LoadBalancerStatus;
-    message?: string;
-    syncedAt?: string;
-  };
+  status?: HCloudStatus;
 };
 
 export type HCloudCheck = { servers: number; nodes: { node: string; server: string; location: string }[]; locations: string[] };

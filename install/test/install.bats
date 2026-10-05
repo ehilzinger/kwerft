@@ -1090,11 +1090,12 @@ hcloud_env() {
   KC_LOG="$BATS_TEST_TMPDIR/kc.log"; : >"$KC_LOG"
   HELM_LOG="$BATS_TEST_TMPDIR/helm.log"; : >"$HELM_LOG"
   PLATFORM=cloud; PRIVATE_IP=10.0.0.2; HCLOUD_NETWORK_ID=1234; HCLOUD_TOKEN_FILE=""; HCLOUD_CCM=""
-  STORED=""; OWNER=""
+  STORED=""; OWNER=""; CONSOLE_TOKEN=""
   kc() {
     printf 'kc %s\n' "$*" >>"$KC_LOG"
     case "$*" in
       *"get secret kwerft-hcloud-token"*) printf '%s' "$(printf '%s' "$STORED" | base64)" ;;
+      *"get secret hcloud -o jsonpath={.data.token}"*) printf '%s' "$(printf '%s' "$CONSOLE_TOKEN" | base64)" ;;
       *"get secret hcloud -o jsonpath"*) printf '%s' "$OWNER" ;;
       *"get secret hcloud"*) [[ -n "$OWNER" ]] || return 1 ;;
       *"get storageclass"*) return 1 ;;
@@ -1220,4 +1221,72 @@ hcloud_env() {
   [[ "$HCLOUD_CSI_CHART_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
   grep -q -- '--hcloud-ccm=' "$BATS_TEST_DIRNAME/../../charts/kwerft/templates/deployment.yaml"
   grep -q -- '--hcloud-proxy-network=' "$BATS_TEST_DIRNAME/../../charts/kwerft/templates/deployment.yaml"
+}
+
+@test "agent mode: stage_hcloud uses the token the console handed over" {
+  hcloud_env
+  MODE=agent
+  run stage_hcloud
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"no Cloud API token: Cloud Volumes off (Hetzner Cloud clusters get the console's"* ]]
+  AWAIT_CLOUD_TOKEN=1
+  run stage_hcloud
+  [[ "$output" == *"the console hands it over once this cluster's agent connects"* ]]
+  [ ! -s "$HELM_LOG" ]
+  # The Settings token of the cluster itself does not count in agent mode.
+  STORED="stored-token"
+  run stage_hcloud
+  [ ! -s "$HELM_LOG" ]
+  # The console's, in kube-system/hcloud labelled as Kwerft's.
+  OWNER=kwerft; CONSOLE_TOKEN="console-token"
+  run stage_hcloud
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"CSI $HCLOUD_CSI_CHART_VERSION"* ]]
+  grep -q "upgrade --install hcloud-csi" "$HELM_LOG"
+  # Not when the Secret is an operator's own.
+  : >"$HELM_LOG"; OWNER=someone
+  run stage_hcloud
+  [ ! -s "$HELM_LOG" ]
+}
+
+@test "await_cloud_volumes waits for the console's token, then adds the CSI driver" {
+  hcloud_env
+  MODE=agent
+  helmk() { printf 'helm %s\n' "$*" >>"$HELM_LOG"; [[ "$*" != *"status hcloud-csi"* ]]; }
+  SLEEPS=0
+  sleep() { SLEEPS=$((SLEEPS + 1)); (( SLEEPS < 3 )) || { OWNER=kwerft; CONSOLE_TOKEN="console-token"; }; }
+  # Only with --await-cloud-token, only on Cloud servers.
+  run await_cloud_volumes
+  [ -z "$output" ]
+  AWAIT_CLOUD_TOKEN=1; PLATFORM=dedicated
+  run await_cloud_volumes
+  [ -z "$output" ]
+  PLATFORM=cloud
+  # The token never comes: a warning, not a failure.
+  CLOUD_TOKEN_WAIT=0
+  run await_cloud_volumes
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"has not handed over its Hetzner Cloud token"* ]]
+  absent "upgrade --install" "$HELM_LOG"
+  # It comes after a few polls.
+  CLOUD_TOKEN_WAIT=60
+  run await_cloud_volumes
+  [ "$status" -eq 0 ]
+  [ "$output" = " · Cloud Volumes (CSI $HCLOUD_CSI_CHART_VERSION)" ]
+  grep -q "upgrade --install hcloud-csi" "$HELM_LOG"
+  # Installed already: nothing to wait for.
+  helmk() { printf 'helm %s\n' "$*" >>"$HELM_LOG"; }
+  : >"$HELM_LOG"; OWNER=""; CONSOLE_TOKEN=""
+  run await_cloud_volumes
+  [ -z "$output" ]
+  absent "upgrade --install" "$HELM_LOG"
+}
+
+@test "--await-cloud-token needs --agent; agent mode passes the Cloud network to the chart" {
+  run "$SCRIPT" --dry-run --await-cloud-token
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"need --agent"* ]]
+  run "$SCRIPT" --dry-run --platform cloud --agent --console https://ops.example.com --cluster-token "$AGENT_TOKEN" --await-cloud-token
+  [ "$status" -eq 0 ]
+  sed -n '/^stage_kwerft_agent()/,/^}/p' "$SCRIPT" | grep -qF '"${hcloud_args[@]}"'
 }

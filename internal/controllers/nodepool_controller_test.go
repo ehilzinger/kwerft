@@ -576,7 +576,7 @@ func TestNewClusterBootstrapsThroughAgentMode(t *testing.T) {
 		t.Fatalf("servers = %+v", all)
 	}
 	ud := e.f.UserData(all[0].ID)
-	if !strings.Contains(ud, "'--agent' '--console' '"+consoleURL+"' '--cluster-token' '"+token+"' '--platform' 'cloud'") || strings.Contains(ud, "kwft_join_") {
+	if !strings.Contains(ud, "'--agent' '--console' '"+consoleURL+"' '--cluster-token' '"+token+"' '--platform' 'cloud' '--await-cloud-token'") || strings.Contains(ud, "kwft_join_") {
 		t.Fatalf("user data:\n%s", ud)
 	}
 	p, _ := e.pass(t, "np6-workers")

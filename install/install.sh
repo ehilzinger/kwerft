@@ -112,6 +112,8 @@ DRY_RUN=0
 ASSUME_YES=0
 HARDEN_SSH=0
 AGENT=0                 # --agent (MODE becomes agent unless --uninstall or --reset-firewall)
+AWAIT_CLOUD_TOKEN=0     # --await-cloud-token (agent mode): Cloud Volumes once the console hands over its token
+CLOUD_TOKEN_WAIT=${KWERFT_CLOUD_TOKEN_WAIT:-300}   # seconds --await-cloud-token waits
 LITE=0
 
 # Discovered facts.
@@ -180,6 +182,8 @@ Connect a new cluster to a console (agent mode):
                          shows the whole command)
   --console URL          The console, https://<console>
   --cluster-token T      This cluster's agent token from the console (kwag_…)
+  --await-cloud-token    Wait for the console to hand over its Hetzner Cloud token,
+                         then add Cloud Volumes (servers Kwerft creates use this)
 
 Development:
   --image REF            Run this console image (repository:tag) instead of the release
@@ -243,6 +247,7 @@ parse_args() {
       --agent)          AGENT=1; shift ;;
       --console)        need_arg "$@"; CONSOLE_URL=$2; shift 2 ;;
       --cluster-token)  need_arg "$@"; CLUSTER_TOKEN=$2; shift 2 ;;
+      --await-cloud-token) AWAIT_CLOUD_TOKEN=1; shift ;;
       --node-label)     need_arg "$@"; NODE_LABELS+=("$2"); shift 2 ;;
       --node-taint)     need_arg "$@"; NODE_TAINTS+=("$2"); shift 2 ;;
       --image)          need_arg "$@"; IMAGE=$2; shift 2 ;;
@@ -271,8 +276,8 @@ parse_args() {
     CONSOLE_URL=${CONSOLE_URL%/}
     valid_console_url "$CONSOLE_URL" || die $EXIT_USAGE "--console must look like https://ops.example.com, got '$CONSOLE_URL'"
     valid_cluster_token "$CLUSTER_TOKEN" || die $EXIT_USAGE "--cluster-token is not an agent token (kwag_<cluster>_…); copy the command from the console again"
-  elif [[ -n "$CONSOLE_URL" || -n "$CLUSTER_TOKEN" ]]; then
-    die $EXIT_USAGE "--console and --cluster-token need --agent"
+  elif [[ -n "$CONSOLE_URL" || -n "$CLUSTER_TOKEN" ]] || (( AWAIT_CLOUD_TOKEN )); then
+    die $EXIT_USAGE "--console, --cluster-token and --await-cloud-token need --agent"
   fi
   # Releases are tagged v0.2.0; chart versions and image tags drop the "v".
   KWERFT_VERSION=${KWERFT_VERSION#v}
@@ -971,13 +976,23 @@ stage_hcloud() {
   token=$(mktemp "$HCLOUD_TMP_DIR/hcloud-token.XXXXXX")
   if [[ -n "$HCLOUD_TOKEN_FILE" ]]; then
     tr -d '[:space:]' <"$HCLOUD_TOKEN_FILE" >"$token"
+  elif [[ "$MODE" == "agent" ]]; then
+    console_hcloud_token >"$token"
   else
     stored_hcloud_token >"$token"
   fi
   if [[ ! -s "$token" ]]; then
     rm -f "$token"
     ccm_active && die $EXIT_PLATFORM "The hcloud cloud-controller-manager needs the Cloud API token: pass --config with hcloud.tokenFile."
-    echo "no Cloud API token: Cloud Volumes off (store one under Settings › Hetzner Cloud API, then re-run)"
+    if [[ "$MODE" == "agent" ]]; then
+      if (( AWAIT_CLOUD_TOKEN )); then
+        echo "no Cloud API token yet: the console hands it over once this cluster's agent connects"
+      else
+        echo "no Cloud API token: Cloud Volumes off (Hetzner Cloud clusters get the console's; re-run once it has)"
+      fi
+    else
+      echo "no Cloud API token: Cloud Volumes off (store one under Settings › Hetzner Cloud API, then re-run)"
+    fi
     return 0
   fi
   if ccm_active && [[ -n "$PRIVATE_IP" && -z "$HCLOUD_NETWORK_ID" ]]; then
@@ -999,6 +1014,34 @@ stage_hcloud() {
 # stored_hcloud_token prints the token saved in Settings, if any.
 stored_hcloud_token() {
   kc -n kwerft-system get secret kwerft-hcloud-token -o jsonpath='{.data.token}' 2>/dev/null | base64 -d 2>/dev/null | tr -d '[:space:]' || true
+}
+
+# console_hcloud_token prints the token the console handed this cluster (a
+# hetzner-cloud cluster in agent mode) in kube-system/hcloud, if any.
+console_hcloud_token() {
+  [[ "$(kc -n kube-system get secret hcloud -o jsonpath='{.metadata.labels.app\.kubernetes\.io/managed-by}' 2>/dev/null || true)" == "kwerft" ]] || return 0
+  kc -n kube-system get secret hcloud -o jsonpath='{.data.token}' 2>/dev/null | base64 -d 2>/dev/null | tr -d '[:space:]' || true
+}
+
+# await_cloud_volumes (agent mode, --await-cloud-token): the console hands a
+# Hetzner Cloud cluster its Cloud API token once the agent connects; then the
+# CSI driver can be installed. Prints the summary's addition; never fails
+# the install (a re-run adds the driver later).
+await_cloud_volumes() {
+  (( AWAIT_CLOUD_TOKEN )) && [[ "$PLATFORM" == "cloud" ]] || return 0
+  helmk -n kube-system status hcloud-csi >/dev/null 2>&1 && return 0
+  local waited=0
+  until [[ -n "$(console_hcloud_token)" ]]; do
+    if (( waited >= CLOUD_TOKEN_WAIT )); then
+      warn "The console has not handed over its Hetzner Cloud token within $((CLOUD_TOKEN_WAIT / 60)) min; re-run this command later for Cloud Volumes."
+      return 0
+    fi
+    sleep 5
+    waited=$((waited + 5))
+  done
+  helmk repo add hcloud https://charts.hetzner.cloud --force-update >>"$LOG_FILE" 2>&1
+  install_hcloud_csi
+  printf ' · Cloud Volumes (CSI %s)' "$HCLOUD_CSI_CHART_VERSION"
 }
 
 # write_hcloud_secret <token file> keeps kube-system/hcloud (token, and the
@@ -1626,6 +1669,10 @@ stage_kwerft_agent() {
   fi
   local firewall_args=(--set firewall.privateNetwork="")
   [[ -n "$PRIVATE_CIDR" ]] && firewall_args=(--set firewall.privateNetwork="$(network_of "$PRIVATE_CIDR")")
+  # Where a Hetzner Load Balancer in front of this cluster's ingress may
+  # connect from (the console's settings for this cluster turn it on).
+  local hcloud_args=(--set hcloud.ccm=false --set hcloud.proxyNetwork="$HCLOUD_NETWORK_RANGE")
+  ccm_active && hcloud_args[1]=hcloud.ccm=true
   helmk show crds "$ref" ${version_args[@]+"${version_args[@]}"} 2>>"$LOG_FILE" \
     | kc apply --server-side --force-conflicts -f - >>"$LOG_FILE" 2>&1 \
     || die $EXIT_KWERFT "Kwerft CRDs failed to apply (chart: $ref)"
@@ -1643,13 +1690,15 @@ stage_kwerft_agent() {
     --set acme.email="$ACME_EMAIL" \
     --set platform="$PLATFORM" \
     --set hubble.enabled="$(hubble_enabled)" \
-    "${image_args[@]}" "${firewall_args[@]}" \
+    "${image_args[@]}" "${firewall_args[@]}" "${hcloud_args[@]}" \
     --set registry.image.tag="$ZOT_VERSION" \
     --set registry.clusterIP="$REGISTRY_CLUSTER_IP" \
     --set builds.buildkitImage="docker.io/moby/buildkit:${BUILDKIT_VERSION}-rootless" \
     --set builds.railpackImage="ghcr.io/railwayapp/railpack-frontend:${RAILPACK_VERSION}" \
     >>"$LOG_FILE" 2>&1 || die $EXIT_KWERFT "Kwerft installation failed (chart: $ref)"
-  echo "agent ${IMAGE:-$KWERFT_VERSION} · cluster $(cluster_of_token "$CLUSTER_TOKEN") → $CONSOLE_URL"
+  local volumes
+  volumes=$(await_cloud_volumes)
+  echo "agent ${IMAGE:-$KWERFT_VERSION} · cluster $(cluster_of_token "$CLUSTER_TOKEN") → $CONSOLE_URL${volumes}"
 }
 
 # write_agent_secret stores the agent token where the chart mounts it

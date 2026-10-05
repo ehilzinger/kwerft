@@ -2,6 +2,10 @@
 
 package v1alpha1
 
+import (
+	apiv1alpha1 "github.com/ehilzinger/kwerft/api/v1alpha1"
+)
+
 // HetznerClusterSpecApplyConfiguration represents a declarative configuration of the HetznerClusterSpec type for use
 // with apply.
 //
@@ -13,6 +17,13 @@ type HetznerClusterSpecApplyConfiguration struct {
 	ServerType *string `json:"serverType,omitempty"`
 	// ControlPlanes: 1, or 3 for a highly available control plane.
 	ControlPlanes *int32 `json:"controlPlanes,omitempty"`
+	// Firewall: sync (default) or off — the cluster's Hetzner Cloud
+	// Firewall, kept by Kwerft in that cluster as Settings › Hetzner Cloud
+	// does for the console's own.
+	Firewall *apiv1alpha1.CloudFirewallMode `json:"firewall,omitempty"`
+	// LoadBalancer puts a Hetzner Load Balancer in front of the cluster's
+	// ingress.
+	LoadBalancer *LoadBalancerSettingsApplyConfiguration `json:"loadBalancer,omitempty"`
 }
 
 // HetznerClusterSpecApplyConfiguration constructs a declarative configuration of the HetznerClusterSpec type for use with
@@ -42,5 +53,21 @@ func (b *HetznerClusterSpecApplyConfiguration) WithServerType(value string) *Het
 // If called multiple times, the ControlPlanes field is set to the value of the last call.
 func (b *HetznerClusterSpecApplyConfiguration) WithControlPlanes(value int32) *HetznerClusterSpecApplyConfiguration {
 	b.ControlPlanes = &value
+	return b
+}
+
+// WithFirewall sets the Firewall field in the declarative configuration to the given value
+// and returns the receiver, so that objects can be built by chaining "With" function invocations.
+// If called multiple times, the Firewall field is set to the value of the last call.
+func (b *HetznerClusterSpecApplyConfiguration) WithFirewall(value apiv1alpha1.CloudFirewallMode) *HetznerClusterSpecApplyConfiguration {
+	b.Firewall = &value
+	return b
+}
+
+// WithLoadBalancer sets the LoadBalancer field in the declarative configuration to the given value
+// and returns the receiver, so that objects can be built by chaining "With" function invocations.
+// If called multiple times, the LoadBalancer field is set to the value of the last call.
+func (b *HetznerClusterSpecApplyConfiguration) WithLoadBalancer(value *LoadBalancerSettingsApplyConfiguration) *HetznerClusterSpecApplyConfiguration {
+	b.LoadBalancer = value
 	return b
 }

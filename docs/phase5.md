@@ -770,11 +770,12 @@ install.sh stage **Hetzner Cloud** (`stage_hcloud`).
   Cloud cluster's servers, volumes and Load Balancers must live in the
   token's project, so a `hetzner-cloud` cluster gets **the management
   project's token**, and only as its CCM/CSI Secret `kube-system/hcloud`
-  (the Security rule above; W3 writes it when bootstrapping). Its own Kwerft
-  controllers (`KWERFT_CLUSTER_NAME=<name>`, W3's agent mode sets it) fall
-  back to that Secret for their Cloud Firewall and Load Balancer when
-  `kwerft-hcloud-token` is empty; the management cluster never falls back,
-  so removing the token in Settings stops its sync. Risk: a cluster-admin
+  (the Security rule above; the Cluster reconciler hands it over, see
+  *Hetzner Cloud in remote clusters* below). Its own Kwerft controllers
+  (named after the agent token's cluster) fall back to that Secret for
+  their Cloud Firewall and Load Balancer when `kwerft-hcloud-token` is
+  empty; the management cluster never falls back, so removing the token in
+  Settings stops its sync. Risk: a cluster-admin
   of a remote Cloud cluster can read the project token; separate trust
   boundaries need separate Hetzner projects (adopted clusters bring their
   own token through their own installer `--config`).
@@ -856,3 +857,41 @@ Use the test project's token only.
    installer: CSI and `hcloud-volumes` appear, the provider ID stays `k3s://`.
 8. Clean up: turn the firewall and Load Balancer off in Settings, then
    delete the servers, Volumes and the Network.
+
+## Hetzner Cloud in remote clusters (after the merge, 2026-10-05)
+
+Closes the gap between W1 (Cloud Firewall, Load Balancer, CSI) and W2/W3
+(remote Cloud clusters):
+
+- **Every cluster runs the Hetzner Cloud and node removal reconcilers**
+  (`setupEveryCluster`, console and agent mode). In agent mode the cluster's
+  name in Cloud labels comes from its agent token (`kwag_<cluster>_…`).
+- **Settings per cluster**: `Cluster.spec.hetznerCloud.firewall` (sync |
+  off) and `.loadBalancer`, the same shape as Settings › Hetzner Cloud.
+  `PUT /api/v1/settings/hcloud?cluster=<name>` writes them for a
+  hetzner-cloud cluster (owners and admins, impersonated, audited); adopted
+  clusters are refused (they bring their own token). Clusters › a cluster ›
+  Overview has the card.
+- **Hand-over** (`internal/controllers/cluster_hcloud.go`), on every Cluster
+  pass of a connected hetzner-cloud cluster and at once when the token
+  changes in Settings: the console's token goes into the cluster's
+  `kube-system/hcloud` (labelled as Kwerft's, only the `token` key; an
+  operator's own Secret is left alone and reported), restarting the CCM and
+  CSI controller there when it changed; the settings go into the cluster's
+  ConsoleSettings `spec.hetznerCloud` (server-side apply, field manager
+  `kwerft-mirror`) with `kwerft.dev/hcloud-token-sum`, so its reconciler
+  syncs again at once after a new token. Its `status.hetznerCloud` comes
+  back as the Cluster's `status.hetznerCloud`; condition `HetznerCloud`
+  says whether the hand-over ran (`Synced`, `Incomplete`: no token or the
+  cluster's own Secret, `Failed`).
+- **Cloud Volumes**: the bootstrap server of a new Cloud cluster runs
+  `install.sh --agent … --await-cloud-token`: after the agent starts, the
+  installer waits up to 5 minutes for the console's token in
+  `kube-system/hcloud`, then installs the CSI driver and the storage class.
+  In agent mode `stage_hcloud` takes the token only from there (a re-run
+  adds the driver later). The agent's chart gets `hcloud.proxyNetwork`
+  like the console's, so its ingress accepts a Load Balancer.
+- **Not covered**: the CCM in remote clusters (install-time only, and the
+  token arrives after the first install), and DNS records for a remote
+  cluster's Load Balancer (the cluster has no DNS token; point its records
+  at the Load Balancer's addresses shown on the card).

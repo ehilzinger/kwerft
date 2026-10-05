@@ -48,7 +48,10 @@ func (j joinScript) args() []string {
 	var args []string
 	switch j.Mode {
 	case "agent":
-		args = []string{"--agent", "--console", j.Console, "--cluster-token", j.Token, "--platform", "cloud"}
+		// --await-cloud-token: the console hands the cluster its Cloud API
+		// token once the agent connects; then the installer adds the CSI
+		// driver (cluster_hcloud.go).
+		args = []string{"--agent", "--console", j.Console, "--cluster-token", j.Token, "--platform", "cloud", "--await-cloud-token"}
 		if j.Version != "" {
 			args = append(args, "--version", j.Version)
 		}

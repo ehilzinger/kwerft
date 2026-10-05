@@ -30,6 +30,22 @@ type HetznerClusterSpec struct {
 	// +kubebuilder:validation:Enum=1;3
 	// +kubebuilder:default=1
 	ControlPlanes int32 `json:"controlPlanes,omitempty"`
+
+	// Firewall: sync (default) or off — the cluster's Hetzner Cloud
+	// Firewall, kept by Kwerft in that cluster as Settings › Hetzner Cloud
+	// does for the console's own.
+	// +optional
+	Firewall CloudFirewallMode `json:"firewall,omitempty"`
+	// LoadBalancer puts a Hetzner Load Balancer in front of the cluster's
+	// ingress.
+	// +optional
+	LoadBalancer *LoadBalancerSettings `json:"loadBalancer,omitempty"`
+}
+
+// CloudSettings are the Cloud Firewall and Load Balancer settings the
+// cluster's own Hetzner Cloud reconciler follows.
+func (h *HetznerClusterSpec) CloudSettings() *HetznerCloudSettings {
+	return &HetznerCloudSettings{Firewall: h.Firewall, LoadBalancer: h.LoadBalancer.DeepCopy()}
 }
 
 // ClusterSpec is one Kubernetes cluster the console manages.
@@ -70,6 +86,11 @@ type ClusterStatus struct {
 	Nodes int32 `json:"nodes,omitempty"`
 	// +optional
 	ReadyNodes int32 `json:"readyNodes,omitempty"`
+	// HetznerCloud is what the cluster's own Hetzner Cloud reconciler last
+	// reported (its Cloud Firewall and Load Balancer); hetzner-cloud
+	// clusters only, copied through the agent's tunnel.
+	// +optional
+	HetznerCloud *HetznerCloudStatus `json:"hetznerCloud,omitempty"`
 	// +optional
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
 }

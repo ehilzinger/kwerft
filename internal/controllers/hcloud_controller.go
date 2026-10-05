@@ -368,7 +368,7 @@ func (r *HetznerCloudReconciler) ruleStates(ctx context.Context, states map[stri
 // hcloudInputs is what a sync depends on in ConsoleSettings: its spec and
 // the token's change marker, not the status other reconcilers write.
 func hcloudInputs(s *kwerftv1.ConsoleSettings) string {
-	raw, _ := json.Marshal([]any{s.Spec.HetznerCloud, s.Annotations[AnnotationHCloudTokenUpdated]})
+	raw, _ := json.Marshal([]any{s.Spec.HetznerCloud, s.Annotations[AnnotationHCloudTokenUpdated], s.Annotations[AnnotationHCloudTokenSum]})
 	return string(raw)
 }
 

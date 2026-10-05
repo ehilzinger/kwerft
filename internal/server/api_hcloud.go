@@ -1,6 +1,7 @@
 package server
 
 import (
+	"cmp"
 	"context"
 	"encoding/base64"
 	"encoding/json"
@@ -31,17 +32,16 @@ import (
 // Hetzner Cloud reconciler does the work and reports into
 // status.hetznerCloud. Every write is impersonated and audited.
 
-// Clusters: the Cloud Firewall and the Load Balancer are per cluster (each
-// cluster's ConsoleSettings, synced by that cluster's own reconciler), so
-// PUT /settings/hcloud takes ?cluster=<name> (default local). The token is
-// the management cluster's only: the token routes refuse other clusters.
-// Remote Cloud clusters get the same project token from the console when
-// they are created (Hetzner tokens cannot be scoped; docs/phase5.md › As
-// built (W1)).
+// Clusters: the Cloud Firewall and the Load Balancer are per cluster, so
+// PUT /settings/hcloud takes ?cluster=<name> (default local). A remote
+// hetzner-cloud cluster's settings live on its Cluster object
+// (spec.hetznerCloud), which the Cluster reconciler hands to the cluster's
+// own Hetzner Cloud reconciler through the tunnel, with the project token
+// (Hetzner tokens cannot be scoped; docs/phase5.md › As built (W1)). The
+// token is the management cluster's only: the token routes refuse other
+// clusters.
 
 var clusterNameRE = regexp.MustCompile(`^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$`)
-
-var errClusterNotWired = errors.New("cluster not reachable from Settings yet")
 
 // hcloudCluster reads ?cluster= (default local).
 func hcloudCluster(r *http.Request) (string, bool) {
@@ -50,16 +50,6 @@ func hcloudCluster(r *http.Request) (string, bool) {
 		return clusters.Local, true
 	}
 	return name, clusterNameRE.MatchString(name)
-}
-
-// clusterClient is userClient for the named cluster. Only the local one is
-// wired here; the multi-cluster console routes the others (W4's per-cluster
-// impersonators) at merge.
-func (s *settingsAPI) clusterClient(r *http.Request, cluster string) (client.Client, *principal, context.Context, context.CancelFunc, error) {
-	if cluster != clusters.Local {
-		return nil, nil, r.Context(), func() {}, errClusterNotWired
-	}
-	return s.userClient(r)
 }
 
 // clusterRefused answers a request for a cluster this route cannot serve.
@@ -382,12 +372,8 @@ func (s *settingsAPI) setHCloud(w http.ResponseWriter, r *http.Request) {
 		writeFieldError(w, "loadBalancer.location", "Enter a location such as fsn1, or leave it empty.")
 		return
 	}
-	c, p, ctx, cancel, err := s.clusterClient(r, cluster)
+	c, p, ctx, cancel, err := s.userClient(r)
 	defer cancel()
-	if errors.Is(err, errClusterNotWired) {
-		writeError(w, http.StatusNotFound, "Cluster "+cluster+" is not reachable from here.")
-		return
-	}
 	if err != nil {
 		s.internalError(w, r, err)
 		return
@@ -395,6 +381,10 @@ func (s *settingsAPI) setHCloud(w http.ResponseWriter, r *http.Request) {
 	cs, err := s.load(ctx, c)
 	if err != nil {
 		s.kubeError(w, r, p, "settings.hcloud", cluster, "Settings not found.", err)
+		return
+	}
+	if cluster != clusters.Local {
+		s.setClusterHCloud(w, r, c, p, cluster, cs, kwerftv1.CloudFirewallMode(req.Firewall), lb)
 		return
 	}
 	view := s.hcloudView(ctx, cs)
@@ -420,21 +410,75 @@ func (s *settingsAPI) setHCloud(w http.ResponseWriter, r *http.Request) {
 		s.kubeError(w, r, p, "settings.hcloud", cluster, "Settings not found.", err)
 		return
 	}
-	detail := "firewall " + string(kwerftv1.CloudFirewallSync)
-	if req.Firewall != "" {
-		detail = "firewall " + req.Firewall
-	}
-	if lb.Enabled {
-		detail += ", load balancer on"
-	} else {
-		detail += ", load balancer off"
-	}
-	s.audit(r, p.user.Email, "settings.hcloud", cluster, detail)
+	s.audit(r, p.user.Email, "settings.hcloud", cluster, hcloudDetail(kwerftv1.CloudFirewallMode(req.Firewall), lb.Enabled))
 	if cs, err = s.load(ctx, c); err != nil {
 		s.internalError(w, r, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, s.view(cs))
+}
+
+func hcloudDetail(firewall kwerftv1.CloudFirewallMode, lb bool) string {
+	detail := "firewall " + string(cmp.Or(firewall, kwerftv1.CloudFirewallSync))
+	if lb {
+		return detail + ", load balancer on"
+	}
+	return detail + ", load balancer off"
+}
+
+// setClusterHCloud writes a remote hetzner-cloud cluster's Cloud settings
+// to its Cluster object, as the signed-in user, and answers the cluster's
+// view of them.
+func (s *settingsAPI) setClusterHCloud(w http.ResponseWriter, r *http.Request, c client.Client, p *principal, cluster string,
+	cs *kwerftv1.ConsoleSettings, firewall kwerftv1.CloudFirewallMode, lb hcloudLoadBalancerJSON) {
+	ctx := r.Context()
+	var cl kwerftv1.Cluster
+	if err := c.Get(ctx, client.ObjectKey{Name: cluster}, &cl); err != nil {
+		s.kubeError(w, r, p, "settings.hcloud", cluster, "Cluster not found.", err)
+		return
+	}
+	h := cl.Spec.HetznerCloud
+	if cl.Spec.Provider != kwerftv1.ClusterHetznerCloud || h == nil {
+		writeError(w, http.StatusBadRequest, "Only Hetzner Cloud clusters Kwerft created get their Cloud Firewall and Load Balancer from the console.")
+		return
+	}
+	tokenSet := cs != nil && cs.Annotations[controllers.AnnotationHCloudTokenUpdated] != ""
+	if lb.Enabled && (h.LoadBalancer == nil || !h.LoadBalancer.Enabled) && !tokenSet {
+		writeFieldError(w, "loadBalancer.enabled", "Enter a Hetzner Cloud API token in Settings first.")
+		return
+	}
+	orig := cl.DeepCopy()
+	h.Firewall = firewall
+	h.LoadBalancer = &kwerftv1.LoadBalancerSettings{Enabled: lb.Enabled, Type: lb.Type, Location: lb.Location}
+	if !lb.Enabled && lb.Type == "" && lb.Location == "" {
+		h.LoadBalancer = nil
+	}
+	if err := c.Patch(ctx, &cl, client.MergeFromWithOptions(orig, client.MergeFromWithOptimisticLock{})); err != nil {
+		s.kubeError(w, r, p, "settings.hcloud", cluster, "Cluster not found.", err)
+		return
+	}
+	s.audit(r, p.user.Email, "settings.hcloud", cluster, hcloudDetail(firewall, lb.Enabled))
+	writeJSON(w, http.StatusOK, map[string]any{"cloud": clusterCloudView(&cl)})
+}
+
+// clusterCloudJSON is a remote hetzner-cloud cluster's Cloud Firewall and
+// Load Balancer: its settings and what its own reconciler reported.
+type clusterCloudJSON struct {
+	Firewall     string                       `json:"firewall"` // sync | off
+	LoadBalancer hcloudLoadBalancerJSON       `json:"loadBalancer"`
+	Status       *kwerftv1.HetznerCloudStatus `json:"status,omitempty"`
+}
+
+func clusterCloudView(cl *kwerftv1.Cluster) *clusterCloudJSON {
+	h := cl.Spec.HetznerCloud
+	if cl.Spec.Provider != kwerftv1.ClusterHetznerCloud || h == nil {
+		return nil
+	}
+	out := &clusterCloudJSON{Firewall: string(cmp.Or(h.Firewall, kwerftv1.CloudFirewallSync)), Status: cl.Status.HetznerCloud}
+	if lb := h.LoadBalancer; lb != nil {
+		out.LoadBalancer = hcloudLoadBalancerJSON{Enabled: lb.Enabled, Type: lb.Type, Location: lb.Location}
+	}
+	return out
 }
 
 // ---- volume classes --------------------------------------------------------------
