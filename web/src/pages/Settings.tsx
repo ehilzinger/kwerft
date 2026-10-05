@@ -11,6 +11,7 @@ import "../styles/workloads.css";
 import "../styles/settings.css";
 import { GitConnectionsCard } from "./GitConnections";
 import { DataKeyCard, SSOCard } from "./SettingsIdentity";
+import { HCloudCard } from "./SettingsHCloud";
 
 const unreachable = "The console could not be reached. Check your connection and try again.";
 const errText = (e: unknown) => (e instanceof ApiError ? e.message : unreachable);
@@ -52,12 +53,7 @@ export function Settings() {
           <GitConnectionsCard canEdit={canEdit} />
           {canEdit && <SSOCard />}
           {session.data?.role === "owner" && <DataKeyCard />}
-          <section className="card">
-            <h2>Hetzner Cloud API</h2>
-            <div className="bd">
-              <p className="dim note">Planned for Phase 5: add Cloud servers as nodes, Cloud volumes and load balancers, and mirror the server firewall to the Hetzner Cloud Firewall, with a Cloud API token stored here.</p>
-            </div>
-          </section>
+          <HCloudCard s={settings.data} canEdit={canEdit} />
         </>
       )}
     </section>

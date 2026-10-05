@@ -38,7 +38,7 @@ setup() {
 @test "--dry-run lists every install stage in order" {
   run "$SCRIPT" --dry-run --platform cloud --domain ops.example.com
   [ "$status" -eq 0 ]
-  expected="Preflight System Firewall Kubernetes Registry Helm Network Ingress Observability Kwerft Handoff"
+  expected="Preflight System Firewall Kubernetes Registry Helm Network Hetzner Ingress Observability Kwerft Handoff"
   actual=$(printf '%s\n' "$output" | sed -n 's/^→ \([A-Za-z]*\).*/\1/p' | tr '\n' ' ' | sed 's/ $//')
   [ "$actual" = "$expected" ]
 }
@@ -803,4 +803,261 @@ JSON
   grep -qF 'ChainOpen  = "managed_open"' "$root/internal/firewall/nft.go"
   grep -qF 'PausedFile = "paused"' "$root/internal/firewall/agent.go"
   grep -qF "path: $FIREWALL_STATE_DIR," "$root/charts/kwerft/templates/node-agent.yaml"
+}
+
+# ---- Hetzner Cloud (Phase 5) ------------------------------------------------
+
+write_hcloud_config() {
+  htoken="$BATS_TEST_TMPDIR/hcloud.token"; printf 'hcloud-token-0123456789\n' >"$htoken"
+  cfg="$BATS_TEST_TMPDIR/kwerft.yaml"
+  printf '%b' "$1" | sed "s|HTOKEN|$htoken|" >"$cfg"
+}
+
+@test "--config hcloud keys are checked" {
+  write_hcloud_config 'domain: ops.example.com\nhcloud:\n  tokenFile: HTOKEN\n  cloudControllerManager: true\n  loadBalancer: true\n'
+  run "$SCRIPT" --dry-run --platform cloud --config "$cfg"
+  [ "$status" -eq 0 ]
+  write_hcloud_config 'hcloud: { tokenFile: HTOKEN, cloudControllerManager: maybe }\n'
+  run "$SCRIPT" --dry-run --platform cloud --config "$cfg"
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"hcloud.cloudControllerManager"*"true or false"* ]]
+  write_hcloud_config 'hcloud: { tokenFile: HTOKEN, loadBalancer: yes }\n'
+  run "$SCRIPT" --dry-run --platform cloud --config "$cfg"
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"hcloud.loadBalancer"* ]]
+  write_hcloud_config 'hcloud: { tokenFile: /nonexistent/hcloud.token }\n'
+  run "$SCRIPT" --dry-run --platform cloud --config "$cfg"
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"hcloud.tokenFile not readable"* ]]
+  write_hcloud_config 'hcloud: { cloudControllerManager: true }\n'
+  run "$SCRIPT" --dry-run --platform cloud --config "$cfg"
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"needs hcloud.tokenFile"* ]]
+}
+
+@test "--dry-run runs the Hetzner Cloud stage after the network" {
+  run "$SCRIPT" --dry-run --platform cloud --domain ops.example.com
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"Hetzner Cloud"*"(would run stage_hcloud)"* ]]
+}
+
+@test "write_k3s_config: the hcloud CCM turns off k3s's cloud controller, only when chosen" {
+  KWERFT_SOURCED=1 source "$SCRIPT"
+  K3S_CONFIG_FILE="$BATS_TEST_TMPDIR/k3s/config.yaml"
+  PUBLIC_IP=203.0.113.10; PRIVATE_IP=10.0.0.2; DOMAIN=ops.example.com; PLATFORM=cloud
+  HCLOUD_CCM=""
+  write_k3s_config
+  absent "cloud-provider=external" "$K3S_CONFIG_FILE"
+  run ccm_active
+  [ "$status" -ne 0 ]
+  HCLOUD_CCM=true
+  write_k3s_config
+  grep -qx "  - max-pods=200" "$K3S_CONFIG_FILE"
+  grep -qx "  - cloud-provider=external" "$K3S_CONFIG_FILE"
+  grep -qx "disable-cloud-controller: true" "$K3S_CONFIG_FILE"
+  grep -qx "node-ip: 10.0.0.2" "$K3S_CONFIG_FILE"
+  ccm_active
+  # Still valid YAML: kubelet-arg is one list.
+  [ "$(sed -n '/^kubelet-arg:/,/^[a-z]/p' "$K3S_CONFIG_FILE" | grep -c '^  - ')" -eq 2 ]
+}
+
+@test "hcloud_network_field reads the metadata service's private networks" {
+  KWERFT_SOURCED=1 source "$SCRIPT"
+  meta='- ip: 10.0.0.2
+  alias_ips: [10.0.0.3, 10.0.0.4]
+  interface_num: 1
+  mac_address: 86:00:00:2a:7d:e0
+  network_id: 1234
+  network_name: nw-test1
+  network: 10.0.0.0/16
+  subnet: 10.0.0.0/24
+  gateway: 10.0.0.1
+- ip: 192.168.0.2
+  alias_ips: []
+  network_id: 4321
+  network: 192.168.0.0/16'
+  [ "$(hcloud_network_field "$meta" 10.0.0.2 network_id)" = "1234" ]
+  [ "$(hcloud_network_field "$meta" 10.0.0.2 network)" = "10.0.0.0/16" ]
+  [ "$(hcloud_network_field "$meta" 192.168.0.2 network_id)" = "4321" ]
+  [ -z "$(hcloud_network_field "$meta" 10.9.9.9 network_id)" ]
+}
+
+@test "traefik_proxy_args: PROXY protocol from the Cloud Network only" {
+  KWERFT_SOURCED=1 source "$SCRIPT"
+  HCLOUD_NETWORK_RANGE=""
+  [ -z "$(traefik_proxy_args)" ]
+  HCLOUD_NETWORK_RANGE=10.0.0.0/16
+  run traefik_proxy_args
+  [[ "$output" == *"--set ports.web.proxyProtocol.trustedIPs={10.0.0.0/16}"* ]]
+  [[ "$output" == *"--set ports.websecure.proxyProtocol.trustedIPs={10.0.0.0/16}"* ]]
+}
+
+@test "hcloud_storage_class: not the default, only where the CSI driver runs" {
+  KWERFT_SOURCED=1 source "$SCRIPT"
+  run hcloud_storage_class
+  [[ "$output" == *"name: hcloud-volumes"* ]]
+  [[ "$output" == *'is-default-class: "false"'* ]]
+  [[ "$output" == *"provisioner: csi.hetzner.cloud"* ]]
+  [[ "$output" == *"key: csi.hetzner.cloud/location"* ]]
+  [[ "$output" == *"values: [fsn1, nbg1, hel1, ash, hil, sin]"* ]]
+  [[ "$output" == *"allowVolumeExpansion: true"* ]]
+  run hcloud_csi_values
+  [[ "$output" == *"storageClasses: []"* ]]
+  [[ "$output" == *"key: kwerft.dev/platform"* ]]
+  [[ "$output" == *"values: [dedicated]"* ]]
+}
+
+@test "hcloud_ccm_values: private addresses with a Cloud Network, never routes" {
+  KWERFT_SOURCED=1 source "$SCRIPT"
+  HCLOUD_NETWORK_ID=1234
+  run hcloud_ccm_values
+  [[ "$output" == *"enabled: true"* ]]
+  [[ "$output" == *"clusterCIDR: 10.42.0.0/16"* ]]
+  [[ "$output" == *'HCLOUD_NETWORK_ROUTES_ENABLED:'*'value: "false"'* ]]
+  HCLOUD_NETWORK_ID=""
+  run hcloud_ccm_values
+  [[ "$output" == *"enabled: false"* ]]
+}
+
+# kc/helm stubs for stage_hcloud: kc logs calls and piped input, answers the
+# stored token from STORED and the hcloud Secret's owner from OWNER.
+hcloud_env() {
+  KWERFT_SOURCED=1 source "$SCRIPT"
+  HCLOUD_TMP_DIR="$BATS_TEST_TMPDIR/state"; mkdir -p "$HCLOUD_TMP_DIR"
+  VALUES_DIR="$BATS_TEST_TMPDIR/values"
+  K3S_CONFIG_FILE="$BATS_TEST_TMPDIR/k3s.yaml"; : >"$K3S_CONFIG_FILE"
+  LOG_FILE="$BATS_TEST_TMPDIR/install.log"; : >"$LOG_FILE"
+  KC_LOG="$BATS_TEST_TMPDIR/kc.log"; : >"$KC_LOG"
+  HELM_LOG="$BATS_TEST_TMPDIR/helm.log"; : >"$HELM_LOG"
+  PLATFORM=cloud; PRIVATE_IP=10.0.0.2; HCLOUD_NETWORK_ID=1234; HCLOUD_TOKEN_FILE=""; HCLOUD_CCM=""
+  STORED=""; OWNER=""
+  kc() {
+    printf 'kc %s\n' "$*" >>"$KC_LOG"
+    case "$*" in
+      *"get secret kwerft-hcloud-token"*) printf '%s' "$(printf '%s' "$STORED" | base64)" ;;
+      *"get secret hcloud -o jsonpath"*) printf '%s' "$OWNER" ;;
+      *"get secret hcloud"*) [[ -n "$OWNER" ]] || return 1 ;;
+      *"get storageclass"*) return 1 ;;
+      *"get nodes"*) printf '' ;;
+      *"create secret generic hcloud"*) printf 'kind: Secret\n' ;;
+      *"label --local"*) cat ;;
+      *"apply -f -"*) cat >>"$KC_LOG" ;;
+    esac
+    return 0
+  }
+  helmk() { printf 'helm %s\n' "$*" >>"$HELM_LOG"; }
+}
+
+@test "stage_hcloud: dedicated servers and clusters without a token get no Cloud parts" {
+  hcloud_env
+  PLATFORM=dedicated
+  run stage_hcloud
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"not a Hetzner Cloud server"* ]]
+  PLATFORM=cloud
+  run stage_hcloud
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"no Cloud API token"* ]]
+  [ ! -s "$HELM_LOG" ]
+  [ -z "$(ls "$HCLOUD_TMP_DIR")" ]
+}
+
+@test "stage_hcloud: the CSI driver with the token from --config or Settings" {
+  hcloud_env
+  printf ' hcloud-token-from-file \n' >"$BATS_TEST_TMPDIR/t"; HCLOUD_TOKEN_FILE="$BATS_TEST_TMPDIR/t"
+  run stage_hcloud
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"CSI $HCLOUD_CSI_CHART_VERSION"* ]]
+  [[ "$output" != *"cloud-controller-manager"* ]]
+  grep -q "upgrade --install hcloud-csi hcloud/hcloud-csi --version $HCLOUD_CSI_CHART_VERSION" "$HELM_LOG"
+  absent "hcloud-cloud-controller-manager" "$HELM_LOG"
+  grep -q "create secret generic hcloud --from-file=token=" "$KC_LOG"
+  grep -q "from-literal=network=1234" "$KC_LOG"
+  grep -q "label --local -f - app.kubernetes.io/managed-by=kwerft" "$KC_LOG"
+  grep -q "name: hcloud-volumes" "$KC_LOG"
+  # The temporary token file is gone, and the token never reached the log.
+  [ -z "$(ls "$HCLOUD_TMP_DIR")" ]
+  absent "hcloud-token-from-file" "$LOG_FILE"
+
+  # Without --config, the token stored in Settings.
+  : >"$HELM_LOG"; HCLOUD_TOKEN_FILE=""; STORED="stored-token"
+  run stage_hcloud
+  [ "$status" -eq 0 ]
+  grep -q "hcloud-csi" "$HELM_LOG"
+
+  # An operator's own kube-system/hcloud is left alone.
+  : >"$KC_LOG"; OWNER="someone"
+  run stage_hcloud
+  [ "$status" -eq 0 ]
+  absent "create secret generic hcloud" "$KC_LOG"
+}
+
+@test "stage_hcloud: the CCM where the cluster was installed with it" {
+  hcloud_env
+  printf 'disable-cloud-controller: true\n' >"$K3S_CONFIG_FILE"
+  retry() { "${@:3}"; }
+  run stage_hcloud
+  [ "$status" -eq 40 ]
+  [[ "$output" == *"needs the Cloud API token"* ]]
+  STORED="stored-token"
+  run stage_hcloud
+  [ "$status" -eq 0 ]
+  [[ "$output" == "cloud-controller-manager $HCLOUD_CCM_CHART_VERSION · CSI"* ]]
+  grep -q "upgrade --install hcloud-cloud-controller-manager hcloud/hcloud-cloud-controller-manager --version $HCLOUD_CCM_CHART_VERSION" "$HELM_LOG"
+  grep -q "HCLOUD_NETWORK_ROUTES_ENABLED" "$VALUES_DIR/hcloud-ccm.yaml"
+  # No Cloud Network found for the private address: refuse.
+  HCLOUD_NETWORK_ID=""
+  run stage_hcloud
+  [ "$status" -eq 40 ]
+  [[ "$output" == *"Cloud Network"* ]]
+}
+
+@test "stage_hcloud: hcloud.cloudControllerManager on an existing cluster only warns" {
+  hcloud_env
+  HCLOUD_CCM=true; STORED="stored-token"
+  run stage_hcloud
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"only takes effect when a cluster is first installed"* ]]
+  absent "hcloud-cloud-controller-manager" "$HELM_LOG"
+}
+
+@test "stage_network: no --wait while the node waits for the hcloud CCM" {
+  KWERFT_SOURCED=1 source "$SCRIPT"
+  LOG_FILE="$BATS_TEST_TMPDIR/install.log"; : >"$LOG_FILE"
+  HELM_LOG="$BATS_TEST_TMPDIR/helm.log"; : >"$HELM_LOG"
+  K3S_CONFIG_FILE="$BATS_TEST_TMPDIR/k3s.yaml"; printf 'disable-cloud-controller: true\n' >"$K3S_CONFIG_FILE"
+  PUBLIC_IP=203.0.113.10
+  helmk() { printf 'helm %s\n' "$*" >>"$HELM_LOG"; }
+  kc() { if [[ "$*" == "get nodes"* ]]; then printf 'node.cloudprovider.kubernetes.io/uninitialized'; fi; return 0; }
+  run stage_network
+  [ "$status" -eq 0 ]
+  absent "upgrade --install cilium .*--wait" "$HELM_LOG"
+  : >"$HELM_LOG"
+  kc() { return 0; }
+  run stage_network
+  grep -q "upgrade --install cilium .*--wait" "$HELM_LOG"
+}
+
+@test "apply_hcloud_settings: stores the token once and the Load Balancer choice" {
+  settings_env
+  HCLOUD_TOKEN_SUM_FILE="$BATS_TEST_TMPDIR/hcloud.sha256"; HCLOUD_TMP_DIR="$BATS_TEST_TMPDIR"
+  printf 'hc-token\n' >"$BATS_TEST_TMPDIR/hc"; HCLOUD_TOKEN_FILE="$BATS_TEST_TMPDIR/hc"; HCLOUD_LB=""
+  apply_hcloud_settings
+  grep -q "create secret generic kwerft-hcloud-token --from-file=token=" "$KC_LOG"
+  [ "$(grep -c 'kwerft.dev/hcloud-token-updated-at' "$KC_LOG")" -eq 1 ]
+  absent "hetznerCloud" "$KC_LOG"
+  absent "hc-token" "$LOG_FILE"
+  : >"$KC_LOG"
+  HCLOUD_LB=true
+  apply_hcloud_settings
+  absent 'kwerft.dev/hcloud-token-updated-at' "$KC_LOG"
+  grep -q '{"spec":{"hetznerCloud":{"loadBalancer":{"enabled":true}}}}' "$KC_LOG"
+}
+
+@test "hcloud chart pins are versions, and the chart takes the hcloud flags" {
+  KWERFT_SOURCED=1 source "$SCRIPT"
+  [[ "$HCLOUD_CCM_CHART_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
+  [[ "$HCLOUD_CSI_CHART_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
+  grep -q -- '--hcloud-ccm=' "$BATS_TEST_DIRNAME/../../charts/kwerft/templates/deployment.yaml"
+  grep -q -- '--hcloud-proxy-network=' "$BATS_TEST_DIRNAME/../../charts/kwerft/templates/deployment.yaml"
 }

@@ -77,6 +77,56 @@ type ConsoleSettingsSpec struct {
 	// but nobody reads back.
 	// +optional
 	SSO *SSOSettings `json:"sso,omitempty"`
+
+	// HetznerCloud is what Kwerft does with the Hetzner Cloud API: the
+	// Cloud Firewall and a Load Balancer in front of the ingress. Its API
+	// token lives in the Secret kwerft-hcloud-token (key "token") in
+	// kwerft-system, which owners and admins may write through the console
+	// but nobody reads back.
+	// +optional
+	HetznerCloud *HetznerCloudSettings `json:"hetznerCloud,omitempty"`
+}
+
+// CloudFirewallMode says whether Kwerft keeps a Hetzner Cloud Firewall.
+// +kubebuilder:validation:Enum=sync;off
+type CloudFirewallMode string
+
+const (
+	// CloudFirewallSync (the default) keeps one Cloud Firewall per cluster
+	// with the public part of the FirewallRules, applied to the cluster's
+	// Cloud servers.
+	CloudFirewallSync CloudFirewallMode = "sync"
+	// CloudFirewallOff removes Kwerft's Cloud Firewall from the servers and
+	// deletes it. The host firewall stays.
+	CloudFirewallOff CloudFirewallMode = "off"
+)
+
+// HetznerCloudSettings are the Cloud API features owners and admins turn on.
+type HetznerCloudSettings struct {
+	// Firewall: sync (default) or off.
+	// +optional
+	Firewall CloudFirewallMode `json:"firewall,omitempty"`
+
+	// LoadBalancer puts a Hetzner Load Balancer in front of the ingress.
+	// +optional
+	LoadBalancer *LoadBalancerSettings `json:"loadBalancer,omitempty"`
+}
+
+// LoadBalancerSettings: a Hetzner Load Balancer that forwards TCP 80 and 443
+// (with the PROXY protocol, so the ingress sees client addresses) to the
+// cluster's Cloud servers over the private network. While it serves, the
+// console's and the apps' DNS records point at it instead of the nodes.
+type LoadBalancerSettings struct {
+	Enabled bool `json:"enabled"`
+	// Type of the Load Balancer, e.g. lb11 (the default).
+	// +kubebuilder:validation:Pattern=`^[a-z0-9][a-z0-9-]{0,31}$`
+	// +optional
+	Type string `json:"type,omitempty"`
+	// Location, e.g. fsn1; empty: the location of the cluster's first Cloud
+	// server.
+	// +kubebuilder:validation:Pattern=`^[a-z0-9][a-z0-9-]{0,31}$`
+	// +optional
+	Location string `json:"location,omitempty"`
 }
 
 // SSOSettings configures "Sign in with …" on the console's sign-in page.
@@ -181,8 +231,101 @@ type ConsoleSettingsStatus struct {
 	// +optional
 	DNS *DNSStatus `json:"dns,omitempty"`
 
+	// HetznerCloud is what the Hetzner Cloud reconciler found and did (the
+	// Cloud Firewall, the Load Balancer). A field of its own, like DNS.
+	// +optional
+	HetznerCloud *HetznerCloudStatus `json:"hetznerCloud,omitempty"`
+
 	// +optional
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
+}
+
+// HetznerCloudStatus is the outcome of the last sync with the Cloud API.
+type HetznerCloudStatus struct {
+	// Servers are this cluster's nodes found in the token's project.
+	// +optional
+	Servers []CloudServerStatus `json:"servers,omitempty"`
+	// Firewall is the Cloud Firewall sync.
+	// +optional
+	Firewall *CloudFirewallStatus `json:"firewall,omitempty"`
+	// LoadBalancer is the Load Balancer in front of the ingress.
+	// +optional
+	LoadBalancer *LoadBalancerStatus `json:"loadBalancer,omitempty"`
+	// Message explains a problem that kept the whole sync from running (no
+	// token, token rejected); empty when it ran.
+	// +optional
+	Message string `json:"message,omitempty"`
+	// SyncedAt is when the Cloud API was last read.
+	// +optional
+	SyncedAt *metav1.Time `json:"syncedAt,omitempty"`
+}
+
+// CloudServerStatus is one node that is a Hetzner Cloud server.
+type CloudServerStatus struct {
+	Node string `json:"node"`
+	ID   int64  `json:"id"`
+	Name string `json:"name"`
+	// +optional
+	Location string `json:"location,omitempty"`
+	// Labelled: the server carries kwerft.dev/cluster=<this cluster> (Kwerft
+	// created it); others (the installer's first server) are named one by
+	// one in the firewall and the Load Balancer.
+	// +optional
+	Labelled bool `json:"labelled,omitempty"`
+}
+
+// CloudFirewallStatus reports the cluster's Cloud Firewall.
+type CloudFirewallStatus struct {
+	// State: InSync, Applying, Off, Error.
+	State string `json:"state"`
+	// +optional
+	ID int64 `json:"id,omitempty"`
+	// +optional
+	Name string `json:"name,omitempty"`
+	// Rules in the Cloud Firewall.
+	// +optional
+	Rules int32 `json:"rules,omitempty"`
+	// Servers it is applied to.
+	// +optional
+	Servers int32 `json:"servers,omitempty"`
+	// Revision of the FirewallRules it carries (the confirmed one).
+	// +optional
+	Revision string `json:"revision,omitempty"`
+	// +optional
+	Message string `json:"message,omitempty"`
+}
+
+// LoadBalancerStatus reports the Load Balancer in front of the ingress.
+type LoadBalancerStatus struct {
+	// State: Creating, Waiting (no healthy target yet), Active, Draining
+	// (turned off; deleted once DNS moved back), Error.
+	State string `json:"state"`
+	// Active: DNS points at the Load Balancer (status.publicAddresses).
+	// +optional
+	Active bool `json:"active,omitempty"`
+	// +optional
+	ID int64 `json:"id,omitempty"`
+	// +optional
+	Name string `json:"name,omitempty"`
+	// +optional
+	Type string `json:"type,omitempty"`
+	// +optional
+	Location string `json:"location,omitempty"`
+	// +optional
+	IPv4 string `json:"ipv4,omitempty"`
+	// +optional
+	IPv6 string `json:"ipv6,omitempty"`
+	// Targets the Load Balancer forwards to, and how many of them pass the
+	// health checks on 443.
+	// +optional
+	Targets int32 `json:"targets,omitempty"`
+	// +optional
+	HealthyTargets int32 `json:"healthyTargets,omitempty"`
+	// DrainingSince is when it was turned off; it is deleted DNS TTLs later.
+	// +optional
+	DrainingSince *metav1.Time `json:"drainingSince,omitempty"`
+	// +optional
+	Message string `json:"message,omitempty"`
 }
 
 // DNSRecordState says where a managed hostname's records stand.

@@ -30,6 +30,10 @@ func ForKind(kind schema.GroupVersionKind) interface{} {
 		return &apiv1alpha1.AppVolumeApplyConfiguration{}
 	case v1alpha1.SchemeGroupVersion.WithKind("CertificateState"):
 		return &apiv1alpha1.CertificateStateApplyConfiguration{}
+	case v1alpha1.SchemeGroupVersion.WithKind("CloudFirewallStatus"):
+		return &apiv1alpha1.CloudFirewallStatusApplyConfiguration{}
+	case v1alpha1.SchemeGroupVersion.WithKind("CloudServerStatus"):
+		return &apiv1alpha1.CloudServerStatusApplyConfiguration{}
 	case v1alpha1.SchemeGroupVersion.WithKind("Cluster"):
 		return &apiv1alpha1.ClusterApplyConfiguration{}
 	case v1alpha1.SchemeGroupVersion.WithKind("ClusterSpec"):
@@ -74,10 +78,18 @@ func ForKind(kind schema.GroupVersionKind) interface{} {
 		return &apiv1alpha1.GitSourceApplyConfiguration{}
 	case v1alpha1.SchemeGroupVersion.WithKind("GitWebhookStatus"):
 		return &apiv1alpha1.GitWebhookStatusApplyConfiguration{}
+	case v1alpha1.SchemeGroupVersion.WithKind("HetznerCloudSettings"):
+		return &apiv1alpha1.HetznerCloudSettingsApplyConfiguration{}
+	case v1alpha1.SchemeGroupVersion.WithKind("HetznerCloudStatus"):
+		return &apiv1alpha1.HetznerCloudStatusApplyConfiguration{}
 	case v1alpha1.SchemeGroupVersion.WithKind("HetznerClusterSpec"):
 		return &apiv1alpha1.HetznerClusterSpecApplyConfiguration{}
 	case v1alpha1.SchemeGroupVersion.WithKind("ImageSource"):
 		return &apiv1alpha1.ImageSourceApplyConfiguration{}
+	case v1alpha1.SchemeGroupVersion.WithKind("LoadBalancerSettings"):
+		return &apiv1alpha1.LoadBalancerSettingsApplyConfiguration{}
+	case v1alpha1.SchemeGroupVersion.WithKind("LoadBalancerStatus"):
+		return &apiv1alpha1.LoadBalancerStatusApplyConfiguration{}
 	case v1alpha1.SchemeGroupVersion.WithKind("NodePool"):
 		return &apiv1alpha1.NodePoolApplyConfiguration{}
 	case v1alpha1.SchemeGroupVersion.WithKind("NodePoolSpec"):

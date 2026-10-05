@@ -47,7 +47,66 @@ export type Settings = {
   publicAddresses: string[];
   certificates: CertificateState[];
   ready?: { status: boolean; reason: string; message: string };
+  hcloud: HCloud;
 };
+
+// ---- Hetzner Cloud API (api_hcloud.go) -------------------------------------
+
+export type CloudFirewallStatus = {
+  /** InSync, Applying, Off, Error. */
+  state: string;
+  id?: number;
+  name?: string;
+  rules?: number;
+  servers?: number;
+  revision?: string;
+  message?: string;
+};
+
+export type LoadBalancerStatus = {
+  /** Creating, Waiting, Active, Draining, Error. */
+  state: string;
+  /** DNS points at the Load Balancer. */
+  active?: boolean;
+  id?: number;
+  name?: string;
+  type?: string;
+  location?: string;
+  ipv4?: string;
+  ipv6?: string;
+  targets?: number;
+  healthyTargets?: number;
+  drainingSince?: string;
+  message?: string;
+};
+
+export type CloudServer = { node: string; id: number; name: string; location?: string; labelled?: boolean };
+
+export type HCloud = {
+  tokenSet: boolean;
+  platform: "cloud" | "dedicated" | string;
+  /** The hcloud cloud-controller-manager runs (chosen at install time). */
+  ccm: boolean;
+  /** The hcloud-volumes StorageClass exists (CSI driver). */
+  volumes: boolean;
+  /** The ingress accepts the PROXY protocol from the private network. */
+  loadBalancerReady: boolean;
+  firewall: "sync" | "off";
+  loadBalancer: { enabled: boolean; type?: string; location?: string };
+  status?: {
+    servers?: CloudServer[];
+    firewall?: CloudFirewallStatus;
+    loadBalancer?: LoadBalancerStatus;
+    message?: string;
+    syncedAt?: string;
+  };
+};
+
+export type HCloudCheck = { servers: number; nodes: { node: string; server: string; location: string }[]; locations: string[] };
+
+export type HCloudTokenSaved = { settings: Settings; check: HCloudCheck; warning?: string };
+
+export type VolumeClassInfo = { id: "local-nvme" | "hcloud-volume"; available: boolean; reason?: string };
 
 /** managed: no record yet, but Kwerft creates it. */
 export type DNSCheck = { hostname: string; addresses: string[]; expected: string[]; ok: boolean; managed?: boolean; message: string };
@@ -65,6 +124,11 @@ export const settingsApi = {
     request<Settings>("/settings/console-domain", { method: "PUT", json: { hostname, confirm } }),
   saveApps: (s: { appsDomain: string; tls: "http01" | "dns01"; manageRecords: boolean; token?: string }) =>
     request<AppsSaved>("/settings/apps", { method: "PUT", json: { ...s, provider: s.tls === "dns01" || s.manageRecords ? "hetzner" : "" } }),
+  saveHCloudToken: (token: string) => request<HCloudTokenSaved>("/settings/hcloud-token", { method: "PUT", json: { token } }),
+  removeHCloudToken: () => request<{ settings: Settings }>("/settings/hcloud-token", { method: "DELETE" }),
+  saveHCloud: (s: { firewall: "sync" | "off"; loadBalancer: { enabled: boolean; type?: string; location?: string } }) =>
+    request<Settings>("/settings/hcloud", { method: "PUT", json: s }),
+  volumeClasses: () => request<VolumeClassInfo[]>("/volume-classes"),
 };
 
 export const isTemporaryHost = (host: string) => host.endsWith(".sslip.io");

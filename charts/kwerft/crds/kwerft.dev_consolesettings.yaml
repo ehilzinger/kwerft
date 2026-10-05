@@ -101,6 +101,40 @@ spec:
                 required:
                 - provider
                 type: object
+              hetznerCloud:
+                description: |-
+                  HetznerCloud is what Kwerft does with the Hetzner Cloud API: the
+                  Cloud Firewall and a Load Balancer in front of the ingress. Its API
+                  token lives in the Secret kwerft-hcloud-token (key "token") in
+                  kwerft-system, which owners and admins may write through the console
+                  but nobody reads back.
+                properties:
+                  firewall:
+                    description: 'Firewall: sync (default) or off.'
+                    enum:
+                    - sync
+                    - "off"
+                    type: string
+                  loadBalancer:
+                    description: LoadBalancer puts a Hetzner Load Balancer in front
+                      of the ingress.
+                    properties:
+                      enabled:
+                        type: boolean
+                      location:
+                        description: |-
+                          Location, e.g. fsn1; empty: the location of the cluster's first Cloud
+                          server.
+                        pattern: ^[a-z0-9][a-z0-9-]{0,31}$
+                        type: string
+                      type:
+                        description: Type of the Load Balancer, e.g. lb11 (the default).
+                        pattern: ^[a-z0-9][a-z0-9-]{0,31}$
+                        type: string
+                    required:
+                    - enabled
+                    type: object
+                type: object
               sso:
                 description: |-
                   SSO is single sign-on through an OpenID Connect provider. The client
@@ -337,6 +371,121 @@ spec:
                     items:
                       type: string
                     type: array
+                type: object
+              hetznerCloud:
+                description: |-
+                  HetznerCloud is what the Hetzner Cloud reconciler found and did (the
+                  Cloud Firewall, the Load Balancer). A field of its own, like DNS.
+                properties:
+                  firewall:
+                    description: Firewall is the Cloud Firewall sync.
+                    properties:
+                      id:
+                        format: int64
+                        type: integer
+                      message:
+                        type: string
+                      name:
+                        type: string
+                      revision:
+                        description: Revision of the FirewallRules it carries (the
+                          confirmed one).
+                        type: string
+                      rules:
+                        description: Rules in the Cloud Firewall.
+                        format: int32
+                        type: integer
+                      servers:
+                        description: Servers it is applied to.
+                        format: int32
+                        type: integer
+                      state:
+                        description: 'State: InSync, Applying, Off, Error.'
+                        type: string
+                    required:
+                    - state
+                    type: object
+                  loadBalancer:
+                    description: LoadBalancer is the Load Balancer in front of the
+                      ingress.
+                    properties:
+                      active:
+                        description: 'Active: DNS points at the Load Balancer (status.publicAddresses).'
+                        type: boolean
+                      drainingSince:
+                        description: DrainingSince is when it was turned off; it is
+                          deleted DNS TTLs later.
+                        format: date-time
+                        type: string
+                      healthyTargets:
+                        format: int32
+                        type: integer
+                      id:
+                        format: int64
+                        type: integer
+                      ipv4:
+                        type: string
+                      ipv6:
+                        type: string
+                      location:
+                        type: string
+                      message:
+                        type: string
+                      name:
+                        type: string
+                      state:
+                        description: |-
+                          State: Creating, Waiting (no healthy target yet), Active, Draining
+                          (turned off; deleted once DNS moved back), Error.
+                        type: string
+                      targets:
+                        description: |-
+                          Targets the Load Balancer forwards to, and how many of them pass the
+                          health checks on 443.
+                        format: int32
+                        type: integer
+                      type:
+                        type: string
+                    required:
+                    - state
+                    type: object
+                  message:
+                    description: |-
+                      Message explains a problem that kept the whole sync from running (no
+                      token, token rejected); empty when it ran.
+                    type: string
+                  servers:
+                    description: Servers are this cluster's nodes found in the token's
+                      project.
+                    items:
+                      description: CloudServerStatus is one node that is a Hetzner
+                        Cloud server.
+                      properties:
+                        id:
+                          format: int64
+                          type: integer
+                        labelled:
+                          description: |-
+                            Labelled: the server carries kwerft.dev/cluster=<this cluster> (Kwerft
+                            created it); others (the installer's first server) are named one by
+                            one in the firewall and the Load Balancer.
+                          type: boolean
+                        location:
+                          type: string
+                        name:
+                          type: string
+                        node:
+                          type: string
+                      required:
+                      - id
+                      - name
+                      - node
+                      type: object
+                    type: array
+                  syncedAt:
+                    description: SyncedAt is when the Cloud API was last read.
+                    format: date-time
+                    type: string
                 type: object
               observedGeneration:
                 format: int64

@@ -36,6 +36,13 @@ TRAEFIK_CHART_VERSION="41.6.1"
 VM_STACK_CHART_VERSION="0.95.0"
 VLOGS_CHART_VERSION="0.13.10"
 HETZNER_WEBHOOK_CHART_VERSION="0.9.0"   # cert-manager DNS-01 for Hetzner DNS (Cloud API), 2026-08-19
+# Hetzner Cloud integrations (charts.hetzner.cloud), latest as of 2026-10-05.
+HCLOUD_CCM_CHART_VERSION="1.38.0"       # hcloud cloud-controller-manager, only with hcloud.cloudControllerManager
+HCLOUD_CSI_CHART_VERSION="2.23.0"       # hcloud CSI driver: storage class hcloud-volumes
+# The Cloud locations hcloud-volumes may provision in (2026-10-05). Its
+# allowedTopologies keep Cloud Volumes off nodes without the CSI driver
+# (dedicated servers); a new Hetzner location needs adding here.
+HCLOUD_LOCATIONS="fsn1 nbg1 hel1 ash hil sin"
 # Builds from Git, latest stable as of 2026-10-04. The chart's values.yaml has
 # the same defaults (install/test/install.bats checks that they agree).
 ZOT_VERSION="v2.1.21"                   # in-cluster registry, ghcr.io/project-zot/zot-minimal
@@ -68,6 +75,9 @@ BUILD_APPARMOR_FILE="/etc/apparmor.d/kwerft-buildkit"  # likewise
 DOMAIN_FILE="$STATE_DIR/domain"           # not readonly so tests can point it elsewhere
 DNS_TOKEN_SUM_FILE="$STATE_DIR/dns-token.sha256"  # likewise; tells a changed DNS token from the same one
 FIREWALL_STATE_DIR="$STATE_DIR/firewall"  # the node agent's state (internal/firewall); likewise
+HCLOUD_TOKEN_SUM_FILE="$STATE_DIR/hcloud-token.sha256"  # likewise; tells a changed Cloud API token from the same one
+HCLOUD_TMP_DIR="$STATE_DIR"               # likewise; short-lived copies of the Cloud API token (0700)
+K3S_CONFIG_FILE="/etc/rancher/k3s/config.yaml"  # likewise
 
 # Options (flags override KWERFT_* environment variables).
 DOMAIN="${KWERFT_DOMAIN:-}"
@@ -88,6 +98,9 @@ APPS_DOMAIN=""          # --config appsDomain
 DNS_SOLVER=""           # --config dns.solver (hetzner)
 DNS_TOKEN_FILE=""       # --config dns.tokenFile
 DNS_RECORDS="true"      # --config dns.records: Kwerft keeps the console's and *.<appsDomain>'s records
+HCLOUD_TOKEN_FILE=""    # --config hcloud.tokenFile: Hetzner Cloud API token (Cloud Firewall, Load Balancer, CSI, CCM)
+HCLOUD_CCM=""           # --config hcloud.cloudControllerManager: true only takes effect on a first install
+HCLOUD_LB=""            # --config hcloud.loadBalancer: true|false, a Load Balancer in front of the ingress
 MODE="install"
 DRY_RUN=0
 ASSUME_YES=0
@@ -98,6 +111,8 @@ LITE=0
 PUBLIC_IP=""
 PRIVATE_IP=""
 PRIVATE_CIDR=""
+HCLOUD_NETWORK_ID=""    # the Cloud Network of PRIVATE_IP (metadata service), for the CCM
+HCLOUD_NETWORK_RANGE="" # its IP range: Traefik accepts the PROXY protocol from it (Load Balancer)
 CURRENT_STAGE="startup"
 START_TS=$(date +%s)
 
@@ -221,6 +236,9 @@ parse_args() {
     DNS_TOKEN_FILE=$(config_get_in dns tokenFile)
     DNS_RECORDS=$(lower "$(config_get_in dns records)")
     DNS_RECORDS=${DNS_RECORDS:-true}
+    HCLOUD_TOKEN_FILE=$(config_get_in hcloud tokenFile)
+    HCLOUD_CCM=$(lower "$(config_get_in hcloud cloudControllerManager)")
+    HCLOUD_LB=$(lower "$(config_get_in hcloud loadBalancer)")
   fi
   # A hostname given now is explicit: it replaces what Settings chose. Without
   # one, resolve_domain keeps the cluster's setting.
@@ -244,6 +262,20 @@ parse_args() {
     true|false) ;;
     *) die $EXIT_USAGE "dns.records in $CONFIG_FILE must be true or false, got '$DNS_RECORDS'" ;;
   esac
+  case "$HCLOUD_CCM" in
+    ""|true|false) ;;
+    *) die $EXIT_USAGE "hcloud.cloudControllerManager in $CONFIG_FILE must be true or false, got '$HCLOUD_CCM'" ;;
+  esac
+  case "$HCLOUD_LB" in
+    ""|true|false) ;;
+    *) die $EXIT_USAGE "hcloud.loadBalancer in $CONFIG_FILE must be true or false, got '$HCLOUD_LB'" ;;
+  esac
+  if [[ -n "$HCLOUD_TOKEN_FILE" && ! -r "$HCLOUD_TOKEN_FILE" ]]; then
+    die $EXIT_USAGE "hcloud.tokenFile not readable: '$HCLOUD_TOKEN_FILE'"
+  fi
+  if [[ "$HCLOUD_CCM" == "true" && -z "$HCLOUD_TOKEN_FILE" ]]; then
+    die $EXIT_USAGE "hcloud.cloudControllerManager in $CONFIG_FILE needs hcloud.tokenFile: the cloud-controller-manager works with the Cloud API"
+  fi
   return 0
 }
 
@@ -366,6 +398,38 @@ detect_addresses() {
   PRIVATE_IP=${PRIVATE_CIDR%/*}
 }
 
+# detect_hcloud_network finds the Cloud Network the private address is in,
+# from the metadata service: its ID (the cloud-controller-manager's
+# HCLOUD_NETWORK) and its whole range (where a Load Balancer connects from).
+detect_hcloud_network() {
+  [[ "$PLATFORM" == "cloud" && -n "$PRIVATE_IP" ]] || return 0
+  local meta range id
+  meta=$(curl -fsS --max-time 3 http://169.254.169.254/hetzner/v1/metadata/private-networks 2>/dev/null) || return 0
+  id=$(hcloud_network_field "$meta" "$PRIVATE_IP" network_id)
+  range=$(hcloud_network_field "$meta" "$PRIVATE_IP" network)
+  [[ "$id" =~ ^[0-9]+$ ]] && HCLOUD_NETWORK_ID=$id
+  [[ "$range" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+/[0-9]+$ ]] && HCLOUD_NETWORK_RANGE=$(network_of "$range")
+  return 0
+}
+
+# hcloud_network_field <metadata yaml> <ip> <key> prints key of the entry of
+# the metadata's private-networks list whose ip is <ip>:
+#   - ip: 10.0.0.2
+#     network_id: 1234
+#     network: 10.0.0.0/16
+hcloud_network_field() {
+  awk -v want="$2" -v key="$3" '
+    function flush() { if (f["ip"] == want && (key in f)) { print f[key]; found = 1 } delete f }
+    /^-/ { if (!found) flush(); sub(/^-[[:space:]]*/, "") }
+    !found && match($0, /^[[:space:]]*[a-z_]+:/) {
+      k = substr($0, RSTART, RLENGTH - 1); gsub(/[[:space:]]/, "", k)
+      v = substr($0, RSTART + RLENGTH); gsub(/^[[:space:]]+|[[:space:]]+$/, "", v)
+      f[k] = v
+    }
+    END { if (!found) flush() }
+  ' <<<"$1"
+}
+
 # Picks the console hostname: --domain (or KWERFT_DOMAIN, or the config file)
 # first; then the cluster's console setting, which the Settings page changes,
 # so re-running without flags never undoes a change made there; then the file
@@ -431,6 +495,9 @@ stage_preflight() {
   curl -fsS --max-time 10 -o /dev/null https://get.k3s.io || die $EXIT_NETWORK "No outbound HTTPS to get.k3s.io"
   [[ -n "$PUBLIC_IP" ]] || die $EXIT_NETWORK "Could not determine the public IPv4 address"
   if [[ "$MODE" == "install" ]]; then check_release; fi
+  if [[ "$HCLOUD_CCM" == "true" && "$PLATFORM" != "cloud" ]]; then
+    die $EXIT_PREFLIGHT "hcloud.cloudControllerManager needs a Hetzner Cloud server; this is $PLATFORM."
+  fi
 
   local priv="no private network"
   [[ -n "$PRIVATE_IP" ]] && priv="private $PRIVATE_IP on $PRIVATE_IFACE"
@@ -554,8 +621,8 @@ network_of() {
 # ---------------------------------------------------------------------------
 write_k3s_config() {
   local node_ip=${PRIVATE_IP:-$PUBLIC_IP}
-  mkdir -p /etc/rancher/k3s
-  cat >/etc/rancher/k3s/config.yaml <<EOF
+  mkdir -p "$(dirname "$K3S_CONFIG_FILE")"
+  cat >"$K3S_CONFIG_FILE" <<EOF
 # Managed by Kwerft installer.
 cluster-init: true
 node-ip: $node_ip
@@ -578,7 +645,34 @@ node-label:
   - kwerft.dev/platform=$PLATFORM
 kubelet-arg:
   - max-pods=200
+$(k3s_cloud_provider_config)
 EOF
+}
+
+# With the hcloud cloud-controller-manager (hcloud.cloudControllerManager,
+# first install only) k3s's own cloud controller is off and every kubelet
+# registers with --cloud-provider=external: nodes wait (tainted) until the
+# CCM gives them their hcloud://<id> provider ID, addresses and zone. k3s
+# itself sets the kubelet flag only while its own controller runs, so it is
+# explicit here and in joined nodes' configs. Prints the lines to append
+# to kubelet-arg, nothing otherwise.
+k3s_cloud_provider_config() {
+  [[ "$HCLOUD_CCM" == "true" ]] || return 0
+  printf '  - cloud-provider=external\ndisable-cloud-controller: true\n'
+}
+
+# ccm_active: this node's k3s runs without its own cloud controller, i.e.
+# with the hcloud CCM. Decided once, at the first install: switching later
+# would need every node to register again (the provider ID cannot change).
+ccm_active() {
+  grep -qx 'disable-cloud-controller: true' "$K3S_CONFIG_FILE" 2>/dev/null
+}
+
+# nodes_initialized: no node waits for a cloud-controller-manager any more.
+nodes_initialized() {
+  local tainted
+  tainted=$(kc get nodes -o jsonpath='{range .items[*]}{.spec.taints[?(@.key=="node.cloudprovider.kubernetes.io/uninitialized")].key}{end}' 2>/dev/null) || return 1
+  [[ -z "$tainted" ]]
 }
 
 stage_kubernetes() {
@@ -738,14 +832,18 @@ stage_helm() {
 # Stage: networking (Cilium)
 # ---------------------------------------------------------------------------
 stage_network() {
-  local api_ip=${PRIVATE_IP:-$PUBLIC_IP} hubble
+  local api_ip=${PRIVATE_IP:-$PUBLIC_IP} hubble wait_args=(--wait)
   hubble=$(hubble_enabled)
+  # On a first install with the hcloud CCM the node keeps its
+  # "uninitialized" taint until the CCM (stage Hetzner Cloud, next) runs, and
+  # Hubble's relay cannot be scheduled before: do not wait for it here.
+  if ccm_active && ! nodes_initialized; then wait_args=(); fi
   helmk repo add cilium https://helm.cilium.io --force-update >>"$LOG_FILE" 2>&1
   # The console reads flows from the relay over plain gRPC (Cilium's default
   # for the relay's own server, pinned here; relay ↔ agents stay mTLS). The
   # Kwerft chart admits only the console and the nodes to the relay.
   helmk upgrade --install cilium cilium/cilium --version "$CILIUM_VERSION" \
-    --namespace kube-system --wait --timeout 10m \
+    --namespace kube-system ${wait_args[@]+"${wait_args[@]}"} --timeout 10m \
     --set kubeProxyReplacement=true \
     --set k8sServiceHost="$api_ip" --set k8sServicePort=6443 \
     --set ipam.mode=kubernetes \
@@ -759,6 +857,207 @@ stage_network() {
   retry 90 2 kc wait --for=condition=Ready nodes --all --timeout=5s >/dev/null 2>&1 \
     || die $EXIT_K8S "Node did not become Ready after installing Cilium"
   echo "Cilium $CILIUM_VERSION · kube-proxy replacement · WireGuard$([[ $hubble == true ]] && echo ' · Hubble')"
+}
+
+# ---------------------------------------------------------------------------
+# Stage: Hetzner Cloud (Cloud servers only)
+# The CSI driver (storage class hcloud-volumes, not the default: local-path
+# stays it) whenever a Cloud API token is known — from --config
+# hcloud.tokenFile or stored in Settings › Hetzner Cloud API — and the
+# cloud-controller-manager when the cluster was installed with it. Both read
+# the token from kube-system/hcloud, which this stage writes and labels as
+# Kwerft's, so the console can hand them a token changed in Settings.
+# ---------------------------------------------------------------------------
+stage_hcloud() {
+  if [[ "$PLATFORM" != "cloud" ]]; then
+    echo "not a Hetzner Cloud server: local volumes only"
+    return 0
+  fi
+  if [[ "$HCLOUD_CCM" == "true" ]] && ! ccm_active; then
+    warn "hcloud.cloudControllerManager only takes effect when a cluster is first installed (nodes would have to register again); this cluster keeps k3s's own cloud controller."
+  fi
+  local token
+  token=$(mktemp "$HCLOUD_TMP_DIR/hcloud-token.XXXXXX")
+  if [[ -n "$HCLOUD_TOKEN_FILE" ]]; then
+    tr -d '[:space:]' <"$HCLOUD_TOKEN_FILE" >"$token"
+  else
+    stored_hcloud_token >"$token"
+  fi
+  if [[ ! -s "$token" ]]; then
+    rm -f "$token"
+    ccm_active && die $EXIT_PLATFORM "The hcloud cloud-controller-manager needs the Cloud API token: pass --config with hcloud.tokenFile."
+    echo "no Cloud API token: Cloud Volumes off (store one under Settings › Hetzner Cloud API, then re-run)"
+    return 0
+  fi
+  if ccm_active && [[ -n "$PRIVATE_IP" && -z "$HCLOUD_NETWORK_ID" ]]; then
+    rm -f "$token"
+    die $EXIT_PLATFORM "Could not find the Cloud Network of $PRIVATE_IP in the metadata service; the cloud-controller-manager needs it."
+  fi
+  write_hcloud_secret "$token"
+  rm -f "$token"
+  helmk repo add hcloud https://charts.hetzner.cloud --force-update >>"$LOG_FILE" 2>&1
+  local summary=""
+  if ccm_active; then
+    install_hcloud_ccm
+    summary="cloud-controller-manager $HCLOUD_CCM_CHART_VERSION · "
+  fi
+  install_hcloud_csi
+  echo "${summary}CSI $HCLOUD_CSI_CHART_VERSION · storage class hcloud-volumes"
+}
+
+# stored_hcloud_token prints the token saved in Settings, if any.
+stored_hcloud_token() {
+  kc -n kwerft-system get secret kwerft-hcloud-token -o jsonpath='{.data.token}' 2>/dev/null | base64 -d 2>/dev/null | tr -d '[:space:]' || true
+}
+
+# write_hcloud_secret <token file> keeps kube-system/hcloud (token, and the
+# Cloud Network for the CCM) — unless an operator's own Secret of that name
+# is there, which is left alone.
+write_hcloud_secret() {
+  local owner
+  if kc -n kube-system get secret hcloud >/dev/null 2>&1; then
+    owner=$(kc -n kube-system get secret hcloud -o jsonpath='{.metadata.labels.app\.kubernetes\.io/managed-by}' 2>/dev/null || true)
+    if [[ "$owner" != "kwerft" ]]; then
+      warn "kube-system/hcloud was not created by Kwerft; the CSI driver and CCM use it as it is."
+      return 0
+    fi
+  fi
+  local args=(--from-file=token="$1")
+  [[ -n "$HCLOUD_NETWORK_ID" ]] && args+=(--from-literal=network="$HCLOUD_NETWORK_ID")
+  kc -n kube-system create secret generic hcloud "${args[@]}" --dry-run=client -o yaml \
+    | kc label --local -f - app.kubernetes.io/managed-by=kwerft -o yaml \
+    | kc apply -f - >>"$LOG_FILE" 2>&1 || die $EXIT_PLATFORM "Could not store the Cloud API token for the CSI driver"
+}
+
+# The CCM's values: with a Cloud Network, nodes get their private address as
+# InternalIP (it must match the kubelet's --node-ip, the private one) and
+# Load Balancers may target it; its routes controller stays off — Cilium
+# tunnels pod traffic and needs no routes in the Cloud Network.
+hcloud_ccm_values() {
+  local networking=false
+  [[ -n "$HCLOUD_NETWORK_ID" ]] && networking=true
+  cat <<EOF
+networking:
+  enabled: $networking
+  clusterCIDR: $POD_CIDR
+env:
+  HCLOUD_NETWORK_ROUTES_ENABLED:
+    value: "false"
+EOF
+}
+
+install_hcloud_ccm() {
+  mkdir -p "$VALUES_DIR"
+  hcloud_ccm_values >"$VALUES_DIR/hcloud-ccm.yaml"
+  helmk upgrade --install hcloud-cloud-controller-manager hcloud/hcloud-cloud-controller-manager --version "$HCLOUD_CCM_CHART_VERSION" \
+    --namespace kube-system --wait --timeout 10m -f "$VALUES_DIR/hcloud-ccm.yaml" \
+    >>"$LOG_FILE" 2>&1 || die $EXIT_PLATFORM "hcloud cloud-controller-manager installation failed"
+  retry 60 5 nodes_initialized \
+    || die $EXIT_K8S "The hcloud cloud-controller-manager did not initialize the nodes (kubectl -n kube-system logs deploy/hcloud-cloud-controller-manager)"
+}
+
+# The CSI driver's values: no StorageClass from the chart (hcloud_storage_class
+# below is Kwerft's), and its pods only where the Cloud metadata service
+# answers: not on dedicated servers (label kwerft.dev/platform).
+hcloud_csi_values() {
+  cat <<'EOF'
+storageClasses: []
+controller:
+  affinity:
+    nodeAffinity:
+      requiredDuringSchedulingIgnoredDuringExecution:
+        nodeSelectorTerms:
+          - matchExpressions:
+              - key: kwerft.dev/platform
+                operator: NotIn
+                values: [dedicated]
+node:
+  affinity:
+    nodeAffinity:
+      requiredDuringSchedulingIgnoredDuringExecution:
+        nodeSelectorTerms:
+          - matchExpressions:
+              - key: kwerft.dev/platform
+                operator: NotIn
+                values: [dedicated]
+EOF
+}
+
+# hcloud_storage_class: Cloud Volumes for Volumes of class hcloud-volume. Not
+# the default class. allowedTopologies names the CSI driver's own topology
+# key, which only nodes running its node plugin carry, so a pod with a Cloud
+# Volume is never placed on a dedicated server in a mixed cluster.
+hcloud_storage_class() {
+  local locations list=()
+  read -r -a list <<<"$HCLOUD_LOCATIONS"
+  locations=$(printf '%s, ' "${list[@]}")
+  cat <<EOF
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: hcloud-volumes
+  labels:
+    app.kubernetes.io/managed-by: kwerft
+  annotations:
+    storageclass.kubernetes.io/is-default-class: "false"
+provisioner: csi.hetzner.cloud
+volumeBindingMode: WaitForFirstConsumer
+allowVolumeExpansion: true
+reclaimPolicy: Delete
+allowedTopologies:
+  - matchLabelExpressions:
+      - key: csi.hetzner.cloud/location
+        values: [${locations%, }]
+EOF
+}
+
+install_hcloud_csi() {
+  mkdir -p "$VALUES_DIR"
+  hcloud_csi_values >"$VALUES_DIR/hcloud-csi.yaml"
+  helmk upgrade --install hcloud-csi hcloud/hcloud-csi --version "$HCLOUD_CSI_CHART_VERSION" \
+    --namespace kube-system --wait --timeout 10m -f "$VALUES_DIR/hcloud-csi.yaml" \
+    >>"$LOG_FILE" 2>&1 || die $EXIT_PLATFORM "hcloud CSI driver installation failed"
+  local owner
+  owner=$(kc get storageclass hcloud-volumes -o jsonpath='{.metadata.labels.app\.kubernetes\.io/managed-by}' 2>/dev/null || true)
+  if kc get storageclass hcloud-volumes >/dev/null 2>&1 && [[ "$owner" != "kwerft" ]]; then
+    warn "The storage class hcloud-volumes was not created by Kwerft; it is left as it is."
+    return 0
+  fi
+  # A StorageClass cannot change; an older one of Kwerft's is replaced
+  # (volumes made from it keep working: the class is only read to create them).
+  if ! hcloud_storage_class | kc apply -f - >>"$LOG_FILE" 2>&1; then
+    kc delete storageclass hcloud-volumes >>"$LOG_FILE" 2>&1 || true
+    hcloud_storage_class | kc apply -f - >>"$LOG_FILE" 2>&1 || die $EXIT_PLATFORM "Could not create the storage class hcloud-volumes"
+  fi
+}
+
+# apply_hcloud_settings stores --config hcloud.tokenFile as the console's
+# Cloud API token (the Secret only owners and admins may write, nobody read)
+# and hcloud.loadBalancer in ConsoleSettings.spec.hetznerCloud.
+apply_hcloud_settings() {
+  if [[ -n "$HCLOUD_TOKEN_FILE" ]]; then
+    local token sum
+    token=$(mktemp "$HCLOUD_TMP_DIR/hcloud-token.XXXXXX")
+    tr -d '[:space:]' <"$HCLOUD_TOKEN_FILE" >"$token"
+    if ! kc -n kwerft-system create secret generic kwerft-hcloud-token --from-file=token="$token" \
+      --dry-run=client -o yaml | kc apply -f - >>"$LOG_FILE" 2>&1; then
+      rm -f "$token"
+      die $EXIT_KWERFT "Could not store the Cloud API token from $HCLOUD_TOKEN_FILE"
+    fi
+    sum=$(sha256sum "$token" | awk '{print $1}')
+    rm -f "$token"
+    # A changed token makes the console sync the Cloud Firewall at once.
+    if [[ "$sum" != "$(cat "$HCLOUD_TOKEN_SUM_FILE" 2>/dev/null || true)" ]]; then
+      kc annotate consolesettings.kwerft.dev kwerft --overwrite "kwerft.dev/hcloud-token-updated-at=$(date -u +%FT%TZ)" \
+        >>"$LOG_FILE" 2>&1 || die $EXIT_KWERFT "Could not save the console settings"
+      printf '%s\n' "$sum" >"$HCLOUD_TOKEN_SUM_FILE"
+    fi
+  fi
+  if [[ -n "$HCLOUD_LB" ]]; then
+    kc patch consolesettings.kwerft.dev kwerft --type merge -p "{\"spec\":{\"hetznerCloud\":{\"loadBalancer\":{\"enabled\":$HCLOUD_LB}}}}" \
+      >>"$LOG_FILE" 2>&1 || die $EXIT_KWERFT "Could not save the Load Balancer setting"
+  fi
+  return 0
 }
 
 # hubble_enabled prints whether Hubble (flows, relay) runs: not with --lite.
@@ -816,9 +1115,11 @@ stage_ingress_tls() {
   mkdir -p "$VALUES_DIR"
   traefik_values >"$VALUES_DIR/traefik.yaml"
   helmk repo add traefik https://traefik.github.io/charts --force-update >>"$LOG_FILE" 2>&1
+  local proxy_args=()
+  read -r -a proxy_args <<<"$(traefik_proxy_args)"
   helmk upgrade --install traefik traefik/traefik --version "$TRAEFIK_CHART_VERSION" \
     --namespace traefik --create-namespace --wait --timeout 10m \
-    -f "$VALUES_DIR/traefik.yaml" \
+    -f "$VALUES_DIR/traefik.yaml" ${proxy_args[@]+"${proxy_args[@]}"} \
     >>"$LOG_FILE" 2>&1 || die $EXIT_PLATFORM "Traefik installation failed"
   mark_system_namespace traefik
   echo "Traefik · cert-manager · Hetzner DNS-01 · Gateway API $gateway_api"
@@ -879,6 +1180,17 @@ metrics:
     addServicesLabels: false
     buckets: "0.01,0.025,0.05,0.1,0.25,0.5,1,2.5,5,10"
 EOF
+}
+
+# traefik_proxy_args: on a Cloud server in a Cloud Network, Traefik accepts
+# the PROXY protocol from that network, which is where a Hetzner Load
+# Balancer in front of it (Settings › Hetzner Cloud API) connects from, so
+# apps and the console keep seeing client addresses. Connections without the
+# header (the nodes themselves) work as before. Prints helm flags.
+traefik_proxy_args() {
+  [[ -n "$HCLOUD_NETWORK_RANGE" ]] || return 0
+  printf '%s ' --set "ports.web.proxyProtocol.trustedIPs={$HCLOUD_NETWORK_RANGE}" \
+    --set "ports.websecure.proxyProtocol.trustedIPs={$HCLOUD_NETWORK_RANGE}"
 }
 
 # Hetzner's cert-manager webhook solves DNS-01 through Hetzner DNS (Cloud API),
@@ -1165,12 +1477,17 @@ stage_kwerft() {
   # Shown in the required firewall rule cluster-private (Network → Server firewall).
   local firewall_args=(--set firewall.privateNetwork="")
   [[ -n "$PRIVATE_CIDR" ]] && firewall_args=(--set firewall.privateNetwork="$(network_of "$PRIVATE_CIDR")")
+  # Settings › Hetzner Cloud API: whether the CCM runs, and where a Load
+  # Balancer may connect from (Traefik's PROXY protocol).
+  local hcloud_args=(--set hcloud.ccm=false --set hcloud.proxyNetwork="$HCLOUD_NETWORK_RANGE")
+  ccm_active && hcloud_args[1]=hcloud.ccm=true
   # Helm installs a chart's CRDs only on first install, never on upgrade, so
   # apply them on every run (server-side; Helm no longer touches them).
   helmk show crds "$ref" ${version_args[@]+"${version_args[@]}"} 2>>"$LOG_FILE" \
     | kc apply --server-side --force-conflicts -f - >>"$LOG_FILE" 2>&1 \
     || die $EXIT_KWERFT "Kwerft CRDs failed to apply (chart: $ref)"
   apply_console_settings
+  apply_hcloud_settings
   adopt_namespace kwerft-builds
   local taken
   taken=$(registry_address_taken)
@@ -1182,7 +1499,7 @@ stage_kwerft() {
     --set acme.email="$ACME_EMAIL" \
     --set platform="$PLATFORM" \
     --set hubble.enabled="$(hubble_enabled)" \
-    "${image_args[@]}" "${firewall_args[@]}" \
+    "${image_args[@]}" "${firewall_args[@]}" "${hcloud_args[@]}" \
     --set registry.image.tag="$ZOT_VERSION" \
     --set registry.clusterIP="$REGISTRY_CLUSTER_IP" \
     --set builds.buildkitImage="docker.io/moby/buildkit:${BUILDKIT_VERSION}-rootless" \
@@ -1377,6 +1694,8 @@ stage_join() {
   info=$(curl -fsS --max-time 20 -H "Authorization: Bearer $JOIN_TOKEN" "${JOIN_URL%/}/api/v1/join?role=$JOIN_ROLE") \
     || die $EXIT_NETWORK "Could not reach $JOIN_URL or the join token was rejected"
   server=$(jq -r .server <<<"$info"); k3s_token=$(jq -r .token <<<"$info")
+  # A cluster with the hcloud CCM registers every kubelet with it.
+  [[ "$(jq -r '.cloudProvider // empty' <<<"$info")" == "external" ]] && HCLOUD_CCM=true
   [[ -n "$server" && "$server" != null ]] || die $EXIT_NETWORK "Join response did not contain a server address"
 
   local node_ip=${PRIVATE_IP:-$PUBLIC_IP} kind=agent
@@ -1389,6 +1708,7 @@ stage_join() {
     echo "node-ip: $node_ip"
     echo "node-external-ip: $PUBLIC_IP"
     echo "node-label: [kwerft.dev/platform=$PLATFORM]"
+    if [[ "$HCLOUD_CCM" == "true" ]]; then echo "kubelet-arg: [cloud-provider=external]"; fi
   } >/etc/rancher/k3s/config.yaml
   chmod 0600 /etc/rancher/k3s/config.yaml
   if [[ "$kind" == "server" ]]; then
@@ -1454,6 +1774,7 @@ main() {
 
   detect_platform
   detect_addresses
+  detect_hcloud_network
   [[ "$MODE" == "join" ]] || resolve_domain
 
   printf '%s▸ Kwerft installer %s%s  %schannel=%s · platform=%s · mode=%s%s\n\n' \
@@ -1479,6 +1800,7 @@ main() {
   run_stage registry      "Registry mirror" stage_registry_mirror force
   run_stage helm          "Helm"          stage_helm
   run_stage network       "Network"       stage_network force
+  run_stage hcloud        "Hetzner Cloud" stage_hcloud force
   run_stage ingress       "Ingress & TLS" stage_ingress_tls force
   run_stage observability "Observability" stage_observability force
   run_stage kwerft         "Kwerft"         stage_kwerft force

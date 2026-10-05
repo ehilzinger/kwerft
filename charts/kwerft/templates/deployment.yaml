@@ -34,6 +34,12 @@ spec:
             {{- with .Values.firewall.privateNetwork }}
             - --private-network={{ . }}
             {{- end }}
+            {{- with .Values.hcloud }}
+            - --hcloud-ccm={{ .ccm }}
+            {{- with .proxyNetwork }}
+            - --hcloud-proxy-network={{ . }}
+            {{- end }}
+            {{- end }}
             {{- with .Values.builds }}
             {{- if .enabled }}
             - --buildkit-image={{ required "builds.buildkitImage is required" .buildkitImage }}
