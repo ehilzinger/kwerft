@@ -2,6 +2,7 @@ package controllers
 
 import (
 	"fmt"
+	"regexp"
 	"slices"
 	"strings"
 )
@@ -12,9 +13,9 @@ import (
 // runs it:
 //
 //   - joining:   install.sh --join <console> --token <kwft_join_…> --role worker|control-plane
-//                --platform cloud [--node-label k=v]… [--node-taint k=v:Effect]… --yes
+//                --platform cloud [--k3s-version <v>] [--node-label k=v]… [--node-taint k=v:Effect]… --yes
 //   - bootstrap: install.sh --agent --console <console> --cluster-token <token>
-//                --platform cloud [--version <v>] [--node-label k=v]… --yes
+//                --platform cloud [--version <v>] [--k3s-version <v>] [--node-label k=v]… --yes
 //                (the first control-plane server of a new hetzner-cloud
 //                cluster; agent mode is W3's, docs/phase5.md › Installer flags)
 //
@@ -22,6 +23,10 @@ import (
 // expires; the user data never holds a k3s token. The bootstrap variant
 // carries the cluster's bootstrap token from Secret cluster-<name>-agent,
 // which W3 deletes once the agent first connected.
+//
+// --k3s-version is the cluster's running Kubernetes version
+// (Cluster.status.kubernetesVersion) when it is known: a node joining after a
+// k3s upgrade installs what the cluster runs, not the installer's pin.
 
 // joinScript are the parameters of a server's user data.
 type joinScript struct {
@@ -32,11 +37,27 @@ type joinScript struct {
 	// Version is the console's release (agent mode installs the same); ""
 	// for development builds.
 	Version string
-	Role    string // join: worker | control-plane
-	Labels  map[string]string
-	Taints  []string
-	Cluster string
-	Pool    string
+	// K3sVersion is the k3s version the cluster runs (v1.37.1+k3s1); ""
+	// installs the installer's pinned version.
+	K3sVersion string
+	Role       string // join: worker | control-plane
+	Labels     map[string]string
+	Taints     []string
+	Cluster    string
+	Pool       string
+}
+
+// k3sVersionRE is what the installer's --k3s-version accepts.
+var k3sVersionRE = regexp.MustCompile(`^v[0-9]+\.[0-9]+\.[0-9]+(-rc[0-9]+)?\+k3s[0-9]+$`)
+
+// k3sVersion is the version a new node of a cluster reporting running
+// should install: running itself when it is a k3s release, else "" (the
+// installer's pin).
+func k3sVersion(running string) string {
+	if k3sVersionRE.MatchString(running) {
+		return running
+	}
+	return ""
 }
 
 // shellQuote quotes s for POSIX shells.
@@ -57,6 +78,9 @@ func (j joinScript) args() []string {
 		}
 	default:
 		args = []string{"--join", j.Console, "--token", j.Token, "--role", j.Role, "--platform", "cloud"}
+	}
+	if j.K3sVersion != "" {
+		args = append(args, "--k3s-version", j.K3sVersion)
 	}
 	keys := make([]string, 0, len(j.Labels))
 	for k := range j.Labels {

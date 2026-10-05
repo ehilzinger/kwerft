@@ -454,3 +454,151 @@ upgraded by these tests.
 - **A second console replica** would make the console's own restart
   invisible; it waits for the HA store (`deployment.yaml` TODO).
 - **Signing `install.sh`** (above).
+
+## As built (U2)
+
+Installer changes W2, on the Phase 6 foundation. Exit codes are unchanged.
+
+**Stages** (`--dry-run` order, install and agent mode):
+`preflight system firewall kubernetes registry helm upgrades network hcloud
+ingress observability kwerft|kwerft-agent handoff`. Join mode:
+`preflight system firewall join registry`.
+- Forced (run every time): everything but `kubernetes` and `join`; `system`
+  and `helm` are forced now.
+- Once: `kubernetes`, `join`. When skipped, their summary is the running k3s
+  (`k3s --version`): `k3s v1.37.1+k3s1 · installed`, or `k3s v1.36.4+k3s1 is
+  older than this release's v1.37.1+k3s1: upgrade it in Settings › Updates`.
+- New forced stage **`upgrades`** (label `Upgrades`, after `helm`, before
+  `network`; exit 40 on failure). It applies `crd.yaml` (CRD
+  `plans.upgrade.cattle.io`, waited for `Established`), then
+  `system-upgrade-controller.yaml` of the release pinned in
+  `SYSTEM_UPGRADE_CONTROLLER_VERSION="v0.20.2"` (2026-10-05), server-side,
+  from `github.com/rancher/system-upgrade-controller/releases/download/<v>/`.
+  Upstream manifests, unchanged: namespace `system-upgrade`, Deployment
+  `system-upgrade-controller` (control-plane nodes only), ServiceAccount
+  `system-upgrade`, ConfigMap `default-controller-env` with the Job defaults
+  (e.g. `SYSTEM_UPGRADE_JOB_KUBECTL_IMAGE`). The rollout is waited for
+  (5 min) only when this server's node is Ready: on a first install Cilium
+  comes next and the pod starts with it. Summary:
+  `system-upgrade-controller v0.20.2 (ready|starts with the network) · installer node <node>`.
+- The same stage labels this server's node `kwerft.dev/installer=true` (found
+  by host name, else by its InternalIP) and removes the label from every
+  other node: exactly one node carries it. Agent clusters get both too;
+  joined nodes run neither.
+
+**`/var/lib/kwerft/install.env`** (0600, replaced atomically through
+`install.env.kwerft-new`), written after the `preflight` stage passed, on
+every run that is not `--dry-run` (install, agent and join mode; never by
+`--uninstall`/`--reset-firewall`; `--uninstall` deletes it with the state
+directory). Format: `#` comment lines, then exactly these keys, one
+`KEY=value` per line, the value unquoted and verbatim to the end of the line,
+empty meaning "not set". The keys are the environment variables' names:
+
+```
+# Kwerft installer 0.6.0, 2026-10-05T10:00:00Z: settings later runs reuse.
+# Flags and KWERFT_* environment variables win over this file.
+KWERFT_MODE=install
+KWERFT_EMAIL=ops@example.com
+KWERFT_ACME_SERVER=https://acme-staging-v02.api.letsencrypt.org/directory
+KWERFT_PLATFORM=cloud
+KWERFT_PRIVATE_IFACE=
+KWERFT_LITE=0
+KWERFT_HARDEN_SSH=0
+KWERFT_CHANNEL=stable
+KWERFT_CONSOLE=https://ops.example.com
+```
+
+| Key | Value |
+|---|---|
+| `KWERFT_MODE` | `install`, `agent` or `join` |
+| `KWERFT_EMAIL` | `--email`, or the email of `--config` |
+| `KWERFT_ACME_SERVER` | `--acme-server` as a URL (`staging` is stored resolved) |
+| `KWERFT_PLATFORM` | `cloud` or `dedicated`, as detected or given (never `auto`) |
+| `KWERFT_PRIVATE_IFACE` | `--private-iface` as given; empty when detected |
+| `KWERFT_LITE`, `KWERFT_HARDEN_SSH` | `0` or `1` |
+| `KWERFT_CHANNEL` | `stable` or `edge` |
+| `KWERFT_CONSOLE` | agent mode only |
+
+Reading (`apply_install_env`, in `parse_args` after the flags): the file is
+parsed, never sourced; unknown keys and other lines are ignored, CRLF is
+tolerated, values are then validated like flags (a bad value is exit 2). A
+key fills its setting only when neither a flag nor a non-empty `KWERFT_*`
+variable gave one (flag > env > file > default); an email in this run's
+`--config` also wins over the file. New environment variables:
+`KWERFT_LITE`, `KWERFT_HARDEN_SSH` (1/true/yes, 0/false/no; `KWERFT_LITE=0`
+is how a remembered `--lite` is turned off), `KWERFT_K3S_VERSION`,
+`KWERFT_PROGRESS`.
+- **Mode**: applied only when no flag chose one (`--join`/`KWERFT_JOIN_URL`,
+  `--agent`, `--uninstall`, `--reset-firewall`). Without `KWERFT_MODE` (an
+  install from before this file) the stage markers decide: `kwerft-agent` →
+  agent, `join` → join, `kubernetes` → install.
+- **Agent mode**: `--console` comes from the file; the token, when not
+  given, is read back from Secret `kwerft-system/kwerft-agent` (key
+  `token`). On an agent cluster's installer node `install.sh --version V
+  --yes` needs nothing else.
+- **Join mode**: a node whose `join` stage is done re-runs without `--join`
+  and `--token` (converging `system`, `firewall`, `registry`); one that has
+  not joined yet is refused (exit 2, "run the join command again").
+- Not stored: the console hostname (ConsoleSettings is the record), tokens,
+  `--config`, `--version`, `--k3s-version`, `--image*`, the join URL, role,
+  labels and taints.
+
+**`--progress FILE`** (`KWERFT_PROGRESS`): the directory must exist (else
+exit 2). The file is truncated (0600) right after the arguments are parsed,
+then gets one JSON object per line:
+
+```
+{"id":"preflight","label":"Preflight","state":"ok","detail":"Ubuntu 24.04 · x86_64 · …","at":"2026-10-05T10:00:00Z"}
+{"id":"kubernetes","label":"Kubernetes","state":"skip","detail":"k3s v1.37.1+k3s1 · installed","at":"2026-10-05T10:00:41Z"}
+{"id":"kwerft","label":"Kwerft","state":"fail","detail":"Kwerft installation failed (chart: oci://…)","at":"2026-10-05T10:09:12Z"}
+{"exit":50}
+```
+
+- One line per stage that ran (`ok`), was skipped (`skip`; detail
+  `already done` or the k3s note above) or failed (`fail`). `detail` is the
+  stage's summary line as printed (for `status.steps[].detail`); for a
+  failure, `die`'s message, or `exit <rc> at line <n>; see
+  /var/log/kwerft/install.log` for an unexpected error. A failed stage gets
+  exactly one `fail` line.
+- `id` is the stage id above (the `/var/lib/kwerft/stages/<id>.done` name),
+  `label` what the terminal shows, `at` UTC (`%FT%TZ`).
+- The last line is always `{"exit":<code>}`, written by the EXIT trap of the
+  top-level shell: also for usage errors (`{"exit":2}` alone, nothing ran)
+  and `--dry-run` (`{"exit":0}`, no stage lines).
+- Strings are JSON-escaped (`\\`, `\"`, `\t`, `\n`, `\r`); other control
+  characters are dropped. Text is UTF-8 (`·`, `›`).
+
+**`--k3s-version V`** (`KWERFT_K3S_VERSION`): must match
+`^v[0-9]+\.[0-9]+\.[0-9]+(-rc[0-9]+)?\+k3s[0-9]+$`, else exit 2. Used by the
+`kubernetes` stage (install and agent mode) and by `join`, on their first
+run only: a running cluster never changes. The NodePool reconciler passes
+the Cluster's `status.kubernetesVersion` when it is a k3s version
+(`k3sVersion()` in `nodepool_cloudinit.go`, the same pattern; a bats test
+keeps them equal) to joins and agent bootstraps (still empty for a new
+cluster, so the pin applies). The installer cloud-init downloads is the
+console's own release, so it knows the flag.
+
+**Wording**: the header of `install.sh`, `--help`, the closing summary line,
+`RELEASING.md` and the blueprint (install terminal, "One command", Stages)
+say a re-run converges everything but k3s. The published blueprint artifact
+was not republished from this branch: the coordinator does that after the
+merge.
+
+**For U3 (runner)**: run `install.sh --version <v> --yes --progress
+<dir>/progress.jsonl`; everything else comes from `install.env`. Schedule the
+runner with `nodeSelector: {kwerft.dev/installer: "true"}`. Treat a missing
+`{"exit":…}` line after the unit ended as a crash and use the unit's exit
+status. A release without W2 never wrote `install.env`, so the first
+console upgrade starts from the first release that has it.
+
+**For B1**: the main flow changed in three places (`remember_settings` after
+`preflight`, `force` on `system` and `helm`, the `upgrades` stage after
+`helm`) plus `trap 'progress_exit $?' EXIT` and `progress_start` at the top
+of `main`. New stages need nothing for `--progress` (`run_stage`, `ok`,
+`skip` and `die` report), and a new exit code needs nothing either. To
+remember a new setting, add its key to `install_env`, `apply_install_env`
+and `given` in `parse_args`.
+
+**Open**: SUC's manifests are applied from GitHub without a checksum (like
+the Gateway API CRDs). The console's Plans (W4) rely on the upstream
+namespace and ServiceAccount names above.
