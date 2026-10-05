@@ -48,6 +48,9 @@ var (
 		"Time between two scheduled runs of a BackupPlan that is not paused.", []string{"plan"}, nil)
 	descBackupCreated = prometheus.NewDesc("kwerft_backup_plan_created_timestamp_seconds",
 		"When the BackupPlan was created (the age of a plan without a successful backup).", []string{"plan"}, nil)
+	descUpgradeFailed = prometheus.NewDesc("kwerft_upgrade_failed_timestamp_seconds",
+		"When the newest finished Upgrade of a component (cancelled ones aside) failed or was rolled back (status.finishedAt); no series once a later one succeeded.",
+		[]string{"component", "version", "upgrade", "result"}, nil)
 	descScrapeError = prometheus.NewDesc("kwerft_metrics_collect_errors",
 		"Kinds that could not be read for this scrape (missing CRD, cache not synced).", []string{"kind"}, nil)
 )
@@ -74,8 +77,8 @@ func RegisterMetrics(mgr ctrl.Manager) error {
 	}))
 }
 
-// MetricsCollector reads Schedules, Builds, Domains, ConsoleSettings and
-// HTTPRoutes at scrape time.
+// MetricsCollector reads Schedules, BackupPlans, Upgrades, Builds, Domains,
+// ConsoleSettings and HTTPRoutes at scrape time.
 type MetricsCollector struct {
 	Reader client.Reader
 	// Timeout bounds one scrape's reads; 0 means 10s.
@@ -85,7 +88,7 @@ type MetricsCollector struct {
 func (c *MetricsCollector) Describe(ch chan<- *prometheus.Desc) {
 	for _, d := range []*prometheus.Desc{descScheduleSuccess, descScheduleFailure, descBuildFailed,
 		descDomainExpiry, descConsoleExpiry, descRouteInfo, descBackupSuccess, descBackupFailed, descBackupInterval,
-		descBackupCreated, descScrapeError} {
+		descBackupCreated, descUpgradeFailed, descScrapeError} {
 		ch <- d
 	}
 }
@@ -134,6 +137,14 @@ func (c *MetricsCollector) Collect(ch chan<- prometheus.Metric) {
 		if sched, err := ParseBackupSchedule(p.Spec.Schedule); err == nil && !p.Spec.Paused {
 			ch <- prometheus.MustNewConstMetric(descBackupInterval, prometheus.GaugeValue, BackupInterval(sched, time.Now()).Seconds(), p.Name)
 		}
+	}
+
+	var ups kwerftv1.UpgradeList
+	if err := c.Reader.List(ctx, &ups); err != nil {
+		failed("Upgrade")
+	}
+	for _, u := range FailedUpgrades(ups.Items) {
+		gauge(descUpgradeFailed, u.Status.FinishedAt.Time, string(u.Spec.Component), u.Spec.Version, u.Name, string(u.Status.Phase))
 	}
 
 	var bl kwerftv1.BuildList
@@ -203,6 +214,37 @@ func hasBackend(r *gwv1.HTTPRoute) bool {
 		}
 	}
 	return false
+}
+
+// FailedUpgrades are the newest finished Upgrade of each component when it
+// failed or was rolled back (the alert UpgradeFailed). Cancelled Upgrades
+// changed nothing and are passed over; a later success clears the
+// component.
+func FailedUpgrades(items []kwerftv1.Upgrade) []kwerftv1.Upgrade {
+	latest := map[kwerftv1.UpgradeComponent]*kwerftv1.Upgrade{}
+	for i := range items {
+		u := &items[i]
+		switch u.Status.Phase {
+		case kwerftv1.UpgradeSucceeded, kwerftv1.UpgradeFailed, kwerftv1.UpgradeRolledBack:
+		default:
+			continue
+		}
+		if u.Status.FinishedAt == nil {
+			continue
+		}
+		cur := latest[u.Spec.Component]
+		if cur == nil || cur.Status.FinishedAt.Before(u.Status.FinishedAt) ||
+			(cur.Status.FinishedAt.Equal(u.Status.FinishedAt) && cur.Name < u.Name) {
+			latest[u.Spec.Component] = u
+		}
+	}
+	var out []kwerftv1.Upgrade
+	for _, c := range []kwerftv1.UpgradeComponent{kwerftv1.UpgradeKwerft, kwerftv1.UpgradeKubernetes} {
+		if u := latest[c]; u != nil && u.Status.Phase != kwerftv1.UpgradeSucceeded {
+			out = append(out, *u)
+		}
+	}
+	return out
 }
 
 // latestBuildResults says, per App, whether its latest finished build

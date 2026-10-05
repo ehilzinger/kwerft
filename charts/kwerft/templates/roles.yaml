@@ -5,7 +5,8 @@
 #
 # Two layers (docs/phase4.md, "Project access"):
 #  - Cluster-wide (the ClusterRoleBindings below): owners and admins reach
-#    every kwerft.dev resource in every namespace. Developers and viewers
+#    every kwerft.dev resource in every namespace, except that admins only
+#    read Upgrades (owners start and cancel them). Developers and viewers
 #    only read the cluster-scoped kwerft.dev kinds (projects, Git
 #    connections, alert rules, notification channels, console settings,
 #    firewall rules), and developers write alert rules. The console filters
@@ -33,6 +34,9 @@ metadata:
   name: kwerft:owner
   labels: {{- include "kwerft.labels" . | nindent 4 }}
 rules:
+  # Everything in kwerft.dev, Upgrades included: owners start them (create),
+  # cancel them (patch: the annotation kwerft.dev/cancel-requested) and may
+  # delete them (internal/server/api_upgrades.go).
   - apiGroups: [kwerft.dev]
     resources: ["*"]
     verbs: ["*"]
@@ -54,9 +58,53 @@ metadata:
   name: kwerft:admin
   labels: {{- include "kwerft.labels" . | nindent 4 }}
 rules:
+  # Every kwerft.dev kind but Upgrades: only owners start and cancel
+  # upgrades (docs/phase6-upgrades.md › API and UI), admins read them.
+  # RBAC cannot take a kind out of "*", so the kinds are listed; a new CRD
+  # belongs here too (internal/access TestAdminsReachEveryKindButUpgrades).
   - apiGroups: [kwerft.dev]
-    resources: ["*"]
+    resources:
+      - alertrules
+      - alertrules/status
+      - apps
+      - apps/status
+      - apps/scale
+      - backupplans
+      - backupplans/status
+      - builds
+      - builds/status
+      - clusters
+      - clusters/status
+      - consolesettings
+      - consolesettings/status
+      - domains
+      - domains/status
+      - firewallrules
+      - firewallrules/status
+      - gitconnections
+      - gitconnections/status
+      - nodepools
+      - nodepools/status
+      - notificationchannels
+      - notificationchannels/status
+      - projects
+      - projects/status
+      - restores
+      - restores/status
+      - schedules
+      - schedules/status
+      - secretsets
+      - secretsets/status
+      - tasks
+      - tasks/status
+      - trafficrules
+      - trafficrules/status
+      - volumes
+      - volumes/status
     verbs: ["*"]
+  - apiGroups: [kwerft.dev]
+    resources: [upgrades]
+    verbs: [get, list, watch]
   # Backups: Velero's backups, schedules, restores and the location, read
   # only (the reconcilers write them from BackupPlans and Restores;
   # internal/server/api_backups.go). PodVolumeBackups tell a backup's size.

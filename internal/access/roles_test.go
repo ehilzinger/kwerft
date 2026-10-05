@@ -207,14 +207,14 @@ func TestMembersProjectsFollowTheProjectRole(t *testing.T) {
 	}
 }
 
-// namespacedKinds are the plurals of every namespaced kwerft.dev CRD.
-func namespacedKinds(t *testing.T) []string {
+// chartCRDs are the chart's kwerft.dev CRDs.
+func chartCRDs(t *testing.T) []apiextensionsv1.CustomResourceDefinition {
 	t.Helper()
 	files, err := filepath.Glob(filepath.Join("..", "..", "charts", "kwerft", "crds", "*.yaml"))
 	if err != nil || len(files) == 0 {
 		t.Fatalf("no CRDs: %v", err)
 	}
-	var out []string
+	var out []apiextensionsv1.CustomResourceDefinition
 	for _, f := range files {
 		raw, err := os.ReadFile(f)
 		if err != nil {
@@ -224,11 +224,63 @@ func namespacedKinds(t *testing.T) []string {
 		if err := yaml.Unmarshal(raw, &crd); err != nil {
 			t.Fatal(err)
 		}
+		out = append(out, crd)
+	}
+	return out
+}
+
+// namespacedKinds are the plurals of every namespaced kwerft.dev CRD.
+func namespacedKinds(t *testing.T) []string {
+	t.Helper()
+	var out []string
+	for _, crd := range chartCRDs(t) {
 		if crd.Spec.Scope == apiextensionsv1.NamespaceScoped {
 			out = append(out, crd.Spec.Names.Plural)
 		}
 	}
 	return out
+}
+
+// TestAdminsReachEveryKindButUpgrades: kwerft:admin lists the kwerft.dev
+// kinds instead of "*" so that Upgrades stay owners' to start and cancel.
+// Every other kind, and its status and scale, must stay in that list,
+// including CRDs added later.
+func TestAdminsReachEveryKindButUpgrades(t *testing.T) {
+	r := newRBAC(t, &kwerftv1.Project{})
+	admin := r.clusterRules(consoleUser("admin@example.com", Admin))
+	owner := r.clusterRules(consoleUser("owner@example.com", Owner))
+	verbs := []string{"get", "list", "watch", "create", "update", "patch", "delete", "deletecollection"}
+	for _, crd := range chartCRDs(t) {
+		kind := crd.Spec.Names.Plural
+		var subs []string
+		for _, v := range crd.Spec.Versions {
+			if v.Subresources == nil {
+				continue
+			}
+			if v.Subresources.Status != nil && !slices.Contains(subs, "status") {
+				subs = append(subs, "status")
+			}
+			if v.Subresources.Scale != nil && !slices.Contains(subs, "scale") {
+				subs = append(subs, "scale")
+			}
+		}
+		for _, verb := range verbs {
+			c := Check{Group: "kwerft.dev", Resource: kind, Verb: verb}
+			if !allows(owner, c) {
+				t.Errorf("owners cannot %s %s", verb, kind)
+			}
+			read := verb == "get" || verb == "list" || verb == "watch"
+			if want := kind != "upgrades" || read; allows(admin, c) != want {
+				t.Errorf("admins %s %s: %v, want %v", verb, kind, !want, want)
+			}
+			for _, sub := range subs {
+				c.Subresource = sub
+				if want := kind != "upgrades"; allows(admin, c) != want {
+					t.Errorf("admins %s %s/%s: %v, want %v", verb, kind, sub, !want, want)
+				}
+			}
+		}
+	}
 }
 
 // TestNothingNamespacedIsClusterWideForDevelopersAndViewers: the bindings

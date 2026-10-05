@@ -16,6 +16,7 @@ import { GitConnectionsCard } from "./GitConnections";
 import { DataKeyCard, SSOCard } from "./SettingsIdentity";
 import { HCloudCard } from "./SettingsHCloud";
 import { BackupsCard } from "./SettingsBackups";
+import { SettingsTabs } from "./SettingsUpdates";
 
 const unreachable = "The console could not be reached. Check your connection and try again.";
 const errText = (e: unknown) => (e instanceof ApiError ? e.message : unreachable);
@@ -54,6 +55,7 @@ export function Settings() {
           <p>Where the console and your apps live, how their certificates are issued, access to Git hosts, sign-in and backups</p>
         </div>
       </div>
+      <SettingsTabs current="general" />
       {!canEdit && session.data && (
         <div className="banner info"><Icon name="shield" /><span>Only owners and admins change settings. You can see them here.</span></div>
       )}

@@ -1,0 +1,83 @@
+/* Settings › Updates: versions, progress in the installer's style, policy, history. */
+.upd-dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--accent); margin-left: 6px; vertical-align: 2px; }
+.nav a .upd-dot { margin-left: auto; }
+
+.updates .acts { display: inline-flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.updates .t td.row-acts { text-align: right; white-space: nowrap; }
+.updates .t td.row-acts .wrap { white-space: normal; display: inline-block; max-width: 28ch; text-align: right; }
+.updates .t .btn .pill { margin-right: 2px; }
+.updates .offers { display: grid; gap: 4px; }
+.updates .offer .sub.wrap { white-space: normal; max-width: 46ch; }
+.updates .t.history tr.sel td { background: var(--accent-2); }
+.updates .t.history .linkbtn { font-size: 13.5px; font-weight: 600; color: var(--ink); }
+
+/* Progress: the installer's terminal output, one line per stage or node. */
+.upgrade-term {
+  background: var(--term-bg); color: var(--term-ink); font-family: var(--mono); font-size: 12.8px; line-height: 1.65;
+  padding: 14px 18px 16px; overflow-x: auto; display: grid; gap: 2px; min-width: 0;
+}
+.upgrade-progress .upgrade-term { border-radius: 0; }
+.upgrade-term .d { color: var(--term-dim); }
+.upgrade-term .a { color: var(--term-acc); }
+.upgrade-term .g { color: var(--term-ok); }
+.upgrade-term .x { color: var(--term-bad); }
+.upgrade-term .lines { list-style: none; margin: 4px 0 0; padding: 0; display: grid; gap: 1px; }
+.upgrade-term .lines li { display: grid; grid-template-columns: 1.6em minmax(8.5em, max-content) minmax(0, 1fr); column-gap: 10px; align-items: baseline; }
+.upgrade-term .lines .mk { text-align: center; }
+.upgrade-term .lines .lb { white-space: nowrap; }
+.upgrade-term .lines .dt { color: var(--term-ink); overflow-wrap: anywhere; }
+.upgrade-term .lines li.m-wait .lb, .upgrade-term .lines li.m-skip .lb, .upgrade-term .lines li.m-wait .dt, .upgrade-term .lines li.m-skip .dt { color: var(--term-dim); }
+.upgrade-term .lines li.m-fail .dt { color: var(--term-bad); }
+.upgrade-term .sum { margin-top: 8px; white-space: normal; }
+.upgrade-term .sum.ok { color: var(--term-ok); }
+.upgrade-term .sum.warn { color: var(--term-warn); }
+.upgrade-term .sum.bad { color: var(--term-bad); }
+.upgrade-term .sum.dim { color: var(--term-dim); }
+.upgrade-progress .ch-h h3 { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: 0; font-size: 13.5px; }
+.upgrade-progress .reconnect { margin: 10px 16px 0; }
+.upgrade-progress > .banner { margin: 10px 16px 0; }
+.upgrade-foot { display: grid; gap: 10px; justify-items: start; }
+.upgrade-log { margin: 0; width: 100%; max-height: 360px; overflow: auto; white-space: pre; border-radius: 8px; box-sizing: border-box; }
+
+.spin { display: inline-block; width: 10px; height: 10px; border-radius: 50%; border: 2px solid currentColor; border-right-color: transparent; vertical-align: -1px; animation: upd-spin .8s linear infinite; }
+.upgrade-term .spin { color: var(--term-acc); }
+.banner .spin { color: var(--accent); flex: none; }
+@keyframes upd-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .spin { animation-duration: 2.4s; } }
+
+/* The dialog. */
+.upgrade-what { margin: 0; font-size: 14px; display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.upgrade-what .mono { font-family: var(--mono); }
+.checks { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; font-size: 13px; }
+.checks li { display: grid; grid-template-columns: 1.2em minmax(0, 1fr); gap: 6px; align-items: baseline; }
+.checks li b { font-weight: 600; }
+.checks .mk { font-family: var(--mono); font-weight: 600; text-align: center; }
+.checks li.c-ok .mk { color: var(--ok); }
+.checks li.c-warn .mk { color: var(--warn); }
+.checks li.c-bad .mk { color: var(--bad); }
+.checks li { color: var(--ink-2); }
+.checks[aria-busy="true"] { opacity: .6; }
+.btn.linkish { justify-self: start; }
+
+/* Release notes. */
+.notes { border: 1px solid var(--line-2); border-radius: 8px; padding: 8px 12px; background: var(--surface-2); }
+.notes summary { cursor: pointer; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 13.5px; }
+.notes-body { font-size: 13px; color: var(--ink-2); line-height: 1.55; overflow-wrap: anywhere; }
+.notes-body h4 { margin: 12px 0 4px; font-size: 13.5px; color: var(--ink); }
+.notes-body h5 { margin: 10px 0 4px; font-size: 12.5px; color: var(--ink); }
+.notes-body p { margin: 6px 0; }
+.notes-body ul { margin: 6px 0; padding-left: 20px; }
+.notes-body pre { margin: 6px 0; padding: 8px 10px; background: var(--sunk); border-radius: 6px; font-family: var(--mono); font-size: 12px; overflow-x: auto; }
+
+/* The policy. */
+.radio.three { grid-template-columns: repeat(3, 1fr); }
+.updates fieldset.window { border: 1px solid var(--line-2); border-radius: 8px; padding: 10px 14px 12px; margin: 0; display: grid; gap: 12px; min-width: 0; }
+.updates fieldset.window legend { font-size: 12.5px; font-weight: 500; color: var(--ink-2); padding: 0 4px; }
+.updates select.input { padding: 7px 9px; }
+
+@media (max-width: 760px) {
+  .radio.three { grid-template-columns: 1fr; }
+  .upgrade-term .lines li { grid-template-columns: 1.6em minmax(0, 1fr); }
+  .upgrade-term .lines .dt { grid-column: 2; }
+  .updates .t td.row-acts { text-align: left; }
+}

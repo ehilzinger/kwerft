@@ -5,7 +5,7 @@ import (
 )
 
 // AlertCondition is a condition Kwerft knows how to measure and explain.
-// +kubebuilder:validation:Enum=CrashLooping;Restarts;MemoryHigh;CPUHigh;VolumeFillingUp;NodeMemoryPressure;NodeDiskPressure;CertificateExpiring;ScheduleFailing;BuildFailing;HTTPErrorRate;HTTPLatency;BackupFailing;BackupMissing;Custom
+// +kubebuilder:validation:Enum=CrashLooping;Restarts;MemoryHigh;CPUHigh;VolumeFillingUp;NodeMemoryPressure;NodeDiskPressure;CertificateExpiring;ScheduleFailing;BuildFailing;HTTPErrorRate;HTTPLatency;BackupFailing;BackupMissing;UpgradeFailed;Custom
 type AlertCondition string
 
 const (
@@ -39,6 +39,9 @@ const (
 	// BackupMissing: a BackupPlan that is not paused has had no successful
 	// backup within twice its interval (or window, when set).
 	AlertBackupMissing AlertCondition = "BackupMissing"
+	// UpgradeFailed: the newest finished Upgrade of a component (Kwerft or
+	// Kubernetes) failed or was rolled back, within window (default a day).
+	AlertUpgradeFailed AlertCondition = "UpgradeFailed"
 	// Custom: spec.expr, a MetricsQL expression; owners and admins only.
 	AlertCustom AlertCondition = "Custom"
 )

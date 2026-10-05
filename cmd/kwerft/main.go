@@ -130,6 +130,8 @@ func main() {
 	// The console's store, for the upgrade's database copy (set once it is
 	// open; agent mode has none).
 	var database upgrades.Snapshotter
+	// The upgrade preflight, for the console API (Settings › Updates).
+	var upgradeChecks *controllers.UpgradeChecks
 	newControllers := func() (ctrl.Manager, error) {
 		traffic := &controllers.TrafficRuleReconciler{}
 		// Cilium's flows, read in-cluster from the Hubble relay: the
@@ -164,7 +166,7 @@ func main() {
 			}
 			name, _ = clusters.AgentTokenCluster(token)
 		}
-		if err := setupUpgrades(mgr, upgradeOptions{namespace: namespace, installBaseURL: *installBaseURL, faults: *upgradeFaults,
+		if upgradeChecks, err = setupUpgrades(mgr, upgradeOptions{namespace: namespace, installBaseURL: *installBaseURL, faults: *upgradeFaults,
 			console: !agentMode, cluster: name, dataDir: *dataDir, database: database}); err != nil {
 			return nil, err
 		}
@@ -285,6 +287,11 @@ func main() {
 		dataKeySecret = types.NamespacedName{Namespace: namespace, Name: cmp.Or(os.Getenv("KWERFT_DATA_KEY_SECRET"), "kwerft-data-key")}
 	}
 
+	var preflight server.UpgradePreflight
+	if upgradeChecks != nil {
+		preflight = &upgradePreflight{local: upgradeChecks}
+	}
+
 	srv := server.New(server.Config{
 		Listen:        *listen,
 		ConsoleDomain: *consoleDomain,
@@ -322,6 +329,7 @@ func main() {
 		HCloudCCM:          *hcloudCCM,
 		HCloudProxyNetwork: *hcloudProxyNetwork,
 		StorageClassExists: storageClassChecker(mgr),
+		Upgrades:           preflight,
 	})
 
 	go func() {

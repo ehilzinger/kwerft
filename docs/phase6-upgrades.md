@@ -1121,3 +1121,196 @@ host or against SUC itself.
   one server the API is gone for the restart (as for any k3s upgrade).
 - The fleet's hold is an annotation the owner could remove by hand in an
   agent cluster; that only starts that member early.
+
+## As built (U5): API and UI
+
+Files: `internal/server/api_upgrades.go` (+ `upgrades_test.go`),
+`server.Config.Upgrades` (`server.UpgradePreflight`), the wiring in
+`cmd/kwerft/upgrades.go` (`newUpgradeChecks`, `upgradePreflight`; U3's
+`setupUpgrades` now returns its `*controllers.UpgradeChecks`), roles
+(`internal/access`, `charts/kwerft/templates/roles.yaml`), the alert
+`UpgradeFailed` (`api/v1alpha1/alerting_types.go`, `internal/alerting`,
+`internal/controllers/metrics.go`), and the UI: `web/src/updates.ts`
+(+ `updates.test.ts`), `web/src/pages/SettingsUpdates.tsx`,
+`web/src/styles/updates.css`, the route `/settings/updates`, Settings tabs
+(General | Updates), the Settings dot in the sidebar and the Overview
+notification.
+
+**Roles.** Two rows in the matrix: `upgrades` (start and cancel upgrades,
+change the policy: owners) and `updates` (read Settings › Updates and the
+history: owners and admins). `kwerft:owner` keeps `kwerft.dev` `*`.
+`kwerft:admin` no longer has `kwerft.dev` `*`: RBAC cannot subtract, so it
+lists every kind with its `status` (and `apps/scale`) with all verbs, plus
+`upgrades` get/list/watch. **A new CRD must be added to that list**;
+`TestAdminsReachEveryKindButUpgrades` (internal/access) fails until it is.
+The policy lives in ConsoleSettings, which admins may patch through
+kubectl; the console API refuses them (owners only), RBAC cannot.
+
+**Endpoints.** All JSON; every request as the signed-in user (impersonation)
+in the cluster named by `?cluster=` (default `local`; for `POST /upgrades`
+the body's `cluster`). Writes need same-origin (or a bearer token).
+
+| Endpoint | Roles | Answer |
+|---|---|---|
+| `GET /api/v1/updates` | owner, admin | `updates` (below) |
+| `POST /api/v1/updates/check` | owner, admin | 202 `{requestedAt}`; annotates ConsoleSettings `kwerft.dev/check-updates-requested`; 409 while the policy is Off |
+| `POST /api/v1/updates/resume-autopatch` | owner | 202 `{resumed: <upgrade>}`; annotates `kwerft.dev/resume-autopatch: <autoPatchPausedBy>`; 409 when not paused; audited `updates.autopatch_resumed` |
+| `PUT /api/v1/settings/updates` | owner | body and answer `policy` (below); merge-patches `spec.updates`; audited `updates.policy` with "before → after" |
+| `GET /api/v1/upgrades[?cluster=]` | owner, admin | `[upgrade]`, newest first; without `cluster` every connected cluster (unreachable ones in `Kwerft-Unreachable-Clusters`) |
+| `POST /api/v1/upgrades/preflight` | owner | `preflight` (below); the dialog's live checks; nothing is created |
+| `POST /api/v1/upgrades` | owner | 201 `{upgrade, preflight}`; audited `upgrade.start` |
+| `GET /api/v1/upgrades/{name}[?cluster=]` | owner, admin | `upgrade` |
+| `GET /api/v1/upgrades/{name}/events[?cluster=]` | owner, admin | SSE (below) |
+| `GET /api/v1/upgrades/{name}/log[?cluster=]` | owner, admin | `{log, truncated}` |
+| `DELETE /api/v1/upgrades/{name}[?cluster=]` | owner | 202 `upgrade`; audited `upgrade.cancel` |
+
+`POST /api/v1/upgrades` body:
+`{cluster?, component: "Kwerft"|"Kubernetes", version, acceptDataRollback?, password, confirmVersion?}`.
+In this order: component and version are checked (400 `field` `component`
+/ `version`; a k3s version needs the `v`), the cluster resolved (404
+unknown, 503 unreachable, 409 when upgrades of it cannot be started from
+the console), for a Kubernetes **minor** (or an unknown running version)
+`confirmVersion` must equal `version` (400 field `confirmVersion`), then
+the password or a current authenticator code (`confirmIdentity`: 400 field
+`password`, rate limited, a wrong one audited `account.confirm_failed`;
+single-sign-on accounts: a sign-in within 10 minutes). One unfinished
+Upgrade per component and cluster (409 `{error, upgrade}`). Then the
+synchronous preflight (60 per user per 15 min, 429 beyond): blocking
+checks answer 409 `{error, preflight}` and create nothing; warnings pass.
+Last, the Upgrade is created as the user: `generateName:
+controllers.GenerateName(component, version)`, annotation
+`kwerft.dev/requested-by: <email>`, `spec {component, version,
+acceptDataRollback}`. The audit detail is `Kwerft 0.5.0 → 0.6.0 on local`
+(plus `; data rollback accepted`).
+
+`DELETE` patches `kwerft.dev/cancel-requested: <email>` with the object's
+resourceVersion (409 on a race), only while the phase is `""`, `Queued`,
+`Preflight` or `Backup`; otherwise 409 ("can no longer be cancelled, and
+rolls back by itself if it fails"). Asking twice answers 202 without a
+second patch.
+
+Shapes (JSON field names):
+
+```
+upgrade   {name, cluster, component, version, requestedBy?, auto, acceptDataRollback?,
+           phase: Pending|Queued|Preflight|Backup|Running|Verifying|RollingBack|Succeeded|RolledBack|Failed|Cancelled,
+           from?: {kwerft?, kubernetes?}, preflight: [check], steps: [{id, label, state, detail?, at?}],
+           nodes: [{name, version?, state, message?}], backup?: {etcdSnapshot?, database?, helmRevisions?},
+           reason?, message?, cancelRequestedBy?, cancellable, finished, createdAt, startedAt?, finishedAt?}
+check     {check, ok, warning?, message?}
+preflight {cluster, component, version, from?, kind: Patch|Minor, checks: [check], blocked,
+           confirmVersion (type the version again), dataRollback (not rollback-safe: needs acceptDataRollback)}
+policy    {policy: Off|Notify|AutoPatch, channel: stable|edge, kubernetesPatches,
+           window?: {days: [Mon…Sun] (empty: every day), start: "HH:MM", duration: "2h"|"1h30m", timeZone?}}
+updates   {policy, checkedAt?, checking, error?, autoPatchPausedBy?, nextWindow?, windowOpen,
+           current: {kwerft, kubernetes}, available: [available], clusters: [cluster], canUpgrade}
+available {component, version, kind, notes? (Markdown without "## Install"), allowed, reason?}
+cluster   {name, connected, kwerft?, kubernetes?, available: [available], active?: upgrade, upgradable, message?}
+```
+
+`phase` `Pending` is an Upgrade the controller has not picked up yet
+(empty status). Policy validation: policy and channel as listed; AutoPatch
+needs a window; days are Mon…Sun in any case (all seven are stored as
+none); start `HH:MM`; duration 30m–24h in whole minutes (default 2h); the
+time zone an IANA name (empty: UTC). `available` of a remote cluster is
+the console's own release when the agent is older; Kubernetes targets of
+remote clusters are U4's.
+
+**SSE** (`…/events`): `event: upgrade` with the whole `upgrade` at once
+and whenever its resourceVersion changes (polled every 2 s as the user),
+`event: end` `{phase}` once it finished (or `{reason: "session"}` when the
+session ended), `event: gone` when it was deleted, `: ping` every 15 s. The
+stream ends after an hour; at most 8 per user. While the console restarts
+it breaks: the page reconnects with backoff and shows "Reconnecting…", and
+after a Kwerft upgrade of `local` it compares `GET /api/v1/version` with
+the version it was loaded from and offers a reload.
+
+**Log**: ConfigMap `kwerft-system/<upgrade>-log` key `install.log`, read
+with the console's own identity (`clusterConn.systemReader`) after the
+user's read of the Upgrade succeeded: no console role reads
+`kwerft-system`. `{log: "", truncated: false}` before the runner wrote it;
+`truncated` when it is the full 64 KiB tail.
+
+**Release notes**: `server.ReleaseNotes` drops the `## Install` section of
+NOTES.md (up to the next `## ` heading) before the notes reach the browser;
+the UI renders a small Markdown subset as text (headings, paragraphs,
+lists, code; links show their text).
+
+**Preflight wiring** (`server.UpgradePreflight`): `Supports(cluster)` and
+`Preflight(ctx, cluster, spec)`. `cmd/kwerft` implements it with the
+console's `controllers.UpgradeChecks.Kwerft(ctx, spec, "")` for `local`.
+**For the coordinator (U4):** `upgradePreflight.kubernetes` is nil, so a
+Kubernetes preflight answers one blocking check ("Kubernetes upgrades from
+the console are not available in this release."); wire U4's k3s preflight
+there. `Supports` is `local` only; remote clusters need U4's path (an
+Upgrade created in that cluster as the user through the tunnel, preflight
+with that cluster's reader and the agent's version). The API side already
+works per cluster: `cluster` in the body, `?cluster=` everywhere else,
+`clusters[].upgradable` from `Supports`, and the UI shows "Re-run the
+installer of X on its server" where it is false. "Upgrade all" has no
+endpoint yet; it fits as a server-side queue (one Upgrade per cluster
+after the console's) that U4 adds, with the UI button gated on a new
+`updates` field.
+
+**Platform-event notifications.** As B2 did for backups: an alert
+condition on Kwerft's own metric, a default rule, notification channels
+added to that rule. `UpgradeFailed` (enum value added to
+`AlertCondition`, kind `upgrade`, platform alert, no scope, severity
+critical, window default 1 day, link `/settings/updates`), default rule
+`upgrade-failed`. The metric
+`kwerft_upgrade_failed_timestamp_seconds{component,version,upgrade,result}`
+(`MetricsCollector`, every cluster) is `finishedAt` of the newest finished
+Upgrade of each component when it ended `Failed` or `RolledBack`;
+cancelled ones are passed over, and a later success removes the series.
+Expression: `time() - max by (component, version, upgrade, result)
+(kwerft_upgrade_failed_timestamp_seconds) < <window>`: it fires once per
+failed Upgrade and resolves after the window or the next success. No new
+event type: channels "subscribe" by being on the rule, as for every
+platform alert (nodes, certificates, backups).
+
+**UI.** Settings › Updates (owners and admins; the tab and the dot are
+hidden from others): Versions (cluster × component, running, available,
+Upgrade… / the active upgrade's phase, Check now with the last check),
+the progress card (installer-style: ✓, spinner, ✗, – per console check,
+backup, installer stage or node, verification, rollback; the closing line;
+Cancel while cancellable; the installer log), Release notes (Kwerft
+targets), Update policy (Off/Notify/AutoPatch, channel, Kubernetes patches,
+window with days, start, duration, time zone defaulting to the browser's),
+History (newest first, click to view). The Upgrade… dialog runs the
+preflight on open and again when "Accept a data rollback" changes, picks
+among the allowed versions, asks for the typed version on a k3s minor and
+for the password. A paused AutoPatch shows a banner with Resume (owners).
+The Overview's "Needs attention" lists "Kwerft X available" and
+"Kubernetes vX available" (info, not counted in the banner) linking to
+`/settings/updates`; the sidebar's Settings and the Updates tab get a dot.
+New token `--term-bad` (`tokens.css` and the blueprint's `:root`) for ✗
+on the terminal background.
+
+**Tests.** `internal/server/upgrades_test.go` against envtest with the
+chart's RBAC: roles (developers and viewers refused everywhere, admins
+read and check but cannot start, preflight, set, resume or cancel, and
+Kubernetes refuses admins create/patch/delete on upgrades), overview (notes
+stripped, Check now, resume, Off), policy validation and audit, start
+(validation never reaches the preflight, wrong password audited, unknown
+cluster, k3s patch vs minor confirmation, blocked preflight creates
+nothing, accepted data rollback, the created object and its audit,
+duplicates, history and detail), cancel (Backup → annotation and audit,
+Running and Succeeded → 409), SSE (first state, changes, end, a finished
+Upgrade's stream) and the log; `TestReleaseNotes`, `TestNormalizeWindow`.
+`internal/access`: the admin list against every CRD. `internal/alerting`
+and `internal/controllers`: the expression, default rule and metric.
+`web/src/updates.test.ts`: progress lines (queued, checks, backup, stages,
+verify, rollback, failures, nodes), summary, phases, typed confirmation,
+notices, window text, release notes, SSE parsing. The page was checked in
+the browser (light, dark, phone width) against the homepage's mock API
+wrapped with a simulated upgrade (dialog, wrong password, progress, the
+console's restart with "Reconnecting…", the reload offer, policy save,
+history, Overview notification and dots).
+
+**Open.**
+- Enabling AutoPatch does not ask for the password (audited only); it
+  authorizes unattended patch upgrades.
+- Admins can still change `spec.updates` with kubectl through the console's
+  proxy (RBAC cannot see the field); the console's own API refuses them.
+- The dialog does not repeat the release notes; they are in the page's
+  Release notes card.

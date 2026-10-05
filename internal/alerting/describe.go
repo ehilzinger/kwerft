@@ -59,6 +59,8 @@ func Describe(spec *kwerftv1.AlertRuleSpec) string {
 		} else {
 			s = "A backup plan has not completed a backup within twice its interval" + forPart
 		}
+	case kwerftv1.AlertUpgradeFailed:
+		s = "The latest upgrade of Kwerft or Kubernetes failed or was rolled back (fires for " + Humanize(e.Window) + ")" + forPart
 	case kwerftv1.AlertCustom:
 		s = "Custom expression" + forPart
 	}
@@ -182,6 +184,7 @@ func DefaultRules() []DefaultRule {
 		rule("build-failing", kwerftv1.AlertBuildFailing),
 		rule("backup-failing", kwerftv1.AlertBackupFailing),
 		rule("backup-missing", kwerftv1.AlertBackupMissing),
+		rule("upgrade-failed", kwerftv1.AlertUpgradeFailed),
 	}
 }
 

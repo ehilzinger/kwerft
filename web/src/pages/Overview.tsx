@@ -8,6 +8,8 @@ import { Icon } from "../components/Icon";
 import { jobs } from "../jobs";
 import { ago, workloads } from "../workloads";
 import { RouterLink, useFiringAlerts } from "./MonitoringAlerts";
+import { useUpdateNotices } from "./SettingsUpdates";
+import { noticeText } from "../updates";
 import "../styles/workloads.css";
 import "../styles/monitoring.css";
 
@@ -22,6 +24,13 @@ export function Overview() {
   const { title, detail } = attentionHeadline(attention.items);
   const worst = attention.items.some((i) => i.tone === "bad") ? "bad" : "warn";
   const alerts = attention.items.filter((i) => i.alert).length;
+  // "Kwerft 0.6.0 available": news, not an issue, so not in the banner.
+  const notices = useUpdateNotices();
+  const news: AttentionItem[] = notices.map((a) => {
+    const t = noticeText(a);
+    return { key: `update:${a.component}`, tone: "info", icon: "rocket", title: t.title, what: "available", detail: t.detail,
+      action: { label: "Open Updates", href: "/settings/updates" } };
+  });
 
   return (
     <section className="view">
@@ -52,7 +61,7 @@ export function Overview() {
           <span className="s">Detected by the installer</span>
         </div>
       </div>
-      <NeedsAttention {...attention} />
+      <NeedsAttention {...attention} items={[...attention.items, ...news]} />
     </section>
   );
 }

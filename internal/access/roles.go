@@ -7,7 +7,8 @@
 // Mapping: a console user with role R reaches Kubernetes as user
 // "kwerft:<email>" in group "kwerft:role:R" (see internal/kube). The chart
 // binds that group cluster-wide to the ClusterRole "kwerft:R": everything in
-// kwerft.dev for owners and admins, the cluster-scoped kinds only for
+// kwerft.dev for owners and admins (admins only read Upgrades), the
+// cluster-scoped kinds only for
 // developers and viewers. Each project namespace adds RoleBindings
 // (controllers.ProjectBindings): with access Team (the default) the groups
 // get "kwerft:project-developer" / "kwerft:project-viewer", "kwerft:pods-read"
@@ -110,6 +111,14 @@ const (
 	RevealSecrets = "reveal-secrets"
 	// CopySecretSets: copy a set with its values into another project.
 	CopySecretSets = "copy-secret-sets"
+	// Upgrades: start and cancel upgrades of Kwerft and Kubernetes (after
+	// the password) and change the update policy. Kubernetes holds the
+	// Upgrade objects (owners only); the policy lives in ConsoleSettings,
+	// which admins may write too, so the console checks the role for it.
+	Upgrades = "upgrades"
+	// ReadUpdates: Settings › Updates, the available releases and the
+	// upgrade history (owners and admins).
+	ReadUpdates = "updates"
 )
 
 // Matrix is the source of truth, in the order the Access page shows it.
@@ -250,6 +259,25 @@ var Matrix = []Permission{
 			{Group: "kwerft.dev", Resource: "backupplans", Verb: "patch"},
 			{Group: "kwerft.dev", Resource: "restores", Verb: "create"},
 			{Group: "velero.io", Resource: "backups", Verb: "list"},
+		},
+	},
+	{
+		// Only owners: an upgrade restarts the console and moves every
+		// cluster's platform. Admins read the Upgrades (ReadUpdates).
+		ID: Upgrades, Label: "Upgrade Kwerft and Kubernetes (after their password) and change the update policy", Enforced: ByKubernetes,
+		Grants: map[string]Grant{Owner: yes, Admin: no, Developer: no, Viewer: no},
+		Kube: []Check{
+			{Group: "kwerft.dev", Resource: "upgrades", Verb: "create"},
+			{Group: "kwerft.dev", Resource: "upgrades", Verb: "patch"},
+			{Group: "kwerft.dev", Resource: "upgrades", Verb: "delete"},
+		},
+	},
+	{
+		ID: ReadUpdates, Label: "See available updates and the upgrade history", Enforced: ByKubernetes,
+		Grants: map[string]Grant{Owner: yes, Admin: yes, Developer: no, Viewer: no},
+		Kube: []Check{
+			{Group: "kwerft.dev", Resource: "upgrades", Verb: "list"},
+			{Group: "kwerft.dev", Resource: "upgrades", Verb: "get"},
 		},
 	},
 	{

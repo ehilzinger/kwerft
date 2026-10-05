@@ -1,6 +1,7 @@
 package alerting
 
 import (
+	"slices"
 	"strings"
 	"testing"
 	"text/template"
@@ -37,6 +38,32 @@ func TestBackupExpressions(t *testing.T) {
 	}
 	if got := Describe(&kwerftv1.AlertRuleSpec{Condition: kwerftv1.AlertBackupMissing}); got != "A backup plan has not completed a backup within twice its interval" {
 		t.Errorf("describe: %s", got)
+	}
+}
+
+// Upgrade alerts are platform alerts on Kwerft's own metric, for a day
+// after the failure unless the rule says otherwise, and link to Settings ›
+// Updates.
+func TestUpgradeFailedExpression(t *testing.T) {
+	got := Expr(&kwerftv1.AlertRuleSpec{Condition: kwerftv1.AlertUpgradeFailed})
+	if got != "time() - max by (component, version, upgrade, result) (kwerft_upgrade_failed_timestamp_seconds) < 86400" {
+		t.Errorf("expr: %s", got)
+	}
+	if err := ValidateExpr(got); err != nil {
+		t.Error(err)
+	}
+	if got := Expr(&kwerftv1.AlertRuleSpec{Condition: kwerftv1.AlertUpgradeFailed, Window: Duration(time.Hour)}); !strings.HasSuffix(got, " < 3600") {
+		t.Errorf("windowed: %s", got)
+	}
+	if ferr := Validate(&kwerftv1.AlertRuleSpec{Condition: kwerftv1.AlertUpgradeFailed, Scope: kwerftv1.AlertScope{Projects: []string{"shop"}}}); ferr == nil || ferr.Field != "scope" {
+		t.Errorf("an upgrade rule took a scope: %v", ferr)
+	}
+	r, err := Render(&kwerftv1.AlertRule{ObjectMeta: metav1.ObjectMeta{Name: "upgrade-failed"}, Spec: kwerftv1.AlertRuleSpec{Condition: kwerftv1.AlertUpgradeFailed}}, "ops.example.com")
+	if err != nil || r.Annotations["console_url"] != "https://ops.example.com/settings/updates" || !strings.Contains(r.Annotations["summary"], "rolled back") {
+		t.Errorf("render: %+v %v", r, err)
+	}
+	if !slices.ContainsFunc(DefaultRules(), func(d DefaultRule) bool { return d.Name == "upgrade-failed" && d.Spec.Severity == "critical" }) {
+		t.Error("no default rule upgrade-failed")
 	}
 }
 
@@ -96,7 +123,7 @@ func TestEveryConditionRendersValidMetricsQL(t *testing.T) {
 			}
 			labels := map[string]string{"namespace": "shop", "app": "web", "pod": "web-1", "container": "web", "node": "n1",
 				"persistentvolumeclaim": "data", "schedule": "nightly", "hostname": "shop.example.com", "domain": "shop", "mountpoint": "/",
-				"plan": "cluster"}
+				"plan": "cluster", "component": "Kwerft", "version": "0.6.0", "upgrade": "kwerft-0.6.0-x7k2p", "result": "RolledBack"}
 			for k, v := range out.Annotations {
 				if got := expand(t, v, labels); got == "" || strings.Contains(got, "<no value>") {
 					t.Errorf("%s annotation %s expands to %q", info.Condition, k, got)
@@ -278,7 +305,7 @@ func TestDefaultRulesAreValid(t *testing.T) {
 			t.Errorf("%s notifies before an owner adds a channel", d.Name)
 		}
 	}
-	if !seen["crash-looping"] || !seen["backup-missing"] || len(seen) != 11 {
+	if !seen["crash-looping"] || !seen["backup-missing"] || !seen["upgrade-failed"] || len(seen) != 12 {
 		t.Errorf("defaults = %v", seen)
 	}
 }

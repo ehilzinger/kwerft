@@ -13,8 +13,10 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
+	kwerftv1 "github.com/ehilzinger/kwerft/api/v1alpha1"
 	"github.com/ehilzinger/kwerft/internal/clusters"
 	"github.com/ehilzinger/kwerft/internal/controllers"
+	"github.com/ehilzinger/kwerft/internal/server"
 	"github.com/ehilzinger/kwerft/internal/upgrades"
 	"github.com/ehilzinger/kwerft/internal/version"
 )
@@ -32,16 +34,15 @@ type upgradeOptions struct {
 	database upgrades.Snapshotter
 }
 
-// setupUpgrades adds the Upgrade reconciler (every cluster) and release
-// discovery (the console's only). The database copy runs in this process,
-// which owns the store: the controller and the console are one binary and
-// one pod (replicas: 1, leader election hands over on shutdown).
-func setupUpgrades(mgr ctrl.Manager, opt upgradeOptions) error {
-	source := &upgrades.HTTPSource{BaseURL: opt.installBaseURL}
-	self := selfImage(mgr.GetAPIReader(), opt.namespace)
+// newUpgradeChecks is the Kwerft upgrade preflight of this cluster. The
+// Upgrade controller and the console API (Settings › Updates, before it
+// creates an Upgrade) run the same checks.
+func newUpgradeChecks(mgr ctrl.Manager, opt upgradeOptions, source upgrades.Source, self func(context.Context) (controllers.SelfImage, error)) (*controllers.UpgradeChecks, error) {
+	// The API server's own endpoints (etcd health, deprecated APIs) for
+	// the Kubernetes upgrade preflight.
 	disco, err := discovery.NewDiscoveryClientForConfig(mgr.GetConfig())
 	if err != nil {
-		return err
+		return nil, err
 	}
 	checks := &controllers.UpgradeChecks{
 		Reader:    mgr.GetClient(),
@@ -51,6 +52,25 @@ func setupUpgrades(mgr ctrl.Manager, opt upgradeOptions) error {
 		Self:      self,
 		Cluster:   opt.cluster,
 		APIServer: &upgrades.APIServer{REST: disco.RESTClient()},
+	}
+	if opt.console && opt.database != nil {
+		checks.DataDir = opt.dataDir
+		checks.FreeBytes = (&upgrades.SystemdHost{Root: "/"}).FreeBytes
+	}
+	return checks, nil
+}
+
+// setupUpgrades adds the Upgrade reconciler (every cluster) and release
+// discovery (the console's only), and returns the preflight for the
+// console API. The database copy runs in this process, which owns the
+// store: the controller and the console are one binary and one pod
+// (replicas: 1, leader election hands over on shutdown).
+func setupUpgrades(mgr ctrl.Manager, opt upgradeOptions) (*controllers.UpgradeChecks, error) {
+	source := &upgrades.HTTPSource{BaseURL: opt.installBaseURL}
+	self := selfImage(mgr.GetAPIReader(), opt.namespace)
+	checks, err := newUpgradeChecks(mgr, opt, source, self)
+	if err != nil {
+		return nil, err
 	}
 	r := &controllers.UpgradeReconciler{
 		Client: mgr.GetClient(), APIReader: mgr.GetAPIReader(), Namespace: opt.namespace,
@@ -65,17 +85,40 @@ func setupUpgrades(mgr ctrl.Manager, opt upgradeOptions) error {
 	r.Kubernetes = &controllers.KubernetesUpgrader{Client: mgr.GetClient(), Checks: checks, Runner: r, Namespace: opt.namespace}
 	if opt.console && opt.database != nil {
 		r.Database, r.DataDir = opt.database, opt.dataDir
-		checks.DataDir = opt.dataDir
-		checks.FreeBytes = (&upgrades.SystemdHost{Root: "/"}).FreeBytes
 	}
 	if err := r.SetupWithManager(mgr); err != nil {
-		return err
+		return nil, err
 	}
 	if !opt.console {
-		return nil
+		return checks, nil
 	}
-	return (&controllers.UpdatesReconciler{Client: mgr.GetClient(), Source: source,
+	return checks, (&controllers.UpdatesReconciler{Client: mgr.GetClient(), Source: source,
 		Version: strings.TrimPrefix(version.Version, "v")}).SetupWithManager(mgr)
+}
+
+// upgradePreflight is the console API's preflight (server.UpgradePreflight):
+// the Upgrade controller's own checks, run before the API creates an
+// Upgrade.
+type upgradePreflight struct {
+	local *controllers.UpgradeChecks
+}
+
+// Supports: the local cluster only so far.
+// TODO(U4): remote clusters (an Upgrade created there through the tunnel,
+// checked with that cluster's reader and the agent's version).
+func (p *upgradePreflight) Supports(cluster string) bool { return cluster == clusters.Local }
+
+func (p *upgradePreflight) Preflight(ctx context.Context, cluster string, spec kwerftv1.UpgradeSpec) ([]kwerftv1.UpgradeCheck, error) {
+	if !p.Supports(cluster) {
+		return nil, server.ErrUpgradeUnsupported
+	}
+	switch spec.Component {
+	case kwerftv1.UpgradeKwerft:
+		return p.local.Kwerft(ctx, spec, ""), nil
+	case kwerftv1.UpgradeKubernetes:
+		return p.local.Kubernetes(ctx, spec, ""), nil
+	}
+	return nil, fmt.Errorf("unknown component %q", spec.Component)
 }
 
 // selfImage reads the console's own pod (POD_NAME, set by the chart): the

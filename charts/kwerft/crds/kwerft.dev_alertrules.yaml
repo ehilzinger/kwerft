@@ -86,6 +86,7 @@ spec:
                 - HTTPLatency
                 - BackupFailing
                 - BackupMissing
+                - UpgradeFailed
                 - Custom
                 type: string
               disabled:
