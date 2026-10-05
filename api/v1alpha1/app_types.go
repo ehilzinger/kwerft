@@ -79,7 +79,8 @@ type AppPort struct {
 	// +kubebuilder:validation:Maximum=65535
 	Container int32 `json:"container"`
 
-	// Public is a hostname served over HTTPS, e.g. api.example.com.
+	// Public is a hostname served over HTTPS, e.g. api.example.com. For a
+	// second hostname, list the same container port again with it.
 	// +optional
 	Public string `json:"public,omitempty"`
 

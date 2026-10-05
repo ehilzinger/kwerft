@@ -284,7 +284,9 @@ spec:
                       - UDP
                       type: string
                     public:
-                      description: Public is a hostname served over HTTPS, e.g. api.example.com.
+                      description: |-
+                        Public is a hostname served over HTTPS, e.g. api.example.com. For a
+                        second hostname, list the same container port again with it.
                       type: string
                   required:
                   - container

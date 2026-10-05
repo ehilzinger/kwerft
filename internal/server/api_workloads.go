@@ -537,16 +537,40 @@ func validateSpec(w http.ResponseWriter, spec *kwerftv1.AppSpec) bool {
 			return false
 		}
 	}
-	seen := map[int32]bool{}
+	// A port may be listed again with another public hostname (one site under
+	// two names); the same port and hostname twice, or one hostname on two
+	// ports, is a mistake.
+	type portKey struct {
+		port     int32
+		protocol string
+		public   string
+	}
+	seen := map[portKey]bool{}
+	hosts := map[string]int32{}
 	for i, port := range spec.Ports {
-		if seen[port.Container] {
-			invalid(w, fmt.Sprintf("spec.ports[%d].container", i), fmt.Sprintf("Port %d is listed twice.", port.Container))
+		key := portKey{port.Container, string(port.Protocol), port.Public}
+		if key.protocol == "" {
+			key.protocol = "TCP"
+		}
+		if seen[key] {
+			msg := fmt.Sprintf("Port %d is listed twice.", port.Container)
+			if port.Public != "" {
+				msg = fmt.Sprintf("Port %d with %s is listed twice.", port.Container, port.Public)
+			}
+			invalid(w, fmt.Sprintf("spec.ports[%d].container", i), msg)
 			return false
 		}
-		seen[port.Container] = true
+		seen[key] = true
 		if port.Public != "" && (len(port.Public) > 253 || !hostnameRE.MatchString(port.Public)) {
 			invalid(w, fmt.Sprintf("spec.ports[%d].public", i), fmt.Sprintf("%q is not a valid hostname. Use lowercase, like app.example.com.", port.Public))
 			return false
+		}
+		if port.Public != "" {
+			if other, dup := hosts[port.Public]; dup && other != port.Container {
+				invalid(w, fmt.Sprintf("spec.ports[%d].public", i), fmt.Sprintf("%s is already served by port %d.", port.Public, other))
+				return false
+			}
+			hosts[port.Public] = port.Container
 		}
 	}
 	return true

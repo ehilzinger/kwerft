@@ -661,6 +661,12 @@ func TestValidationErrorsNameTheField(t *testing.T) {
 			"source": map[string]any{"image": map[string]any{"ref": "nginx"}}, "env": []map[string]string{{"name": "1=bad", "value": "x"}}}}, "spec.env[0].name"},
 		{"bad hostname", map[string]any{"name": "host", "spec": map[string]any{
 			"source": map[string]any{"image": map[string]any{"ref": "nginx"}}, "ports": []map[string]any{{"container": 80, "public": "Not A Host"}}}}, "spec.ports[0].public"},
+		{"port twice", map[string]any{"name": "twice", "spec": map[string]any{
+			"source": map[string]any{"image": map[string]any{"ref": "nginx"}}, "ports": []map[string]any{{"container": 80}, {"container": 80}}}}, "spec.ports[1].container"},
+		{"port and hostname twice", map[string]any{"name": "twice-host", "spec": map[string]any{
+			"source": map[string]any{"image": map[string]any{"ref": "nginx"}}, "ports": []map[string]any{{"container": 80, "public": "a.example.com"}, {"container": 80, "public": "a.example.com"}}}}, "spec.ports[1].container"},
+		{"hostname on two ports", map[string]any{"name": "two-ports", "spec": map[string]any{
+			"source": map[string]any{"image": map[string]any{"ref": "nginx"}}, "ports": []map[string]any{{"container": 80, "public": "a.example.com"}, {"container": 81, "public": "a.example.com"}}}}, "spec.ports[1].public"},
 	} {
 		var e apiError
 		code := c.dev.do(t, "POST", "/api/v1/projects/checks/apps", tc.body, &e)
@@ -668,6 +674,13 @@ func TestValidationErrorsNameTheField(t *testing.T) {
 		if code != http.StatusUnprocessableEntity || e.Field != tc.field || e.Error == "" {
 			t.Errorf("%s: %d %+v, want 422 on %s", tc.name, code, e, tc.field)
 		}
+	}
+	// One port under two hostnames is allowed.
+	twoNames := map[string]any{"name": "two-names", "spec": map[string]any{
+		"source": map[string]any{"image": map[string]any{"ref": "nginx"}},
+		"ports":  []map[string]any{{"container": 80, "public": "a.example.com"}, {"container": 80, "public": "b.example.com"}}}}
+	if code := c.dev.do(t, "POST", "/api/v1/projects/checks/apps", twoNames, nil); code != http.StatusCreated {
+		t.Errorf("one port, two hostnames: %d, want 201", code)
 	}
 	var e apiError
 	if code := c.dev.do(t, "POST", "/api/v1/projects/checks/apps", map[string]any{"name": "x", "spec": map[string]any{"imagee": 1}}, &e); code != http.StatusBadRequest {

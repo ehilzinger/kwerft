@@ -237,7 +237,7 @@ function Overview({ app, canDeploy, onRollback }: { app: App; canDeploy: boolean
         <h3>Reachable at</h3>
         <div className="list">
           {ports.filter((p) => p.public).map((p) => (
-            <div className="li" key={`pub-${p.container}`}>
+            <div className="li" key={`pub-${p.container}-${p.public}`}>
               <span className="ico ok"><Icon name="shield" /></span>
               <div><b><a href={`https://${p.public}`} target="_blank" rel="noreferrer">https://{p.public}</a></b><p>→ port {p.container} · certificate from Let's Encrypt</p></div>
             </div>

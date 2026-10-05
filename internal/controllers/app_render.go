@@ -166,7 +166,7 @@ func (a *appRender) statefulSet() *appsv1ac.StatefulSetApplyConfiguration {
 
 func (a *appRender) service() *corev1ac.ServiceApplyConfiguration {
 	spec := corev1ac.ServiceSpec().WithSelector(a.selector)
-	for _, p := range a.app.Spec.Ports {
+	for _, p := range uniquePorts(a.app.Spec.Ports) {
 		spec.WithPorts(corev1ac.ServicePort().
 			WithName(portName(p)).
 			WithPort(p.Container).
@@ -204,12 +204,22 @@ func (a *appRender) domains() map[string]*kwerftv1ac.DomainApplyConfiguration {
 // this is what keeps one project from serving another's hostname.
 func (a *appRender) routes(listeners map[string]string) map[string]*gwv1ac.HTTPRouteApplyConfiguration {
 	out := map[string]*gwv1ac.HTTPRouteApplyConfiguration{}
+	onPort := map[int32]int{} // hostnames seen per container port
 	for _, p := range a.app.Spec.Ports {
-		listener, held := listeners[p.Public]
-		if p.Public == "" || !held {
+		if p.Public == "" {
 			continue
 		}
+		// Named by port, as before a port could have two hostnames; a
+		// further hostname on the same port is <app>-<port>-<n>, n from 2.
+		onPort[p.Container]++
 		name := fmt.Sprintf("%s-%d", a.app.Name, p.Container)
+		if n := onPort[p.Container]; n > 1 {
+			name = fmt.Sprintf("%s-%d", name, n)
+		}
+		listener, held := listeners[p.Public]
+		if !held {
+			continue
+		}
 		out[name] = a.route(name, listener, p.Public, gwv1ac.HTTPRouteRule().
 			WithBackendRefs(gwv1ac.HTTPBackendRef().
 				WithName(gwv1.ObjectName(a.app.Name)).
@@ -284,6 +294,21 @@ func protocol(p kwerftv1.AppPort) corev1.Protocol {
 		return corev1.ProtocolTCP
 	}
 	return p.Protocol
+}
+
+// uniquePorts is ports with each container port and protocol once: a port
+// listed again for a second hostname is still one port of the Service and
+// the container.
+func uniquePorts(ports []kwerftv1.AppPort) []kwerftv1.AppPort {
+	seen := map[string]bool{}
+	out := make([]kwerftv1.AppPort, 0, len(ports))
+	for _, p := range ports {
+		if !seen[portName(p)] {
+			seen[portName(p)] = true
+			out = append(out, p)
+		}
+	}
+	return out
 }
 
 func portName(p kwerftv1.AppPort) string {

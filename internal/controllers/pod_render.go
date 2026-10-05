@@ -74,7 +74,7 @@ func (p *podShape) containerConfig() *corev1ac.ContainerApplyConfiguration {
 	for _, e := range p.env {
 		c.WithEnv(envVar(e))
 	}
-	for _, port := range p.ports {
+	for _, port := range uniquePorts(p.ports) {
 		c.WithPorts(corev1ac.ContainerPort().WithContainerPort(port.Container).WithProtocol(protocol(port)))
 	}
 	if hc := p.healthCheck; hc != nil {

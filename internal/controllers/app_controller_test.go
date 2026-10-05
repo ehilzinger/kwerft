@@ -153,6 +153,49 @@ func TestAppRendersDeploymentServiceRouteAndPolicy(t *testing.T) {
 	}
 }
 
+// One port under two hostnames (a site moving to a new name): one Service
+// and container port, a Domain and a route per hostname, the first route
+// keeping the name it had before the second hostname was added.
+func TestAppPortWithTwoHostnames(t *testing.T) {
+	requireEnvtest(t)
+	ctx := context.Background()
+	projectNamespace(t, "moving")
+	spec := imageApp("ghcr.io/acme/edge:1")
+	spec.Ports = []kwerftv1.AppPort{
+		{Container: 8080, Public: "next.example.com"},
+		{Container: 8080, Public: "www.example.com"},
+	}
+	app := createApp(t, "moving", "edge", spec)
+	app = waitForApp(t, app, "Progressing")
+
+	var svc corev1.Service
+	if err := k8s.Get(ctx, client.ObjectKey{Namespace: "moving", Name: "edge"}, &svc); err != nil {
+		t.Fatal(err)
+	}
+	if len(svc.Spec.Ports) != 1 || svc.Spec.Ports[0].Port != 8080 {
+		t.Errorf("service ports = %+v, want 8080 once", svc.Spec.Ports)
+	}
+	var d appsv1.Deployment
+	if err := k8s.Get(ctx, client.ObjectKey{Namespace: "moving", Name: "edge"}, &d); err != nil {
+		t.Fatal(err)
+	}
+	if ports := d.Spec.Template.Spec.Containers[0].Ports; len(ports) != 1 {
+		t.Errorf("container ports = %+v, want 8080 once", ports)
+	}
+	for name, host := range map[string]string{"edge-8080": "next.example.com", "edge-8080-2": "www.example.com"} {
+		route := getRoute(t, "moving", name)
+		if len(route.Spec.Hostnames) != 1 || string(route.Spec.Hostnames[0]) != host {
+			t.Errorf("route %s hostnames = %v, want %s", name, route.Spec.Hostnames, host)
+		}
+		if pr := route.Spec.ParentRefs[0]; pr.SectionName == nil || string(*pr.SectionName) != ListenerName(host) {
+			t.Errorf("route %s parentRef = %+v, want %s's listener", name, pr, host)
+		}
+	}
+	if len(app.Status.URLs) != 2 {
+		t.Errorf("urls = %v, want both hostnames", app.Status.URLs)
+	}
+}
+
 // Apps with ports keep serving for drainSeconds after they are told to stop,
 // by the kubelet's own sleep (distroless images have none), and get the usual
 // 30 seconds to exit after that. Apps without ports stop at once.
