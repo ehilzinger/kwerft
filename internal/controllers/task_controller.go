@@ -51,8 +51,9 @@ const (
 // ttlSecondsAfterFinished, together with its Job and pods.
 type TaskReconciler struct {
 	client.Client
-	// APIReader reads pods (and confirms a missing Job) from the API server,
-	// so Kwerft does not cache every pod in the cluster.
+	// APIReader reads pods and their events (and confirms a missing Job)
+	// from the API server, so Kwerft does not cache every pod in the
+	// cluster.
 	APIReader client.Reader
 	// Now returns the current time; nil means time.Now.
 	Now func() time.Time
@@ -93,6 +94,10 @@ func (r *TaskReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 			return ctrl.Result{}, nil
 		}
 		return ctrl.Result{}, err
+	}
+	if task.Status.Phase == kwerftv1.TaskPending && task.Status.Job != "" {
+		// The pod may wait for a disk; that only shows in events.
+		return ctrl.Result{RequeueAfter: volumeWaitRequeue}, nil
 	}
 	return r.expire(ctx, &task)
 }
@@ -302,6 +307,10 @@ func (r *TaskReconciler) observe(ctx context.Context, task *kwerftv1.Task, job *
 	// The pod waits in ContainerCreating for a Secret it mounts.
 	if missing := missingSecrets(ctx, r.APIReader, task.Namespace, job.Spec.Template.Spec.Volumes); len(missing) > 0 {
 		msg = "Waiting for the pod to start: " + secretsMissing(missing)
+	} else if pod != nil {
+		if w := volumeWait(ctx, r.APIReader, []corev1.Pod{*pod}); w != "" {
+			msg = "Waiting for the pod to start: " + w
+		}
 	}
 	setReady(&st.Conditions, task.Generation, metav1.ConditionFalse, "Pending", msg)
 	return nil

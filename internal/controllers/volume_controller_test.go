@@ -109,9 +109,12 @@ func TestAppMountsSharedVolumeAsDeployment(t *testing.T) {
 		t.Errorf("no StatefulSet expected (err=%v)", err)
 	}
 	pod := d.Spec.Template
+	// Read-only in the container only: a read-only claim would have the CSI
+	// driver mount the device read-only on the node, and a Hetzner Cloud
+	// Volume could then not be mounted read-write there by another pod.
 	if len(pod.Spec.Volumes) != 1 || pod.Spec.Volumes[0].PersistentVolumeClaim == nil ||
-		pod.Spec.Volumes[0].PersistentVolumeClaim.ClaimName != "uploads" || !pod.Spec.Volumes[0].PersistentVolumeClaim.ReadOnly {
-		t.Errorf("pod volumes = %+v", pod.Spec.Volumes)
+		pod.Spec.Volumes[0].PersistentVolumeClaim.ClaimName != "uploads" || pod.Spec.Volumes[0].PersistentVolumeClaim.ReadOnly {
+		t.Errorf("pod volumes = %+v, want the claim mounted read-write", pod.Spec.Volumes)
 	}
 	m := pod.Spec.Containers[0].VolumeMounts
 	if len(m) != 1 || m[0].MountPath != "/srv/uploads" || m[0].Name != pod.Spec.Volumes[0].Name || !m[0].ReadOnly {

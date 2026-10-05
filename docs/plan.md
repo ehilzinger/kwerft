@@ -164,7 +164,16 @@ Exit codes: 0 ok · 2 usage · 10 preflight · 20 network/DNS · 30 Kubernetes �
 - **Shared volumes:** a `Volume` is a ReadWriteOnce disk that Apps and Tasks
   mount by name (`volumes: [{path, volume}]`); an entry with `size` stays a
   per-replica disk. Pods sharing a Volume prefer one node. Deleting a
-  mounted Volume waits (finalizer, reason `InUse`).
+  mounted Volume waits (finalizer, reason `InUse`). `readOnly` makes only
+  the container's mount read-only, never the claim (2026-10-05): the Hetzner
+  Cloud CSI driver mounts the device itself for every pod (no staging
+  mount), so a read-only claim made the node's filesystem read-only and
+  every read-write mount after it failed with EBUSY. Pods waiting for a disk
+  show the kubelet's FailedMount or FailedAttachVolume event in the App's
+  and Task's Ready message (re-read every 30 s); for EBUSY it names the pods
+  still holding the Volume read-only from before. Upgrading rolls Apps with
+  a read-only shared Volume once; on Hetzner Cloud Volumes that rollout
+  waits behind the old read-only replicas, so stop and start those Apps.
 - **Secrets as files:** `volumes: [{path, secret, mode}]` mounts a Secret of
   the namespace read-only, one file per key (SSH and deploy keys, rclone
   configs); Apps and Tasks (and `fromApp` Tasks, which inherit the App's).

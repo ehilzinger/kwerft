@@ -38,8 +38,9 @@ type AppReconciler struct {
 	// retention keeps them; nil leaves the registry alone.
 	Registry *RegistryKeeper
 	// APIReader reads the Secrets an App's env references (the secrets
-	// hash, SecretMissing) and looks up the ones it mounts while its
-	// replicas are not ready, to say which one is missing; nil skips both.
+	// hash, SecretMissing) and, while its replicas are not ready, looks up
+	// the ones it mounts, to say which one is missing, and its pods' events,
+	// to say why a disk does not mount; nil skips all of it.
 	APIReader client.Reader
 }
 
@@ -77,7 +78,29 @@ func (r *AppReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.R
 			return ctrl.Result{RequeueAfter: 5 * time.Minute}, nil
 		}
 	}
+	if err == nil && ready != nil && ready.reason == "Progressing" && mountsDisk(&app) {
+		// A replica may wait for its disk; that only shows in events.
+		return ctrl.Result{RequeueAfter: volumeWaitRequeue}, nil
+	}
 	return ctrl.Result{}, err
+}
+
+// mountsDisk tells whether the App's pods mount a disk (its own or a shared
+// Volume), which they may wait in ContainerCreating for.
+func mountsDisk(app *kwerftv1.App) bool {
+	return slices.ContainsFunc(app.Spec.Volumes, func(v kwerftv1.AppVolume) bool { return v.Secret == "" })
+}
+
+// volumeWait says why the App's replicas wait for a disk (see volumeWait).
+func (r *AppReconciler) volumeWait(ctx context.Context, app *kwerftv1.App) string {
+	if r.APIReader == nil {
+		return ""
+	}
+	var pods corev1.PodList
+	if err := r.APIReader.List(ctx, &pods, client.InNamespace(app.Namespace), client.MatchingLabels{LabelApp: app.Name}); err != nil {
+		return ""
+	}
+	return volumeWait(ctx, r.APIReader, pods.Items)
 }
 
 type readiness struct {
@@ -209,6 +232,10 @@ func (r *AppReconciler) reconcile(ctx context.Context, app *kwerftv1.App) (*read
 		msg := fmt.Sprintf("%d/%d replicas ready", readyReplicas, want)
 		if missing := missingSecrets(ctx, r.APIReader, app.Namespace, podVolumes); len(missing) > 0 {
 			msg += ": " + secretsMissing(missing)
+		} else if mountsDisk(app) {
+			if w := r.volumeWait(ctx, app); w != "" {
+				msg += ": " + w
+			}
 		}
 		return &readiness{metav1.ConditionFalse, "Progressing", msg}, nil
 	}
