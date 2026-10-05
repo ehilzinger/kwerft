@@ -485,7 +485,7 @@ func newManager(log *slog.Logger, leaderElect bool, metricsListen, privateNetwor
 	if err := (&controllers.BackupPlanReconciler{Client: mgr.GetClient()}).SetupWithManager(mgr); err != nil {
 		return nil, err
 	}
-	if err := (&controllers.RestoreReconciler{Client: mgr.GetClient()}).SetupWithManager(mgr); err != nil {
+	if err := (&controllers.RestoreReconciler{Client: mgr.GetClient(), APIReader: mgr.GetAPIReader()}).SetupWithManager(mgr); err != nil {
 		return nil, err
 	}
 	return mgr, nil

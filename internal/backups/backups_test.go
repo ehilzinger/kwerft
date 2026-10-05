@@ -5,6 +5,9 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
+	"crypto/md5"
+	"encoding/base64"
+	"encoding/hex"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -79,6 +82,11 @@ type fakeS3 struct {
 	readOnly bool
 	objects  map[string]string
 	requests []string
+	// sse: the SSE-C key's MD5 per object; noSSE plays a store that
+	// ignores the headers, refuseSSE one that rejects them.
+	sse       map[string]string
+	noSSE     bool
+	refuseSSE bool
 }
 
 func (f *fakeS3) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -113,10 +121,26 @@ func (f *fakeS3) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte(b.String()))
 	case r.Method == "PUT" && f.readOnly:
 		fail(403, "AccessDenied")
+	case r.Method == "PUT" && f.refuseSSE && r.Header.Get(HeaderSSECKey) != "":
+		fail(501, "NotImplemented")
 	case r.Method == "PUT":
 		var buf bytes.Buffer
 		_, _ = buf.ReadFrom(r.Body)
 		f.objects[key] = buf.String()
+		if f.sse == nil {
+			f.sse = map[string]string{}
+		}
+		if !f.noSSE {
+			f.sse[key] = r.Header.Get(HeaderSSECKeyMD5)
+		}
+	case r.Method == "GET":
+		if _, ok := f.objects[key]; !ok {
+			fail(404, "NoSuchKey")
+		} else if f.sse[key] != "" && r.Header.Get(HeaderSSECKeyMD5) != f.sse[key] {
+			fail(400, "InvalidRequest")
+		} else {
+			_, _ = w.Write([]byte(f.objects[key]))
+		}
 	case r.Method == "DELETE":
 		delete(f.objects, key)
 		w.WriteHeader(204)
@@ -137,7 +161,11 @@ func TestCheck(t *testing.T) {
 	if err != nil || res.HasObjects {
 		t.Fatalf("empty bucket: %+v %v", res, err)
 	}
-	if len(f.objects) != 0 || len(f.requests) != 3 || !strings.HasPrefix(f.requests[1], "PUT /acme/ops.example.com/.kwerft-check-") {
+	// List, write with SSE-C, read without the key (refused) and with it,
+	// delete.
+	if len(f.objects) != 0 || len(f.requests) != 5 || !strings.HasPrefix(f.requests[1], "PUT /acme/ops.example.com/.kwerft-check-") ||
+		!strings.HasPrefix(f.requests[2], "GET /acme/ops.example.com/.kwerft-check-") || !strings.HasPrefix(f.requests[3], "GET /acme/ops.example.com/.kwerft-check-") ||
+		!strings.HasPrefix(f.requests[4], "DELETE ") {
 		t.Errorf("left %v after %v", f.objects, f.requests)
 	}
 	f.objects["ops.example.com/velero/backups/x"] = "1"
@@ -159,6 +187,71 @@ func TestCheck(t *testing.T) {
 	_, err = c.Check(ctx, target, Credentials{AccessKey: "AK", SecretKey: "SK"})
 	if !errors.As(err, &ce) || ce.Step != ErrWrite {
 		t.Errorf("read-only: %v", err)
+	}
+	f.readOnly = false
+
+	// A store that ignores SSE-C keeps objects readable without the key;
+	// one that rejects the headers cannot hold Velero's objects either.
+	f.noSSE = true
+	_, err = c.Check(ctx, target, Credentials{AccessKey: "AK", SecretKey: "SK"})
+	if !errors.As(err, &ce) || ce.Step != ErrEncrypt || !errors.Is(err, ErrNotEncrypted) || len(f.objects) != 1 {
+		t.Errorf("SSE-C ignored: %v, left %v", err, f.objects)
+	}
+	f.noSSE, f.refuseSSE = false, true
+	_, err = c.Check(ctx, target, Credentials{AccessKey: "AK", SecretKey: "SK"})
+	if !errors.As(err, &ce) || ce.Step != ErrEncrypt || !errors.As(err, &se) || se.Code != "NotImplemented" {
+		t.Errorf("SSE-C refused: %v", err)
+	}
+}
+
+// The SSE-C key of a recovery key: HKDF-SHA256 as sse.go says. The same
+// vector is in install/test/install.bats (sse_customer_key), so the
+// installer's --restore derives the key the console writes.
+func TestSSECustomerKey(t *testing.T) {
+	const want = "be0a7fb9dc10ee8cdbe36ee51a34a723ea6b6ab9c6d87aa824d051b73e4d7e50"
+	for _, in := range []string{
+		"abcd-efgh-ijkl-mnop-qrst-uvwx-yz23-4567-abcd-efgh-ijkl-mnop-qrst",
+		"ABCDEFGHIJKLMNOPQRSTUVWXYZ234567ABCDEFGHIJKLMNOPQRST\n",
+	} {
+		k, err := SSECustomerKey(in)
+		if err != nil || hex.EncodeToString(k) != want {
+			t.Errorf("%q: %x %v, want %s", in, k, err, want)
+		}
+	}
+	if _, err := SSECustomerKey("not a key"); !errors.Is(err, ErrRecoveryKey) {
+		t.Errorf("not a key: %v", err)
+	}
+	// Two keys, two SSE-C keys; never the repository password itself.
+	a, _ := SSECustomerKey(NewRecoveryKey())
+	b, _ := SSECustomerKey(NewRecoveryKey())
+	if len(a) != SSEKeyBytes || bytes.Equal(a, b) {
+		t.Errorf("keys %x %x", a, b)
+	}
+
+	h := http.Header{}
+	key, _ := hex.DecodeString(want)
+	SetSSEC(h, key)
+	if h.Get(HeaderSSECAlgorithm) != "AES256" || h.Get(HeaderSSECKey) != "vgp/udwQ7ozb427lGjSnI+prarnG2HqoJNBRtz5NflA=" ||
+		h.Get("x-amz-server-side-encryption-customer-key-md5") != md5Base64(key) {
+		t.Errorf("headers %v", h)
+	}
+}
+
+func md5Base64(b []byte) string {
+	sum := md5.Sum(b) //nolint:gosec // S3's SSE-C checksum
+	return base64.StdEncoding.EncodeToString(sum[:])
+}
+
+func TestPresignedWithSSEC(t *testing.T) {
+	for u, want := range map[string]bool{
+		"https://fsn1.your-objectstorage.com/b/k?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-SignedHeaders=host%3Bx-amz-server-side-encryption-customer-algorithm%3Bx-amz-server-side-encryption-customer-key%3Bx-amz-server-side-encryption-customer-key-md5": true,
+		"https://fsn1.your-objectstorage.com/b/k?X-Amz-SignedHeaders=host": false,
+		"https://fsn1.your-objectstorage.com/b/k":                          false,
+		"::": false,
+	} {
+		if got := PresignedWithSSEC(u); got != want {
+			t.Errorf("%s: %v", u, got)
+		}
 	}
 }
 

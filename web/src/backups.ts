@@ -231,10 +231,11 @@ export function recoveryKeyFile(key: string, host: string, at: Date): string {
     `Console: ${host}`,
     `Created: ${at.toISOString()}`,
     "",
-    "Backups of this console cannot be read without this key: it encrypts the",
-    "volume data in the bucket. Keep it somewhere safe outside this server (a",
-    "password manager). To rebuild the console on a new server, give it to",
-    "install.sh --restore as backups.recoveryKeyFile.",
+    "Backups of this console cannot be read without this key: everything Velero",
+    "writes to the bucket is encrypted with it (volume data with Kopia, all",
+    "other objects with a key derived from it, SSE-C). Keep it somewhere safe",
+    "outside this server (a password manager). To rebuild the console on a new",
+    "server, give this file to install.sh --restore as backups.recoveryKeyFile.",
     "",
   ].join("\n");
 }
