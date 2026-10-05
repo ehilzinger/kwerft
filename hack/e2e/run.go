@@ -10,13 +10,12 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
-
-	corev1 "k8s.io/api/core/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	kwerftv1 "github.com/ehilzinger/kwerft/api/v1alpha1"
 )
@@ -30,18 +29,52 @@ const (
 
 	whoamiImage  = "docker.io/traefik/whoami:v1.11.0"
 	busyboxImage = "docker.io/library/busybox:1.37"
+
+	// The Kwerft chart (install.sh KWERFT_CHART_REPO).
+	defaultChartRef = "oci://ghcr.io/ehilzinger/charts/kwerft"
+	// Where a console looks for releases by default
+	// (upgrades.DefaultInstallBaseURL).
+	defaultInstallBase = "https://raw.githubusercontent.com/ehilzinger/kwerft-install/main"
 )
 
+// Let's Encrypt's staging roots: joined nodes fetch their join material
+// from the console over HTTPS with curl, which must trust the staging
+// certificate of the e2e console
+// (https://letsencrypt.org/docs/staging-environment/).
+var defaultStagingRoots = []string{
+	"https://letsencrypt.org/certs/staging/letsencrypt-stg-root-x1.pem",
+	"https://letsencrypt.org/certs/staging/letsencrypt-stg-root-x2.pem",
+}
+
 // Exit codes of install.sh (its public contract) by name, for messages.
-var installerExit = map[int]string{2: "usage", 10: "preflight", 20: "network/DNS", 30: "Kubernetes", 40: "platform", 50: "Kwerft"}
+var installerExit = map[int]string{2: "usage", 10: "preflight", 20: "network/DNS", 30: "Kubernetes", 40: "platform", 50: "Kwerft", 60: "restore"}
+
+// What a run does.
+const (
+	modeFresh   = "fresh"   // install -version
+	modeUpgrade = "upgrade" // install -from, re-run the installer of -version
+	modeConsole = "console" // install -from, upgrade through the console's API
+	modeFault   = "fault"   // as console, with a failure injected after the Kwerft stage
+	modeK3s     = "k3s"     // 1 + workers nodes, a Kubernetes upgrade through the console
+	modeRestore = "restore" // back up, delete the server, install.sh --restore on a new one
+)
 
 type config struct {
 	Token   string
 	APIBase string
 
 	Version string // under test, without "v"
-	From    string // previous release for the upgrade path; "" = fresh install
+	From    string // previous release for the upgrade paths; "" = fresh install
 	RunID   string
+
+	ViaConsole bool // upgrade From → Version through POST /api/v1/upgrades
+	Fault      bool // ViaConsole with the runner's fault injection: expect RolledBack
+	K3s        bool // a Kubernetes upgrade on 1 + Workers nodes
+	K3sFrom    string
+	K3sTo      string
+	Workers    int
+	Restore    bool // the backup exit criterion
+	S3         s3Config
 
 	ServerTypes []string
 	Locations   []string
@@ -51,24 +84,71 @@ type config struct {
 	InstallerURL string
 	GitRepo      string
 	GitBranch    string
+	ChartRef     string
+	StagingRoots []string
 
 	Timeout        time.Duration // the whole run, cleanup excluded
 	InstallTimeout time.Duration // one installer run
 	Poll           time.Duration // between checks while waiting
+	ProbeEvery     time.Duration // between requests to an App during an upgrade
+	MaxGap         time.Duration // fail when an App was away longer; 0 only reports
 }
 
 func (c config) installerURL(version string) string {
 	return strings.ReplaceAll(c.InstallerURL, "{version}", version)
 }
 
+// installBase is the install repository's base URL the console reads
+// releases from, as the installer URL implies; "" when it cannot tell.
+func (c config) installBase() string {
+	base, ok := strings.CutSuffix(c.InstallerURL, "/v{version}/install.sh")
+	if !ok {
+		return ""
+	}
+	return base
+}
+
+func (c config) mode() string {
+	switch {
+	case c.Restore:
+		return modeRestore
+	case c.K3s:
+		return modeK3s
+	case c.Fault:
+		return modeFault
+	case c.ViaConsole:
+		return modeConsole
+	case c.From != "":
+		return modeUpgrade
+	}
+	return modeFresh
+}
+
 func (c config) scenario() string {
-	if c.From != "" {
+	switch c.mode() {
+	case modeUpgrade:
 		return fmt.Sprintf("Upgrade from v%s to v%s", c.From, c.Version)
+	case modeConsole:
+		return fmt.Sprintf("Upgrade from v%s to v%s through the console", c.From, c.Version)
+	case modeFault:
+		return fmt.Sprintf("Upgrade from v%s to v%s through the console with a failure injected after the Kwerft stage", c.From, c.Version)
+	case modeK3s:
+		return fmt.Sprintf("Kubernetes upgrade through the console on %d nodes with v%s (k3s %s → %s)", c.Workers+1, c.Version,
+			cmpOr(c.K3sFrom, "one patch behind the pin"), cmpOr(c.K3sTo, "the release's pin"))
+	case modeRestore:
+		return fmt.Sprintf("Backup of v%s restored onto a new server", c.Version)
 	}
 	return fmt.Sprintf("Fresh install of v%s", c.Version)
 }
 
 func (c config) serverName() string { return "kwerft-e2e-" + c.RunID }
+
+func (c config) workerName(i int) string { return fmt.Sprintf("%s-w%d", c.serverName(), i) }
+
+// restoredName is the server the restore run installs from the backup.
+func (c config) restoredName() string { return c.serverName() + "-b" }
+
+var k3sVersionRE = regexp.MustCompile(`^v[0-9]+\.[0-9]+\.[0-9]+(-rc[0-9]+)?\+k3s[0-9]+$`)
 
 func (c config) validate() error {
 	switch {
@@ -84,6 +164,24 @@ func (c config) validate() error {
 		return fmt.Errorf("-run-id %q must be a short label value (letters, digits, -, _ and .)", c.RunID)
 	case len(c.ServerTypes) == 0 || len(c.Locations) == 0 || len(c.Images) == 0:
 		return errors.New("-server-types, -locations and -images must not be empty")
+	case (c.ViaConsole || c.Fault) && c.From == "":
+		return errors.New("-via-console and -fault upgrade from the release -from: give it")
+	case c.K3s && (c.From != "" || c.Restore):
+		return errors.New("-k3s installs -version fresh: it does not combine with -from, -via-console, -fault or -restore")
+	case c.Restore && c.From != "":
+		return errors.New("-restore installs -version fresh: it does not combine with -from, -via-console or -fault")
+	case !c.K3s && (c.K3sFrom != "" || c.K3sTo != ""):
+		return errors.New("-k3s-from and -k3s-to need -k3s")
+	case c.K3s && (c.Workers < 1 || c.Workers > 5):
+		return fmt.Errorf("-workers %d: from 1 to 5", c.Workers)
+	case c.K3sFrom != "" && !k3sVersionRE.MatchString(c.K3sFrom):
+		return fmt.Errorf("-k3s-from %q is not a k3s version like v1.37.0+k3s1", c.K3sFrom)
+	case c.K3sTo != "" && !k3sVersionRE.MatchString(c.K3sTo):
+		return fmt.Errorf("-k3s-to %q is not a k3s version like v1.37.1+k3s1", c.K3sTo)
+	case c.K3s && len(c.workerName(c.Workers)) > 63, c.Restore && len(c.restoredName()) > 63:
+		return fmt.Errorf("-run-id %q is too long for this run's server names", c.RunID)
+	case c.Restore && (!strings.HasPrefix(c.S3.Endpoint, "https://") || c.S3.Bucket == ""):
+		return errors.New("-restore needs the bucket: -s3-endpoint https://… and -s3-bucket (E2E_S3_ENDPOINT, E2E_S3_BUCKET)")
 	}
 	return nil
 }
@@ -103,36 +201,91 @@ func validLabelValue(s string) bool {
 
 // plan describes what a run does, for -dry-run and the log.
 func (c config) plan() []string {
+	servers := fmt.Sprintf("Create server %q", c.serverName())
+	if c.K3s {
+		servers = fmt.Sprintf("Create a Cloud Network (10.0.0.0/16) and servers %q and %q … %q in it", c.serverName(), c.workerName(1), c.workerName(c.Workers))
+	}
 	steps := []string{
 		fmt.Sprintf("Generate an ed25519 SSH key and host key for this run; upload the public key as %q with labels %s=true, %s=%s, %s=<unix time>.", c.serverName(), labelE2E, labelRun, c.RunID, labelCreated),
-		fmt.Sprintf("Create server %q: the first available of %s in %s, image %s (first that exists), same labels; cloud-init only installs the pinned host key.", c.serverName(), strings.Join(c.ServerTypes, ", "), strings.Join(c.Locations, ", "), strings.Join(c.Images, " or ")),
+		fmt.Sprintf("%s: the first available of %s in %s, image %s (first that exists), same labels; cloud-init only installs the pinned host key.", servers, strings.Join(c.ServerTypes, ", "), strings.Join(c.Locations, ", "), strings.Join(c.Images, " or ")),
 		"Wait for SSH (root, pinned host key) and for cloud-init to finish.",
 	}
 	install := func(v, what string) string {
 		return fmt.Sprintf("%s: download %s on the server and run it with --domain <ip>.sslip.io --acme-server staging --version %s --yes (an installer without --acme-server gets its ClusterIssuer switched to staging right after); expect exit 0.", what, c.installerURL(v), v)
 	}
-	if c.From != "" {
-		steps = append(steps,
-			install(c.From, "Install v"+c.From),
-			"Console on HTTPS (Let's Encrypt staging certificate), setup token → owner, sign in; project e2e-before with an image App on hello.<ip>.sslip.io answering over HTTPS.",
-			install(c.Version, "Upgrade to v"+c.Version),
-			"The console reports v"+c.Version+", the owner still signs in, hello.<ip>.sslip.io still answers.",
-		)
-	} else {
+	fresh := func() {
 		steps = append(steps,
 			install(c.Version, "Install v"+c.Version),
 			"Console on HTTPS (Let's Encrypt staging certificate), /healthz, version v"+c.Version+", setup token → owner, sign in.",
 		)
 	}
-	steps = append(steps,
-		"Project e2e: image App web ("+whoamiImage+") on web.<ip>.sslip.io answers over HTTPS (budget: 10 min from SSH to here on a fresh install).",
-		"A Task prints a marker and restarts web on success; it succeeds and web rolls over.",
-		fmt.Sprintf("Git App git builds %s (%s, Dockerfile) with Build now; the build succeeds and git.<ip>.sslip.io answers (budget 3 min).", c.GitRepo, c.GitBranch),
-		"Log search finds the Task's marker; the metrics explorer returns memory series for the project.",
-		"App crash ("+busyboxImage+", exits 1) raises a crash-looping alert in the console's alerts API (budget 2 min).",
-		"Always, also on failure, timeout or cancel: delete the server and the SSH key, and wait until the server is gone.",
-	)
-	return steps
+	before := "Console on HTTPS (Let's Encrypt staging certificate), setup token → owner, sign in; project e2e-before with an image App on hello.<ip>.sslip.io answering over HTTPS."
+	switch c.mode() {
+	case modeUpgrade:
+		steps = append(steps,
+			install(c.From, "Install v"+c.From), before,
+			install(c.Version, "Upgrade to v"+c.Version),
+			"The console reports v"+c.Version+", the owner still signs in, hello.<ip>.sslip.io still answers.",
+		)
+	case modeConsole, modeFault:
+		steps = append(steps, install(c.From, "Install v"+c.From), before)
+		values := []string{}
+		if c.Fault {
+			values = append(values, "e2e.faults=true")
+		}
+		if b := c.installBase(); b != "" && b != defaultInstallBase {
+			values = append(values, "upgrades.installBaseURL="+b)
+		}
+		if len(values) > 0 {
+			steps = append(steps, fmt.Sprintf("helm upgrade kwerft %s --version %s --reuse-values --set %s; the console Deployment must carry the flags.", c.ChartRef, c.From, strings.Join(values, ",")))
+		}
+		upgrade := "POST /api/v1/upgrades {component: Kwerft, version: " + c.Version + "} with the owner's password (the console's preflight must pass); follow /api/v1/upgrades/<name>/events across the console's restart, while hello.<ip>.sslip.io is requested every few seconds (the longest gap is reported)."
+		if c.Fault {
+			steps = append(steps, upgrade+" Annotate the Upgrade kwerft.dev/e2e-fault=install and make sure its runner Job carries --fault=install (re-created if it was made before the annotation).",
+				"The Upgrade ends RolledBack; the console reports v"+c.From+" again, the owner signs in, hello.<ip>.sslip.io answers with the same pods (untouched).")
+		} else {
+			steps = append(steps, upgrade, "The Upgrade ends Succeeded; the console reports v"+c.Version+", the owner still signs in, hello.<ip>.sslip.io still answers.")
+		}
+	case modeK3s:
+		from := cmpOr(c.K3sFrom, "one patch behind the release's K3S_VERSION")
+		steps = append(steps,
+			install(c.Version, "Install v"+c.Version)+" With KWERFT_K3S_VERSION="+from+".",
+			"Console on HTTPS, setup token → owner, sign in.",
+			fmt.Sprintf("On each of the %d workers: trust Let's Encrypt's staging roots, download the same installer and run it with --join https://<console> --token <a join token from POST /api/v1/clusters/local/join-command> --role worker --yes, KWERFT_K3S_VERSION as above.", c.Workers),
+			fmt.Sprintf("GET /api/v1/clusters/local/nodes: %d nodes Ready on k3s %s.", c.Workers+1, from),
+			"Project e2e-before with an image App (2 replicas) on hello.<ip>.sslip.io answering over HTTPS.",
+			"POST /api/v1/upgrades {component: Kubernetes, version: "+cmpOr(c.K3sTo, "<the pin>")+"} with the password; follow the events: every node goes through its states to Done, one at a time, the control plane first; hello.<ip>.sslip.io is requested throughout (longest gap reported).",
+			"Every node reports the target, Ready and schedulable; the owner signs in, hello.<ip>.sslip.io answers.",
+		)
+	case modeRestore:
+		fresh()
+		steps = append(steps,
+			fmt.Sprintf("Bucket %s at %s: the prefix %s/ must be empty. PUT /api/v1/settings/backups with prefix %s; keep the recovery key from the answer (masked, never printed); wait for the target to be Ready.", c.S3.Bucket, c.S3.Endpoint, c.RunID, c.RunID),
+			"Project e2e-restore: Volume data (1Gi) served by App files (busybox httpd) on files.<ip>.sslip.io, a Task writes a marker file into it; SecretSet e2e with a random E2E_SECRET, App secret answers its SHA-256 on secret.<ip>.sslip.io; both checked.",
+			"POST /api/v1/backups/plans/cluster/run; wait for the Backup to be Completed.",
+			"Delete the server; create "+c.restoredName()+", upload kwerft.yaml with the backups block and the key files (0600, over SSH's stdin), run install.sh --config … --restore latest --version "+c.Version+" --acme-server staging --yes; expect exit 0.",
+			"Through the new address with the old names (they still point at the deleted server): the console reports v"+c.Version+", no setup, the owner signs in with the same password, both Apps run, the marker file is back, the secret's hash matches (the value is never printed); the domain and DNS situation is reported.",
+		)
+	default:
+		fresh()
+	}
+	if c.mode() != modeRestore && c.mode() != modeFault {
+		steps = append(steps,
+			"Project e2e: image App web ("+whoamiImage+") on web.<ip>.sslip.io answers over HTTPS (budget: 10 min from SSH to here on a fresh install).",
+			"A Task prints a marker and restarts web on success; it succeeds and web rolls over.",
+			fmt.Sprintf("Git App git builds %s (%s, Dockerfile) with Build now; the build succeeds and git.<ip>.sslip.io answers (budget 3 min).", c.GitRepo, c.GitBranch),
+			"Log search finds the Task's marker; the metrics explorer returns memory series for the project.",
+			"App crash ("+busyboxImage+", exits 1) raises a crash-looping alert in the console's alerts API (budget 2 min).",
+		)
+	}
+	cleanup := "Always, also on failure, timeout or cancel: delete the server and the SSH key, and wait until the server is gone."
+	switch c.mode() {
+	case modeK3s:
+		cleanup = "Always, also on failure, timeout or cancel: delete the servers, then the network and the SSH key, and wait until the servers are gone."
+	case modeRestore:
+		cleanup = fmt.Sprintf("Always, also on failure, timeout or cancel: delete the servers, the SSH key and the objects under %s/ in the bucket, and wait until the servers are gone.", c.RunID)
+	}
+	return append(steps, cleanup)
 }
 
 // owner is the console's first account, made up per run.
@@ -146,6 +299,18 @@ func randomString(n int) string {
 	return base64.RawURLEncoding.EncodeToString(b)[:n]
 }
 
+// machine is one server of the run.
+type machine struct {
+	name     string
+	id       int64
+	ip       string
+	location string
+	price    string // gross EUR per hour
+	remote   remote
+	created  time.Time
+	deleted  time.Time // zero while it exists
+}
+
 // runner carries out one e2e run.
 type runner struct {
 	cfg   config
@@ -153,21 +318,34 @@ type runner struct {
 	dial  dialer
 	// transport dials consoles and apps; tests point it at a fake.
 	transport func(*certChecker) *http.Client
-	log       io.Writer
-	now       func() time.Time
-	mask      func(string) // hides a secret in CI logs
-	rep       *report
-	logMu     sync.Mutex
+	// bucketHTTP talks to the restore run's bucket; nil: a default client.
+	bucketHTTP *http.Client
+	log        io.Writer
+	now        func() time.Time
+	mask       func(string) // hides a secret in CI logs
+	rep        *report
+	logMu      sync.Mutex
 
-	keys     *runKeys
-	keyID    int64
-	serverID int64
-	ip       string
-	remote   remote
-	certs    *certChecker
-	console  *console
-	owner    owner
-	sshAt    time.Time
+	keys      *runKeys
+	keyID     int64
+	image     string
+	networkID int64
+	machines  []*machine // every server created, in order
+	cur       *machine   // the server the console runs on
+	// host is the console's hostname once it is fixed (restore: the old
+	// server's); "" means <cur ip>.sslip.io.
+	host string
+	// pinIP: connect to this address for the console's names (restore).
+	pinIP   string
+	certs   *certChecker
+	console *console
+	owner   owner
+	sshAt   time.Time
+	bucket  *bucket
+	// restoreDNS: what the restoring installer said about DNS.
+	restoreDNS []string
+	// recoveryKey from Settings › Backups, for the restore (masked).
+	recoveryKey string
 }
 
 func (r *runner) logf(format string, args ...any) {
@@ -251,10 +429,18 @@ func (r *runner) run(ctx context.Context) {
 }
 
 func (r *runner) execute(ctx context.Context) error {
-	if err := r.step("Create server", func() (string, error) { return r.createServer(ctx) }); err != nil {
+	switch r.cfg.mode() {
+	case modeConsole, modeFault:
+		return r.executeViaConsole(ctx)
+	case modeK3s:
+		return r.executeK3s(ctx)
+	case modeRestore:
+		return r.executeRestore(ctx)
+	}
+	if err := r.step("Create server", func() (string, error) { return r.createPrimary(ctx) }); err != nil {
 		return err
 	}
-	if err := r.step("SSH", func() (string, error) { return r.connect(ctx) }); err != nil {
+	if err := r.step("SSH", func() (string, error) { return r.connect(ctx, r.cur) }); err != nil {
 		return err
 	}
 	if r.cfg.From != "" {
@@ -264,7 +450,7 @@ func (r *runner) execute(ctx context.Context) error {
 		if err := r.firstSignIn(ctx, r.cfg.From); err != nil {
 			return err
 		}
-		if err := r.step("App before the upgrade", func() (string, error) { return r.seedApp(ctx) }); err != nil {
+		if err := r.step("App before the upgrade", func() (string, error) { return r.seedApp(ctx, 1) }); err != nil {
 			return err
 		}
 		if err := r.install(ctx, r.cfg.Version, "Upgrade to v"+r.cfg.Version); err != nil {
@@ -284,37 +470,72 @@ func (r *runner) execute(ctx context.Context) error {
 	return r.suite(ctx)
 }
 
-// ---- server ----------------------------------------------------------------
+// ---- servers ---------------------------------------------------------------------
 
 func (r *runner) labels() map[string]string {
 	return map[string]string{labelE2E: "true", labelRun: r.cfg.RunID, labelCreated: strconv.FormatInt(r.now().Unix(), 10)}
 }
 
-func (r *runner) createServer(ctx context.Context) (string, error) {
-	keys, err := newRunKeys(r.cfg.serverName())
-	if err != nil {
-		return "", err
+// ensureKey generates the run's keys and uploads the SSH key, once.
+func (r *runner) ensureKey(ctx context.Context) error {
+	if r.keyID != 0 {
+		return nil
 	}
-	r.keys = keys
-	key, err := r.cloud.createSSHKey(ctx, r.cfg.serverName(), keys.clientPub, r.labels())
+	if r.keys == nil {
+		keys, err := newRunKeys(r.cfg.serverName())
+		if err != nil {
+			return err
+		}
+		r.keys = keys
+	}
+	key, err := r.cloud.createSSHKey(ctx, r.cfg.serverName(), r.keys.clientPub, r.labels())
 	if err != nil {
-		return "", fmt.Errorf("upload SSH key: %w", err)
+		return fmt.Errorf("upload SSH key: %w", err)
 	}
 	r.keyID = key.ID
+	return nil
+}
 
-	image := ""
+func (r *runner) pickImage(ctx context.Context) (string, error) {
+	if r.image != "" {
+		return r.image, nil
+	}
 	for _, name := range r.cfg.Images {
 		if _, err := r.cloud.image(ctx, name); err == nil {
-			image = name
-			break
+			r.image = name
+			return name, nil
 		} else if !errors.Is(err, errNotFound) {
 			return "", fmt.Errorf("look up image %s: %w", name, err)
 		}
 	}
-	if image == "" {
-		return "", fmt.Errorf("none of the images %s exists", strings.Join(r.cfg.Images, ", "))
-	}
+	return "", fmt.Errorf("none of the images %s exists", strings.Join(r.cfg.Images, ", "))
+}
 
+// createPrimary creates the server the console is installed on.
+func (r *runner) createPrimary(ctx context.Context) (string, error) {
+	m, err := r.createMachine(ctx, r.cfg.serverName(), r.cfg.Locations)
+	if m != nil {
+		r.cur = m
+	}
+	return r.rep.Server, err
+}
+
+// createMachine creates a server: the first available server type in the
+// first location that takes it, attached to the run's network if there is
+// one, and waits until it runs. A server that was created is returned (for
+// cleanup) also when waiting fails.
+func (r *runner) createMachine(ctx context.Context, name string, locations []string) (*machine, error) {
+	if err := r.ensureKey(ctx); err != nil {
+		return nil, err
+	}
+	image, err := r.pickImage(ctx)
+	if err != nil {
+		return nil, err
+	}
+	var networks []int64
+	if r.networkID != 0 {
+		networks = []int64{r.networkID}
+	}
 	var tried []string
 	for _, typ := range r.cfg.ServerTypes {
 		st, err := r.cloud.serverType(ctx, typ)
@@ -322,16 +543,17 @@ func (r *runner) createServer(ctx context.Context) (string, error) {
 			tried = append(tried, typ+": no such server type")
 			continue
 		} else if err != nil {
-			return "", fmt.Errorf("look up server type %s: %w", typ, err)
+			return nil, fmt.Errorf("look up server type %s: %w", typ, err)
 		}
 		if st.Deprecation != nil && r.now().After(st.Deprecation.UnavailableAfter) {
 			tried = append(tried, typ+": deprecated")
 			continue
 		}
-		for _, loc := range r.cfg.Locations {
+		for _, loc := range locations {
 			req := createServerRequest{
-				Name: r.cfg.serverName(), ServerType: typ, Location: loc, Image: image,
-				SSHKeys: []int64{key.ID}, Labels: r.labels(), UserData: cloudInit(keys), StartAfterCreate: true,
+				Name: name, ServerType: typ, Location: loc, Image: image,
+				SSHKeys: []int64{r.keyID}, Labels: r.labels(), UserData: cloudInit(r.keys), StartAfterCreate: true,
+				Networks: networks,
 			}
 			req.PublicNet.EnableIPv4, req.PublicNet.EnableIPv6 = true, true
 			srv, err := r.cloud.createServer(ctx, req)
@@ -340,21 +562,34 @@ func (r *runner) createServer(ctx context.Context) (string, error) {
 				tried = append(tried, fmt.Sprintf("%s in %s: %s", typ, loc, ae.Code))
 				continue
 			} else if err != nil {
-				return "", fmt.Errorf("create server (%s in %s): %w", typ, loc, err)
+				return nil, fmt.Errorf("create server %s (%s in %s): %w", name, typ, loc, err)
 			}
-			r.serverID, r.ip = srv.ID, srv.PublicNet.IPv4.IP
-			r.rep.PriceHourly = st.hourlyGross(loc)
-			r.rep.Server = fmt.Sprintf("%s (%d vCPU, %g GB) in %s, %s, id %d, %s", typ, st.Cores, st.Memory, loc, image, srv.ID, r.ip)
+			m := &machine{name: name, id: srv.ID, ip: srv.PublicNet.IPv4.IP, location: loc, price: st.hourlyGross(loc), created: r.now()}
+			r.machines = append(r.machines, m)
+			desc := fmt.Sprintf("%s (%d vCPU, %g GB) in %s, %s, id %d", typ, st.Cores, st.Memory, loc, image, srv.ID)
 			if len(tried) > 0 {
-				r.rep.note("Server types or locations skipped: %s.", strings.Join(tried, "; "))
+				r.rep.note("Server types or locations skipped for %s: %s.", name, strings.Join(tried, "; "))
 			}
-			if err := r.waitRunning(ctx); err != nil {
-				return r.rep.Server, err
+			if err := r.waitRunning(ctx, m); err != nil {
+				r.describe(m, desc)
+				return m, err
 			}
-			return r.rep.Server, nil
+			r.describe(m, desc)
+			return m, nil
 		}
 	}
-	return "", fmt.Errorf("no server could be created: %s", strings.Join(tried, "; "))
+	return nil, fmt.Errorf("no server could be created: %s", strings.Join(tried, "; "))
+}
+
+// describe adds a server to the report's server line.
+func (r *runner) describe(m *machine, desc string) {
+	desc += ", " + m.ip
+	if r.rep.Server == "" {
+		r.rep.Server = desc
+		r.rep.PriceHourly = m.price
+		return
+	}
+	r.rep.Server += "; " + m.name + ": " + desc
 }
 
 // unavailable: this type or location cannot take the server right now; try
@@ -367,28 +602,31 @@ func unavailable(e *apiError) bool {
 	return e.Status == http.StatusPreconditionFailed
 }
 
-func (r *runner) waitRunning(ctx context.Context) error {
+func (r *runner) waitRunning(ctx context.Context, m *machine) error {
 	return r.waitFor(ctx, 5*time.Minute, func(ctx context.Context) (bool, error) {
-		s, err := r.cloud.server(ctx, r.serverID)
+		s, err := r.cloud.server(ctx, m.id)
 		if err != nil {
 			return false, err
 		}
-		if r.ip == "" {
-			r.ip = s.PublicNet.IPv4.IP
+		if m.ip == "" {
+			m.ip = s.PublicNet.IPv4.IP
 		}
-		return s.Status == "running" && r.ip != "", nil
+		return s.Status == "running" && m.ip != "", nil
 	})
 }
 
-func (r *runner) connect(ctx context.Context) (string, error) {
+// connect opens SSH to m and waits for cloud-init.
+func (r *runner) connect(ctx context.Context, m *machine) (string, error) {
 	sctx, cancel := context.WithTimeout(ctx, 8*time.Minute)
 	defer cancel()
-	rem, err := waitSSH(sctx, r.dial, net.JoinHostPort(r.ip, "22"), r.keys, r.cfg.Poll)
+	rem, err := waitSSH(sctx, r.dial, net.JoinHostPort(m.ip, "22"), r.keys, r.cfg.Poll)
 	if err != nil {
 		return "", err
 	}
-	r.remote = rem
-	r.sshAt = r.now()
+	m.remote = rem
+	if m == r.cur {
+		r.sshAt = r.now()
+	}
 	// The installer must not race cloud-init (apt locks, host keys).
 	var out bytes.Buffer
 	if code, err := rem.run(ctx, "cloud-init status --wait >/dev/null 2>&1; . /etc/os-release && echo \"$PRETTY_NAME\"", &out, &out); err != nil || code != 0 {
@@ -397,34 +635,79 @@ func (r *runner) connect(ctx context.Context) (string, error) {
 	return strings.TrimSpace(out.String()), nil
 }
 
-// destroy deletes the server and the SSH key. It runs on its own context:
-// the run's may be cancelled or timed out by now.
-func (r *runner) destroy() {
-	if r.remote != nil {
-		_ = r.remote.close()
+// deleteMachine deletes a server and waits until Hetzner confirms.
+func (r *runner) deleteMachine(ctx context.Context, m *machine) error {
+	if m.remote != nil {
+		_ = m.remote.close()
+		m.remote = nil
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
+	if err := r.cloud.deleteServer(ctx, m.id); err != nil {
+		return fmt.Errorf("server %d NOT deleted: %w", m.id, err)
+	}
+	err := r.waitFor(ctx, 3*time.Minute, func(ctx context.Context) (bool, error) {
+		_, err := r.cloud.server(ctx, m.id)
+		if errors.Is(err, errNotFound) {
+			return true, nil
+		}
+		return false, err
+	})
+	if err != nil {
+		return fmt.Errorf("server %d deletion requested but not confirmed: %w", m.id, err)
+	}
+	m.deleted = r.now()
+	return nil
+}
+
+// destroy deletes the servers, the network, the SSH key and the bucket
+// prefix. It runs on its own context: the run's may be cancelled or timed
+// out by now.
+func (r *runner) destroy() {
+	for _, m := range r.machines {
+		if m.remote != nil {
+			_ = m.remote.close()
+			m.remote = nil
+		}
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 6*time.Minute)
 	defer cancel()
 	start := r.now()
 	ok := true
-	if r.serverID != 0 {
-		if err := r.cloud.deleteServer(ctx, r.serverID); err != nil {
-			ok = false
-			r.rep.Cleanup = append(r.rep.Cleanup, fmt.Sprintf("server %d NOT deleted: %v", r.serverID, err))
-		} else {
-			err := r.waitFor(ctx, 3*time.Minute, func(ctx context.Context) (bool, error) {
-				_, err := r.cloud.server(ctx, r.serverID)
-				if errors.Is(err, errNotFound) {
-					return true, nil
-				}
-				return false, err
-			})
+	var wg sync.WaitGroup
+	var mu sync.Mutex
+	for _, m := range r.machines {
+		if !m.deleted.IsZero() {
+			continue
+		}
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			err := r.deleteMachine(ctx, m)
+			mu.Lock()
+			defer mu.Unlock()
 			if err != nil {
 				ok = false
-				r.rep.Cleanup = append(r.rep.Cleanup, fmt.Sprintf("server %d deletion requested but not confirmed: %v", r.serverID, err))
-			} else {
-				r.rep.Cleanup = append(r.rep.Cleanup, fmt.Sprintf("server %d deleted", r.serverID))
+				r.rep.Cleanup = append(r.rep.Cleanup, err.Error())
+				return
 			}
+			r.rep.Cleanup = append(r.rep.Cleanup, fmt.Sprintf("server %d deleted", m.id))
+		}()
+	}
+	wg.Wait()
+	if r.networkID != 0 {
+		// Hetzner detaches deleted servers in the background.
+		err := r.waitFor(ctx, 2*time.Minute, func(ctx context.Context) (bool, error) {
+			err := r.cloud.deleteNetwork(ctx, r.networkID)
+			var ae *apiError
+			if errors.As(err, &ae) && (ae.Status == http.StatusConflict || ae.Status == http.StatusLocked) {
+				return false, err
+			}
+			return true, err
+		})
+		if err != nil {
+			ok = false
+			r.rep.Cleanup = append(r.rep.Cleanup, fmt.Sprintf("network %d NOT deleted: %v", r.networkID, err))
+		} else {
+			r.rep.Cleanup = append(r.rep.Cleanup, fmt.Sprintf("network %d deleted", r.networkID))
 		}
 	}
 	if r.keyID != 0 {
@@ -433,6 +716,16 @@ func (r *runner) destroy() {
 			r.rep.Cleanup = append(r.rep.Cleanup, fmt.Sprintf("SSH key %d NOT deleted: %v", r.keyID, err))
 		} else {
 			r.rep.Cleanup = append(r.rep.Cleanup, fmt.Sprintf("SSH key %d deleted", r.keyID))
+		}
+	}
+	if r.bucket != nil {
+		prefix := r.cfg.RunID + "/"
+		n, err := r.bucket.deletePrefix(ctx, prefix)
+		if err != nil {
+			ok = false
+			r.rep.Cleanup = append(r.rep.Cleanup, fmt.Sprintf("bucket %s, prefix %s NOT emptied (%d object(s) deleted): %v", r.cfg.S3.Bucket, prefix, n, err))
+		} else {
+			r.rep.Cleanup = append(r.rep.Cleanup, fmt.Sprintf("bucket %s, prefix %s: %d object(s) deleted", r.cfg.S3.Bucket, prefix, n))
 		}
 	}
 	// Anything else with this run's label: a create whose answer was lost.
@@ -446,65 +739,149 @@ func (r *runner) destroy() {
 		r.rep.Cleanup = append(r.rep.Cleanup, "nothing was created")
 	}
 	r.rep.CleanupOK = ok
+	for _, m := range r.machines {
+		end := m.deleted
+		if end.IsZero() {
+			end = r.now()
+		}
+		r.rep.Billing = append(r.rep.Billing, billed{Price: m.price, Start: m.created, End: end})
+	}
 	r.logf("cleanup (%s): %s", fmtDuration(r.now().Sub(start)), strings.Join(r.rep.Cleanup, "; "))
 }
 
 // ---- installer ---------------------------------------------------------------
 
-func (r *runner) domain() string { return r.ip + ".sslip.io" }
+// domain is the console's hostname.
+func (r *runner) domain() string {
+	if r.host != "" {
+		return r.host
+	}
+	return r.cur.ip + ".sslip.io"
+}
 
-// sh runs a short command and returns its combined output.
+// sh runs a short command on the console's server and returns its
+// combined output.
 func (r *runner) sh(ctx context.Context, cmd string) (string, int, error) {
+	return r.shOn(ctx, r.cur, cmd)
+}
+
+func (r *runner) shOn(ctx context.Context, m *machine, cmd string) (string, int, error) {
 	var out bytes.Buffer
-	code, err := r.remote.run(ctx, cmd, &out, &out)
+	code, err := m.remote.run(ctx, cmd, &out, &out)
 	return strings.TrimSpace(out.String()), code, err
 }
 
+// installOpts changes how the installer runs.
+type installOpts struct {
+	on      *machine // nil: the console's server
+	env     []string // NAME=value for the installer's environment
+	join    []string // join mode: these arguments instead of --domain, --version, --acme-server
+	config  string   // --config FILE
+	restore string   // --restore B (no --domain: it comes from the backup)
+}
+
 func (r *runner) install(ctx context.Context, version, name string) error {
-	return r.step(name, func() (string, error) {
-		script := "/root/kwerft-install-" + version + ".sh"
-		url := r.cfg.installerURL(version)
-		if out, code, err := r.sh(ctx, fmt.Sprintf("curl -fsSL --retry 5 --retry-all-errors -o %s %s", shellQuote(script), shellQuote(url))); err != nil || code != 0 {
-			return "", fmt.Errorf("download %s: exit %d %v %s", url, code, err, out)
-		}
-		_, code, err := r.sh(ctx, "grep -q -e '--acme-server' "+shellQuote(script))
+	return r.installWith(ctx, version, name, installOpts{})
+}
+
+func (r *runner) installWith(ctx context.Context, version, name string, o installOpts) error {
+	return r.step(name, func() (string, error) { return r.runInstaller(ctx, version, o) })
+}
+
+func installerPath(version string) string { return "/root/kwerft-install-" + version + ".sh" }
+
+// downloadInstaller puts the published installer of version on m.
+func (r *runner) downloadInstaller(ctx context.Context, m *machine, version string) error {
+	url := r.cfg.installerURL(version)
+	if out, code, err := r.shOn(ctx, m, fmt.Sprintf("curl -fsSL --retry 5 --retry-all-errors -o %s %s", shellQuote(installerPath(version)), shellQuote(url))); err != nil || code != 0 {
+		return fmt.Errorf("download %s: exit %d %v %s", url, code, err, out)
+	}
+	return nil
+}
+
+func (r *runner) runInstaller(ctx context.Context, version string, o installOpts) (string, error) {
+	m := cmpOr2(o.on, r.cur)
+	script := installerPath(version)
+	if err := r.downloadInstaller(ctx, m, version); err != nil {
+		return "", err
+	}
+	staging := false
+	var args []string
+	if o.join != nil {
+		args = append(append(args, o.join...), "--yes")
+	} else {
+		_, code, err := r.shOn(ctx, m, "grep -q -e '--acme-server' "+shellQuote(script))
 		if err != nil {
 			return "", err
 		}
-		staging := code == 0
-		args := []string{"--domain", r.domain(), "--version", version, "--yes"}
+		staging = code == 0
+		if o.restore == "" {
+			args = append(args, "--domain", r.domain())
+		}
+		args = append(args, "--version", version, "--yes")
+		if o.config != "" {
+			args = append(args, "--config", o.config)
+		}
+		if o.restore != "" {
+			args = append(args, "--restore", o.restore)
+		}
 		if staging {
 			args = append(args, "--acme-server", "staging")
 		}
-		cmd := "bash " + shellQuote(script)
-		for _, a := range args {
-			cmd += " " + shellQuote(a)
-		}
+	}
+	cmd := ""
+	for _, kv := range o.env {
+		k, v, _ := strings.Cut(kv, "=")
+		cmd += k + "=" + shellQuote(v) + " "
+	}
+	cmd += "bash " + shellQuote(script)
+	for _, a := range args {
+		cmd += " " + shellQuote(a)
+	}
 
-		tail := newTail(60)
-		w := io.MultiWriter(prefixWriter(r.log, "  │ "), tail)
-		ictx, cancel := context.WithTimeout(ctx, r.cfg.InstallTimeout)
-		defer cancel()
-		start := r.now()
-		code, err = r.remote.run(ictx, cmd, w, w)
-		took := r.now().Sub(start)
-		switch {
-		case err != nil:
-			r.rep.Log = tail.String() + r.diagnostics(ctx)
-			return "", fmt.Errorf("installer did not finish: %w", err)
-		case code != 0:
-			r.rep.Log = tail.String() + r.diagnostics(ctx)
-			return "", fmt.Errorf("installer exited %d (%s)", code, installerExit[code])
-		}
-		detail := "exit 0 in " + fmtDuration(took)
-		if !staging {
-			if out, code, err := r.sh(ctx, stagingFallback); err != nil || code != 0 {
-				return detail, fmt.Errorf("switch the ClusterIssuer to Let's Encrypt staging: exit %d %v %s", code, err, out)
+	tail := newTail(60)
+	w := io.MultiWriter(prefixWriter(r.log, "  │ "), tail)
+	ictx, cancel := context.WithTimeout(ctx, r.cfg.InstallTimeout)
+	defer cancel()
+	start := r.now()
+	code, err := m.remote.run(ictx, cmd, w, w)
+	took := r.now().Sub(start)
+	switch {
+	case err != nil:
+		r.rep.Log = tail.String() + r.diagnostics(ctx, m)
+		return "", fmt.Errorf("installer did not finish: %w", err)
+	case code != 0:
+		r.rep.Log = tail.String() + r.diagnostics(ctx, m)
+		return "", fmt.Errorf("installer exited %d (%s)", code, installerExit[code])
+	}
+	detail := "exit 0 in " + fmtDuration(took)
+	if o.restore != "" {
+		// What the installer says about DNS, for the restore run's report.
+		for _, l := range strings.Split(tail.String(), "\n") {
+			if strings.Contains(l, "DNS") {
+				r.restoreDNS = append(r.restoreDNS, strings.TrimSpace(stripANSI(l)))
 			}
-			detail += "; this installer has no --acme-server, so the ClusterIssuer was switched to staging afterwards"
 		}
-		return detail, nil
-	})
+	}
+	if !staging && o.join == nil {
+		if out, code, err := r.shOn(ctx, m, stagingFallback); err != nil || code != 0 {
+			return detail, fmt.Errorf("switch the ClusterIssuer to Let's Encrypt staging: exit %d %v %s", code, err, out)
+		}
+		detail += "; this installer has no --acme-server, so the ClusterIssuer was switched to staging afterwards"
+	}
+	return detail, nil
+}
+
+var ansiRE = regexp.MustCompile(`\x1b\[[0-9;]*m`)
+
+func stripANSI(s string) string { return ansiRE.ReplaceAllString(s, "") }
+
+func cmpOr2[T comparable](v, def T) T {
+	var zero T
+	if v == zero {
+		return def
+	}
+	return v
 }
 
 // stagingFallback points an installer's ClusterIssuer at Let's Encrypt
@@ -516,13 +893,13 @@ kc patch clusterissuer letsencrypt --type merge -p '{"spec":{"acme":{"server":"`
 kc -n kwerft-system delete certificates.cert-manager.io --all --ignore-not-found`
 
 // diagnostics collects what helps to understand a failed install.
-func (r *runner) diagnostics(ctx context.Context) string {
-	if r.remote == nil {
+func (r *runner) diagnostics(ctx context.Context, m *machine) string {
+	if m == nil || m.remote == nil {
 		return ""
 	}
 	dctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 1*time.Minute)
 	defer cancel()
-	out, _, _ := r.sh(dctx, "echo '--- install.log'; tail -n 40 /var/log/kwerft/install.log 2>&1; echo '--- pods'; k3s kubectl get pods -A 2>&1 | grep -v -E 'Running|Completed' | head -n 40")
+	out, _, _ := r.shOn(dctx, m, "echo '--- install.log'; tail -n 40 /var/log/kwerft/install.log 2>&1; echo '--- pods'; k3s kubectl get pods -A 2>&1 | grep -v -E 'Running|Completed' | head -n 40")
 	r.logf("diagnostics:\n%s", out)
 	return "\n" + out
 }
@@ -536,7 +913,31 @@ func (r *runner) openConsole() {
 		return
 	}
 	r.certs = &certChecker{}
-	r.console = &console{base: "https://" + r.domain(), http: r.transport(r.certs)}
+	hc := r.transport(r.certs)
+	if r.pinIP != "" {
+		hc = pinHost(hc, r.domain(), r.pinIP)
+	}
+	r.console = &console{base: "https://" + r.domain(), http: hc}
+}
+
+// pinHost sends connections for domain and its subdomains to ip, as DNS
+// would once the records moved: after a restore the console keeps the old
+// server's names. TLS still checks the certificate for the name.
+func pinHost(c *http.Client, domain, ip string) *http.Client {
+	tr := c.Transport.(*http.Transport).Clone()
+	next := tr.DialContext
+	if next == nil {
+		next = (&net.Dialer{Timeout: 15 * time.Second}).DialContext
+	}
+	tr.DialContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
+		if host, port, err := net.SplitHostPort(addr); err == nil && (host == domain || strings.HasSuffix(host, "."+domain)) {
+			addr = net.JoinHostPort(ip, port)
+		}
+		return next(ctx, network, addr)
+	}
+	out := *c
+	out.Transport = tr
+	return &out
 }
 
 // waitHTTPS waits for url to answer 200 with a body containing want.
@@ -553,26 +954,29 @@ func (r *runner) waitHTTPS(ctx context.Context, url, want string, timeout time.D
 	})
 }
 
+// consoleUp waits for /healthz and checks the version.
+func (r *runner) consoleUp(ctx context.Context, version string) (string, error) {
+	err := r.waitFor(ctx, 10*time.Minute, func(ctx context.Context) (bool, error) {
+		err := r.console.healthz(ctx)
+		return err == nil, err
+	})
+	if err != nil {
+		return "", err
+	}
+	v, err := r.console.version(ctx)
+	if err != nil {
+		return "", err
+	}
+	detail := fmt.Sprintf("https://%s, certificate from %s, version %s", r.domain(), r.certs.issuerOf(r.domain()), v)
+	if strings.TrimPrefix(v, "v") != version {
+		return detail, fmt.Errorf("the console reports version %q, want %s", v, version)
+	}
+	return detail, nil
+}
+
 func (r *runner) firstSignIn(ctx context.Context, version string) error {
 	r.openConsole()
-	if err := r.step("Console on HTTPS", func() (string, error) {
-		err := r.waitFor(ctx, 10*time.Minute, func(ctx context.Context) (bool, error) {
-			err := r.console.healthz(ctx)
-			return err == nil, err
-		})
-		if err != nil {
-			return "", err
-		}
-		v, err := r.console.version(ctx)
-		if err != nil {
-			return "", err
-		}
-		detail := fmt.Sprintf("https://%s, certificate from %s, version %s", r.domain(), r.certs.issuerOf(r.domain()), v)
-		if strings.TrimPrefix(v, "v") != version {
-			return detail, fmt.Errorf("the console reports version %q, want %s", v, version)
-		}
-		return detail, nil
-	}); err != nil {
+	if err := r.step("Console on HTTPS", func() (string, error) { return r.consoleUp(ctx, version) }); err != nil {
 		return err
 	}
 	return r.step("Owner from the setup token, sign in", func() (string, error) {
@@ -631,42 +1035,50 @@ func whoamiSpec(host string) kwerftv1.AppSpec {
 	}
 }
 
-func (r *runner) seedApp(ctx context.Context) (string, error) {
+// helloURL is the App that must keep serving through an upgrade.
+func (r *runner) helloURL() string { return "https://hello." + r.domain() + "/" }
+
+func (r *runner) seedApp(ctx context.Context, replicas int32) (string, error) {
 	host := "hello." + r.domain()
 	if err := r.createProject(ctx, "e2e-before"); err != nil {
 		return "", fmt.Errorf("create project: %w", err)
 	}
-	if err := r.createApp(ctx, "e2e-before", "hello", whoamiSpec(host)); err != nil {
+	spec := whoamiSpec(host)
+	if replicas > 1 {
+		spec.Replicas = &replicas
+	}
+	if err := r.createApp(ctx, "e2e-before", "hello", spec); err != nil {
 		return "", fmt.Errorf("create app: %w", err)
 	}
-	if err := r.waitHTTPS(ctx, "https://"+host+"/", "Hostname", 10*time.Minute); err != nil {
+	if err := r.waitHTTPS(ctx, r.helloURL(), "Hostname", 10*time.Minute); err != nil {
 		return "", err
+	}
+	if replicas > 1 {
+		return fmt.Sprintf("https://%s answers (%d replicas)", host, replicas), nil
 	}
 	return "https://" + host + " answers", nil
 }
 
-func (r *runner) afterUpgrade(ctx context.Context) (string, error) {
-	err := r.waitFor(ctx, 5*time.Minute, func(ctx context.Context) (bool, error) {
+// waitVersion waits for the console to report version.
+func (r *runner) waitVersion(ctx context.Context, version string) error {
+	return r.waitFor(ctx, 5*time.Minute, func(ctx context.Context) (bool, error) {
 		v, err := r.console.version(ctx)
 		if err != nil {
 			return false, err
 		}
-		if strings.TrimPrefix(v, "v") != r.cfg.Version {
-			return false, fmt.Errorf("the console reports version %q, want %s", v, r.cfg.Version)
+		if strings.TrimPrefix(v, "v") != version {
+			return false, fmt.Errorf("the console reports version %q, want %s", v, version)
 		}
 		return true, nil
 	})
-	if err != nil {
-		return "", err
+}
+
+// helloRuns: the App from before still answers and the console says it runs.
+func (r *runner) helloRuns(ctx context.Context) error {
+	if err := r.waitHTTPS(ctx, r.helloURL(), "Hostname", 5*time.Minute); err != nil {
+		return fmt.Errorf("the app from before the upgrade: %w", err)
 	}
-	if err := r.console.signIn(ctx, r.owner); err != nil {
-		return "", fmt.Errorf("the owner cannot sign in: %w", err)
-	}
-	host := "hello." + r.domain()
-	if err := r.waitHTTPS(ctx, "https://"+host+"/", "Hostname", 5*time.Minute); err != nil {
-		return "", fmt.Errorf("the app from before the upgrade: %w", err)
-	}
-	err = r.waitFor(ctx, 3*time.Minute, func(ctx context.Context) (bool, error) {
+	return r.waitFor(ctx, 3*time.Minute, func(ctx context.Context) (bool, error) {
 		a, err := r.console.app(ctx, "e2e-before", "hello")
 		if err != nil {
 			return false, err
@@ -676,267 +1088,37 @@ func (r *runner) afterUpgrade(ctx context.Context) (string, error) {
 		}
 		return true, nil
 	})
-	if err != nil {
+}
+
+func (r *runner) afterUpgrade(ctx context.Context) (string, error) {
+	if err := r.waitVersion(ctx, r.cfg.Version); err != nil {
 		return "", err
 	}
-	return "version " + r.cfg.Version + ", owner signs in, " + host + " still answers and runs", nil
-}
-
-// ---- the suite -------------------------------------------------------------------
-
-const project = "e2e"
-
-// suite creates what it checks up front, then waits for the checks side by
-// side, so each one's time is measured from what it waits for: an App on
-// HTTPS from its creation, a build from "Build now", an alert from the
-// crashing App's creation.
-func (r *runner) suite(ctx context.Context) error {
-	web, gitHost := "web."+r.domain(), "git."+r.domain()
-	marker := "kwerft-e2e-marker-" + r.cfg.RunID
-
-	var createdAt, crashAt, buildAt time.Time
-	var buildName string
-	if err := r.step("Project and apps created", func() (string, error) {
-		if err := r.createProject(ctx, project); err != nil {
-			return "", fmt.Errorf("project: %w", err)
-		}
-		if err := r.createApp(ctx, project, "web", whoamiSpec(web)); err != nil {
-			return "", fmt.Errorf("app web: %w", err)
-		}
-		createdAt = r.now()
-		crash := kwerftv1.AppSpec{
-			Source:  kwerftv1.AppSource{Image: &kwerftv1.ImageSource{Ref: busyboxImage}},
-			Command: []string{"sh", "-c", "echo crashing on purpose; exit 1"},
-		}
-		if err := r.createApp(ctx, project, "crash", crash); err != nil {
-			return "", fmt.Errorf("app crash: %w", err)
-		}
-		crashAt = r.now()
-		gitSpec := kwerftv1.AppSpec{
-			Source: kwerftv1.AppSource{Git: &kwerftv1.GitSource{Repository: r.cfg.GitRepo, Branch: r.cfg.GitBranch, Builder: "dockerfile"}},
-			Ports:  []kwerftv1.AppPort{{Container: 80, Public: gitHost}},
-		}
-		if err := r.createApp(ctx, project, "git", gitSpec); err != nil {
-			return "", fmt.Errorf("app git: %w", err)
-		}
-		b, err := r.console.buildNow(ctx, project, "git")
-		if err != nil {
-			return "", fmt.Errorf("build now: %w", err)
-		}
-		buildAt, buildName = r.now(), b.Name
-		return "web, crash, git (build " + b.Name + ")", nil
-	}); err != nil {
-		return err
+	if err := r.console.signIn(ctx, r.owner); err != nil {
+		return "", fmt.Errorf("the owner cannot sign in: %w", err)
 	}
-
-	// Each lane runs its checks in order; lanes run side by side. Results are
-	// reported in this order whatever finishes first.
-	lanes := [][]check{
-		{
-			{"App on HTTPS", createdAt, 0, func() (string, error) { return r.checkWeb(ctx, web) }},
-			{"Task runs and restarts web", time.Time{}, 0, func() (string, error) { return r.checkTask(ctx, web, marker) }},
-			{"Log search", time.Time{}, 0, func() (string, error) { return r.checkLogs(ctx, marker) }},
-		},
-		{{"Git build deploys", buildAt, 3 * time.Minute, func() (string, error) { return r.checkBuild(ctx, buildName, buildAt, gitHost) }}},
-		{{"Metrics", time.Time{}, 0, func() (string, error) { return r.checkMetrics(ctx) }}},
-		{{"Crash loop alert", crashAt, 2 * time.Minute, func() (string, error) { return r.checkAlert(ctx, crashAt) }}},
-	}
-	results := make([][]result, len(lanes))
-	var wg sync.WaitGroup
-	for i, lane := range lanes {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			for _, c := range lane {
-				if ctx.Err() != nil {
-					results[i] = append(results[i], result{Name: c.name, Status: skip, Detail: "the run timed out or was cancelled"})
-					continue
-				}
-				results[i] = append(results[i], r.measure(c.name, c.since, c.budget, c.fn))
-			}
-		}()
-	}
-	wg.Wait()
-	failed := false
-	for _, lane := range results {
-		for _, res := range lane {
-			r.rep.add(res)
-			failed = failed || res.Status == fail || res.Status == skip
-		}
-	}
-	if failed {
-		return errors.New("checks failed")
-	}
-	return nil
-}
-
-type check struct {
-	name   string
-	since  time.Time
-	budget time.Duration
-	fn     func() (string, error)
-}
-
-func (r *runner) checkWeb(ctx context.Context, web string) (string, error) {
-	if err := r.waitHTTPS(ctx, "https://"+web+"/", "Hostname", 10*time.Minute); err != nil {
+	if err := r.helloRuns(ctx); err != nil {
 		return "", err
 	}
-	detail := fmt.Sprintf("https://%s, certificate from %s", web, r.certs.issuerOf(web))
-	if r.cfg.From == "" {
-		took := r.now().Sub(r.sshAt)
-		detail += fmt.Sprintf("; fresh server to app on HTTPS in %s", fmtDuration(took))
-		if took > 10*time.Minute {
-			r.rep.note("Fresh server to app on HTTPS took %s, over the 10 min of the Phase 1 exit criterion.", fmtDuration(took))
-		}
-	}
-	return detail, nil
+	return "version " + r.cfg.Version + ", owner signs in, hello." + r.domain() + " still answers and runs", nil
 }
 
-func (r *runner) checkTask(ctx context.Context, web, marker string) (string, error) {
-	before, err := r.console.appPods(ctx, project, "web")
-	if err != nil {
-		return "", err
-	}
-	name, err := r.console.createTask(ctx, project, kwerftv1.TaskSpec{
-		Source:    &kwerftv1.AppSource{Image: &kwerftv1.ImageSource{Ref: busyboxImage}},
-		Command:   []string{"sh", "-c", "echo " + marker},
-		Env:       []corev1.EnvVar{{Name: "E2E_RUN", Value: r.cfg.RunID}},
-		Timeout:   &metav1.Duration{Duration: 5 * time.Minute},
-		OnSuccess: &kwerftv1.TaskOnSuccess{Restart: []string{"web"}},
-	})
-	if err != nil {
-		return "", err
-	}
-	err = r.waitFor(ctx, 5*time.Minute, func(ctx context.Context) (bool, error) {
-		t, err := r.console.task(ctx, project, name)
-		if err != nil {
-			return false, err
+// prefer puts first at the front of list.
+func prefer(first string, list []string) []string {
+	out := []string{first}
+	for _, l := range list {
+		if l != first {
+			out = append(out, l)
 		}
-		switch t.Status.Phase {
-		case kwerftv1.TaskSucceeded:
-			return true, nil
-		case kwerftv1.TaskFailed:
-			code := "unknown"
-			if t.Status.ExitCode != nil {
-				code = strconv.Itoa(int(*t.Status.ExitCode))
-			}
-			return true, fmt.Errorf("task %s failed (exit %s)", name, code)
-		}
-		return false, fmt.Errorf("task %s is %s", name, cmpOr(string(t.Status.Phase), "pending"))
-	})
-	if err != nil {
-		return "", err
 	}
-	old := map[string]bool{}
-	for _, p := range before {
-		old[p.Name] = true
-	}
-	err = r.waitFor(ctx, 3*time.Minute, func(ctx context.Context) (bool, error) {
-		pods, err := r.console.appPods(ctx, project, "web")
-		if err != nil {
-			return false, err
-		}
-		for _, p := range pods {
-			if !old[p.Name] && p.Ready {
-				return true, nil
-			}
-		}
-		return false, errors.New("web has not been restarted")
-	})
-	if err != nil {
-		return "task " + name + " succeeded", err
-	}
-	if err := r.waitHTTPS(ctx, "https://"+web+"/", "Hostname", 3*time.Minute); err != nil {
-		return "task " + name + " succeeded; web restarted", err
-	}
-	return "task " + name + " succeeded; web restarted and answers", nil
+	return out
 }
 
-func (r *runner) checkBuild(ctx context.Context, name string, since time.Time, host string) (string, error) {
-	err := r.waitFor(ctx, 15*time.Minute, func(ctx context.Context) (bool, error) {
-		b, err := r.console.build(ctx, project, name)
-		if err != nil {
-			return false, err
-		}
-		switch b.Phase {
-		case "succeeded":
-			return true, nil
-		case "failed", "cancelled":
-			return true, fmt.Errorf("build %s %s: %s", name, b.Phase, b.StatusMessage)
-		}
-		return false, fmt.Errorf("build %s is %s", name, b.Phase)
-	})
-	if err != nil {
-		return "", err
+// sameZone keeps the locations in the network zone of the first.
+func sameZone(locations []string) []string {
+	if len(locations) == 0 {
+		return nil
 	}
-	built := r.now().Sub(since)
-	if err := r.waitHTTPS(ctx, "https://"+host+"/", "Hostname", 10*time.Minute); err != nil {
-		return "build succeeded in " + fmtDuration(built), err
-	}
-	return fmt.Sprintf("%s built in %s; https://%s answered %s after Build now", r.cfg.GitRepo, fmtDuration(built), host, fmtDuration(r.now().Sub(since))), nil
-}
-
-func (r *runner) checkLogs(ctx context.Context, marker string) (string, error) {
-	var n int
-	err := r.waitFor(ctx, 5*time.Minute, func(ctx context.Context) (bool, error) {
-		entries, err := r.console.searchLogs(ctx, project, marker)
-		if err != nil {
-			return false, err
-		}
-		n = 0
-		for _, e := range entries {
-			if strings.Contains(e.Line, marker) {
-				n++
-			}
-		}
-		if n == 0 {
-			return false, errors.New("the task's marker is not in the logs yet")
-		}
-		return true, nil
-	})
-	return fmt.Sprintf("%d line(s) with the task's marker", n), err
-}
-
-func (r *runner) checkMetrics(ctx context.Context) (string, error) {
-	q := `kwerft:container_memory_working_set_bytes{namespace="` + project + `"}`
-	var n int
-	err := r.waitFor(ctx, 5*time.Minute, func(ctx context.Context) (bool, error) {
-		var err error
-		if n, err = r.console.metricSeries(ctx, q); err != nil {
-			return false, err
-		}
-		if n == 0 {
-			return false, errors.New("no series yet")
-		}
-		return true, nil
-	})
-	return fmt.Sprintf("%d series for %s", n, q), err
-}
-
-func (r *runner) checkAlert(ctx context.Context, since time.Time) (string, error) {
-	var found alert
-	err := r.waitFor(ctx, 8*time.Minute, func(ctx context.Context) (bool, error) {
-		list, err := r.console.alerts(ctx)
-		if err != nil {
-			return false, err
-		}
-		for _, a := range list {
-			if a.Project == project && a.App == "crash" && a.State == "firing" && (a.Rule == "crash-looping" || a.Rule == "restarts") {
-				found = a
-				return true, nil
-			}
-		}
-		return false, errors.New("no crash alert for app crash yet")
-	})
-	if err != nil {
-		return "", err
-	}
-	return fmt.Sprintf("%s firing %s after the app was created: %s", found.Rule, fmtDuration(r.now().Sub(since)), found.Summary), nil
-}
-
-func cmpOr(s, def string) string {
-	if s == "" {
-		return def
-	}
-	return s
+	zone := networkZone(locations[0])
+	return slices.DeleteFunc(slices.Clone(locations), func(l string) bool { return networkZone(l) != zone })
 }

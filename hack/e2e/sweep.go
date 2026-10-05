@@ -27,7 +27,7 @@ func createdAt(api time.Time, labels map[string]string) time.Time {
 	return time.Time{}
 }
 
-// sweep deletes e2e servers and SSH keys (label kwerft-e2e=true) older than
+// sweep deletes e2e servers, networks and SSH keys (label kwerft-e2e=true) older than
 // maxAge; with run set, every resource of that run regardless of age (the
 // workflow's safety net after a run). Nothing without the label is touched.
 func sweep(ctx context.Context, c *hcloud, now time.Time, maxAge time.Duration, run string, dryRun bool) (sweepResult, error) {
@@ -61,6 +61,29 @@ func sweep(ctx context.Context, c *hcloud, now time.Time, maxAge time.Duration, 
 		desc := fmt.Sprintf("server %s (id %d, run %s, age %s)", s.Name, s.ID, cmpOr(s.Labels[labelRun], "?"), age(now, created))
 		if !dryRun {
 			if err := c.deleteServer(ctx, s.ID); err != nil {
+				res.Errors = append(res.Errors, desc+": "+err.Error())
+				continue
+			}
+		}
+		res.Deleted = append(res.Deleted, verb+" "+desc)
+	}
+
+	// Networks after the servers: a network is only gone for good once no
+	// server is attached (Hetzner detaches deleted servers in the
+	// background; a failure here is retried by the next sweep).
+	networks, err := c.networks(ctx, selector)
+	if err != nil {
+		return res, fmt.Errorf("list networks: %w", err)
+	}
+	for _, n := range networks {
+		created := createdAt(n.Created, n.Labels)
+		if n.Labels[labelE2E] != "true" || !due(created) {
+			res.Kept++
+			continue
+		}
+		desc := fmt.Sprintf("network %s (id %d, run %s, age %s)", n.Name, n.ID, cmpOr(n.Labels[labelRun], "?"), age(now, created))
+		if !dryRun {
+			if err := c.deleteNetwork(ctx, n.ID); err != nil {
 				res.Errors = append(res.Errors, desc+": "+err.Error())
 				continue
 			}

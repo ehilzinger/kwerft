@@ -1,7 +1,7 @@
 package main
 
 // A minimal Hetzner Cloud API client: just what the e2e runs need (servers,
-// SSH keys, server types, images). It lives here rather than in
+// SSH keys, networks, server types, images). It lives here rather than in
 // internal/hetzner so the harness stays independent of the product's client,
 // which grows its own server and SSH key support for node pools.
 
@@ -85,6 +85,16 @@ type hSSHKey struct {
 	Labels  map[string]string `json:"labels"`
 }
 
+// hNetwork is a Cloud Network: the multi-node runs need one, since joining
+// a cluster assumes a private network (install.sh stage_join).
+type hNetwork struct {
+	ID      int64             `json:"id"`
+	Name    string            `json:"name"`
+	IPRange string            `json:"ip_range"`
+	Created time.Time         `json:"created"`
+	Labels  map[string]string `json:"labels"`
+}
+
 type hImage struct {
 	ID          int64      `json:"id"`
 	Name        string     `json:"name"`
@@ -130,7 +140,9 @@ type createServerRequest struct {
 	Labels           map[string]string `json:"labels"`
 	UserData         string            `json:"user_data,omitempty"`
 	StartAfterCreate bool              `json:"start_after_create"`
-	PublicNet        struct {
+	// Networks attaches the server to these Cloud Networks at creation.
+	Networks  []int64 `json:"networks,omitempty"`
+	PublicNet struct {
 		EnableIPv4 bool `json:"enable_ipv4"`
 		EnableIPv6 bool `json:"enable_ipv6"`
 	} `json:"public_net"`
@@ -319,6 +331,60 @@ func (c *hcloud) sshKeys(ctx context.Context, selector string) ([]hSSHKey, error
 		}
 		out = append(out, body.SSHKeys...)
 		if body.Meta.Pagination.NextPage == nil || len(body.SSHKeys) == 0 {
+			return out, nil
+		}
+	}
+}
+
+// networkZone is the network zone of a Cloud location.
+func networkZone(location string) string {
+	switch location {
+	case "ash":
+		return "us-east"
+	case "hil":
+		return "us-west"
+	case "sin":
+		return "ap-southeast"
+	}
+	return "eu-central"
+}
+
+// createNetwork creates 10.0.0.0/16 with one cloud subnet 10.0.0.0/24 in zone.
+func (c *hcloud) createNetwork(ctx context.Context, name, zone string, labels map[string]string) (*hNetwork, error) {
+	in := map[string]any{
+		"name": name, "ip_range": "10.0.0.0/16", "labels": labels,
+		"subnets": []map[string]string{{"type": "cloud", "ip_range": "10.0.0.0/24", "network_zone": zone}},
+	}
+	var body struct {
+		Network hNetwork `json:"network"`
+	}
+	if err := c.do(ctx, http.MethodPost, "/networks", in, &body); err != nil {
+		return nil, err
+	}
+	return &body.Network, nil
+}
+
+// deleteNetwork treats a network that is already gone as deleted.
+func (c *hcloud) deleteNetwork(ctx context.Context, id int64) error {
+	if err := c.do(ctx, http.MethodDelete, "/networks/"+strconv.FormatInt(id, 10), nil, nil); err != nil && !errors.Is(err, errNotFound) {
+		return err
+	}
+	return nil
+}
+
+func (c *hcloud) networks(ctx context.Context, selector string) ([]hNetwork, error) {
+	var out []hNetwork
+	for page := 1; ; page++ {
+		var body struct {
+			Networks []hNetwork `json:"networks"`
+			Meta     pageMeta   `json:"meta"`
+		}
+		q := url.Values{"label_selector": {selector}, "page": {strconv.Itoa(page)}, "per_page": {"50"}}
+		if err := c.do(ctx, http.MethodGet, "/networks?"+q.Encode(), nil, &body); err != nil {
+			return nil, err
+		}
+		out = append(out, body.Networks...)
+		if body.Meta.Pagination.NextPage == nil || len(body.Networks) == 0 {
 			return out, nil
 		}
 	}
