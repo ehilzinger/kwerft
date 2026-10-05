@@ -454,3 +454,93 @@ upgraded by these tests.
 - **A second console replica** would make the console's own restart
   invisible; it waits for the HA store (`deployment.yaml` TODO).
 - **Signing `install.sh`** (above).
+
+## As built (U1): release manifest, trailers, crdcompat
+
+Files: `hack/release.sh` (new commands `trailers`, `crdcompat`, `manifest`;
+`notes`, `install-repo` and `dry-run` extended), `.github/workflows/release.yml`,
+`hack/crdcompat/` (Go tool, tests, fixtures in `testdata/`),
+`install/test/release.bats` (11 new tests), `RELEASING.md` (sections "The
+release manifest", "Upgrade path and rollback safety", "CRD compatibility").
+
+**What lands in `kwerft-install`** (written by the `install-repo` job, which
+needs `INSTALL_REPO_TOKEN`):
+
+| Path | Content |
+|---|---|
+| `v<ver>/install.sh`, `join.sh`, `SHA256SUMS` | as before |
+| `v<ver>/manifest.json` | the format above; also attached to the GitHub Release |
+| `v<ver>/NOTES.md` | the GitHub Release's body: hand-written notes from the tag message (if any), the Install section with an "Upgrades from" row and a "Not rollback-safe" paragraph when it applies, then GitHub's generated "What's changed" |
+| `releases.json` | a **JSON array** (not an object) of `{version, channel, published}`, newest *version* first in semver order (`0.6.0`, `0.6.0-rc.1`, `0.5.0`, `0.4.3`); a patch of an older line published later sorts by version, not date |
+| `LATEST`, top-level scripts | unchanged |
+
+URLs: `https://raw.githubusercontent.com/ehilzinger/kwerft-install/main/releases.json`
+and `…/main/v<ver>/manifest.json` / `NOTES.md`. kwerft.dev redirects only
+`/install.sh` and `/:version/install.sh` (`kwerft-homepage/netlify.toml`), so
+discovery should read raw.githubusercontent.com directly unless someone adds
+redirects there.
+
+**Manifest details other workers rely on:**
+- `channel`: `edge` for any prerelease (`-rc.N`), `stable` otherwise. Nothing
+  else sets it; there is no `Channel:` trailer.
+- `published`: the tag's date in UTC (`%Y-%m-%dT%H:%M:%SZ`), so re-runs give
+  the same value.
+- `upgradeFrom`: the `Upgrade-From` trailer (validated, ≤ the release), else
+  `<line>.0` of the second-newest minor line *below* the release's own, over
+  all release tags including prereleases (0.6.x → `0.4.0`; 1.0.0 after 0.9 →
+  `0.8.0`). It is an inclusive lower bound and may name a version that was
+  only ever an rc line's `.0`. Older consoles must take an intermediate step
+  (W3).
+- `rollbackSafe`: false only with `Rollback-Safe: no` (also `false`; any case).
+- `kubernetes.supported`: `["1.<m-1>", "1.<m>"]` from `K3S_VERSION`, which
+  must keep the form `v1.X.Y+k3sN`.
+- `components`: every `NAME_VERSION="…"` line in the pinned block (before
+  the first `readonly`) except `K3S_VERSION`, keyed in camelCase without
+  `_VERSION`: `cilium`, `certManager`, `traefikChart`, `vmStackChart`,
+  `hcloudCsiChart`, `zot`, … U2/B1's new pins appear automatically
+  (`SYSTEM_UPGRADE_CONTROLLER_VERSION` → `systemUpgradeController`,
+  `VELERO_CHART_VERSION` → `veleroChart`, `VELERO_PLUGIN_AWS_VERSION` →
+  `veleroPluginAws`), **as long as they are `NAME="value"` lines above the
+  `readonly EXIT_…` line**. Non-version pins (`HCLOUD_LOCATIONS`, the repos)
+  are not components.
+- `image`: `ghcr.io/ehilzinger/kwerft@sha256:<index digest>` (multi-arch).
+  `chart.digest`: what `helm push` reported. `install-repo` refuses a
+  manifest without both (or of another version).
+- `SHA256SUMS` still covers only `install.sh` and `join.sh`; the runner
+  verifies the installer against it, not the manifest.
+- `make release-dry-run` writes a **draft** manifest (image by tag,
+  `chart.digest: null`) and previews the install repository in
+  `dist/release/install-repo/` (a scratch git repo).
+
+**crdcompat.** `hack/release.sh crdcompat <ver>` extracts `charts/kwerft/crds`
+from the newest stable tag below the release and, if newer, the newest
+prerelease below it (`git archive`), and runs `go run ./hack/crdcompat -name
+v<old> OLD NEW` (or `$CRDCOMPAT`). Exit 0/1/2 = compatible/incompatible/error.
+Incompatible: removed CRD, served version, short name, status/scale
+subresource; changed scope, kind, list kind; removed field (with a "renamed
+to …?" hint); new required field or field becoming required (except inside
+a new optional parent); narrowed or newly added enum; changed type; lost
+int-or-string, nullable or preserve-unknown-fields; lowered max*/raised
+min*/new pattern or format; closed maps; removed item schemas. Warnings only
+(printed, never fail): new or rewritten CEL rules, changed (not new)
+pattern or format. The workflow runs it right after the trailers, before
+`make web`; `Rollback-Safe: no` turns findings into a notice. Against v0.4.0
+and v0.5.0-rc.3 the foundation's CRDs pass with 8 warnings (the CEL rules
+that came with Secret-file volumes). Run on v0.1.0 → v0.4.0 it would have
+flagged `builds .spec.source: new required field`.
+
+**Workflow changes.** The `release` job checks out with `fetch-depth: 0` and
+re-fetches the pushed tag (`git fetch --force … refs/tags/<tag>`), because
+checkout can replace an annotated tag with a lightweight one and lose the
+trailers; a lightweight tag gets the defaults and a warning. New steps:
+`trailers` (outputs `upgrade_from`, `rollback_safe`, `channel`), `crdcompat`,
+and "Write manifest.json" after the pushes; `manifest.json` is a release
+asset. The `install-repo` job downloads it with the scripts and writes the
+release body to `NOTES.md`. jq is required (on the runners; macOS ships it).
+
+**Not done / for others.** No Go type for the manifest or `releases.json`:
+W3 defines its own from the format above. Releases up to 0.5.x have no
+manifest and are not in `releases.json` (no backfill). Nothing was published
+or tagged; the workflow changes are untested on GitHub (verified: YAML
+parses, the full `make release-dry-run RELEASE_VERSION=0.6.0` locally, bats
+and Go tests).
