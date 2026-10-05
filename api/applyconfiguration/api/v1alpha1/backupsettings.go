@@ -16,8 +16,10 @@ type BackupSettingsApplyConfiguration struct {
 	// Prefix inside the bucket, so several consoles can share one
 	// (default: the console's hostname).
 	Prefix *string `json:"prefix,omitempty"`
-	// EtcdSnapshots: k3s's own snapshots of the cluster state, to the same
-	// bucket; nil keeps k3s's defaults (local only).
+	// EtcdSnapshots: k3s's own snapshots of the cluster state, kept locally
+	// and copied to the same bucket (folder <prefix>/etcd); nil means every
+	// 6 hours, 28 kept. The installer applies a changed schedule on its next
+	// run (k3s reads it only when it starts).
 	EtcdSnapshots *EtcdSnapshotSettingsApplyConfiguration `json:"etcdSnapshots,omitempty"`
 }
 
