@@ -374,4 +374,4 @@ If you are moving a real workload from Compose onto Kubernetes:
 
 ---
 
-*I'm Enzo, and I build Kwerft: a Kubernetes console for Hetzner servers, installed with one script, with Hatchure as its first real workload. It's open source (AGPL-3.0) on [GitHub](https://github.com/ehilzinger/kwerft), and the install command is on [kwerft.dev](https://kwerft.dev/?utm_source=medium&utm_medium=blog&utm_campaign=compose-migration).*
+*I'm Enzo, and I build Kwerft: a Kubernetes console for Hetzner servers, installed with one script. It's open source (AGPL-3.0) on [GitHub](https://github.com/ehilzinger/kwerft), and the install command is on [kwerft.dev](https://kwerft.dev/?utm_source=medium&utm_medium=blog&utm_campaign=compose-migration). Its first real workload is my other project, [Hatchure](https://hatchure.app/?utm_source=medium&utm_medium=blog&utm_campaign=kwerft-migration): loops to ride, hike and run, with a time on every stop.*
