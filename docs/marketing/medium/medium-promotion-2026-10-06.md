@@ -194,6 +194,54 @@ to a weekly thread.
   how-to submissions; a step-by-step version of the SSE-C setup would fit
   there, but check its terms on content published elsewhere first.
 
+### LinkedIn: Kwerft itself, on the drain post's day (Thu 15 Oct)
+
+One post that introduces Kwerft, with the drain post as the reason to post
+today. The image is the console's Overview with the infrastructure map
+(`../kwerft-homepage/src/assets/screenshots/overview-light.png`, demo data);
+the drain cover is the alternative if the post should lead with the number.
+LinkedIn cuts the text after about 210 characters behind "…see more", so the
+first two sentences are the hook. Put the Medium link in the first comment if
+you'd rather not have LinkedIn shrink a post with an outside link; the
+GitHub link can stay in the text.
+
+> Rent a server at Hetzner, run one script, and get Kubernetes with a web
+> console on top. That's Kwerft, and it's open source.
+>
+> I built it because my other project, Hatchure, outgrew one server running
+> Docker Compose and a crontab. Today Hatchure's routing, its nightly jobs
+> and 350 GiB of map tiles run on two Kwerft clusters, managed from one
+> console.
+>
+> What one install sets up:
+> • k3s with Cilium, Traefik and HTTPS certificates
+> • Apps, jobs and schedules from a Git repository or an image
+> • Network rules between projects, a host firewall that won't lock you out
+> • Logs, metrics and alerts
+> • All of it in about 2.4 GB of memory, so an 8 GB server has room for your
+>   apps
+> • In the 0.6 release candidates: encrypted backups, secrets your developers
+>   can write but not read, and upgrades from the console that roll
+>   themselves back
+>
+> Moving a real workload finds the gaps demo apps never do. The first one:
+> restarting a service behind a proxy answered 503 to 120 of 667 requests,
+> even with the new pod started first and an honest health check. A
+> five-second preStop sleep took it to 0 of 1,881. I wrote up why, with the
+> code: [Medium link]
+>
+> Code (AGPL-3.0): https://github.com/ehilzinger/kwerft
+> Install: https://kwerft.dev
+>
+> If you run a few services on Hetzner with Docker Compose: what would stop
+> you moving them onto something like this? That's the answer I'm after.
+>
+> #Kubernetes #OpenSource #Hetzner #DevOps #SelfHosted
+
+Later posts don't get a LinkedIn post of their own each; a short comment
+under this one when the migration post goes out ("the full story of the
+move: [link]") keeps one thread instead of five.
+
 ## 4. Where Kwerft's own launch fits
 
 These posts are not the launch. The launch is a **Show HN on the day of the
