@@ -201,9 +201,17 @@ secret_expires() { printf '%s' "$1" | base64; }
   [ "$(setup_token_state)" = "complete" ]
 }
 
-@test "setup_token_state: config file skips the token" {
+@test "setup_token_state: --config without an owner still gets a setup token" {
   setup_state_env
   CONFIG_FILE=/root/kwerft.yaml
+  kc() { return 1; }
+  [ "$(setup_token_state)" = "missing" ]
+}
+
+@test "setup_token_state: an owner from --config waits in kwerft-bootstrap" {
+  setup_state_env
+  CONFIG_FILE=/root/kwerft.yaml
+  kc() { if [[ "$*" == *"get secret kwerft-bootstrap"*"{.metadata.name}"* ]]; then echo kwerft-bootstrap; else return 1; fi; }
   [ "$(setup_token_state)" = "config" ]
 }
 
@@ -212,13 +220,162 @@ secret_expires() { printf '%s' "$1" | base64; }
   mkdir() { :; }; chmod() { :; }   # CONF_DIR is readonly /etc/kwerft
   DOMAIN="console.kwerft.test"; PUBLIC_IP="203.0.113.24"
   getent() { return 2; }   # glibc: key not found
-  setup_token_state() { echo config; }
+  kc() { return 0; }
+  setup_token_state() { echo complete; }
   # Called directly, not via `run` or $(...): errexit must stay on (bash 3.2
   # drops it inside command substitution), since errexit is what killed the stage.
   stage_handoff >"$BATS_TEST_TMPDIR/out" 2>&1
   output=$(<"$BATS_TEST_TMPDIR/out")
   [[ "$output" == *"console.kwerft.test resolves to 'nothing', expected 203.0.113.24."* ]]
-  [[ "$output" == *"DNS unresolved · owner from config"* ]]
+  [[ "$output" == *"DNS unresolved · setup complete"* ]]
+}
+
+# ---------------------------------------------------------------------------
+# The owner from --config: the installer writes Secret kwerft-bootstrap, the
+# console creates the owner and replaces the password with the outcome
+# (internal/setup/owner.go), Handoff reports it and deletes the Secret.
+# ---------------------------------------------------------------------------
+
+owner_config() {
+  local cfg="$BATS_TEST_TMPDIR/kwerft.yaml" pw="$BATS_TEST_TMPDIR/owner.pw"
+  printf '%s\n' "${2-correct horse battery staple}" >"$pw"
+  printf 'domain: ops.example.com\n%s\n' "${1//PW/$pw}" >"$cfg"
+  echo "$cfg"
+}
+
+@test "--config owner: checked before anything is installed" {
+  run "$SCRIPT" --dry-run --platform cloud --config "$(owner_config 'owner: { email: you@example.com, passwordFile: PW }')"
+  [ "$status" -eq 0 ]
+  run "$SCRIPT" --dry-run --platform cloud --config "$(owner_config $'owner:\n  email: you@example.com\n  name: Ada Lovelace\n  passwordFile: PW')"
+  [ "$status" -eq 0 ]
+  run "$SCRIPT" --dry-run --platform cloud --config "$(owner_config 'owner: { email: you@example.com }')"
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"owner.passwordFile in"*"not readable"* ]]
+  run "$SCRIPT" --dry-run --platform cloud --config "$(owner_config 'owner: { email: you, passwordFile: PW }')"
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"owner.email in"*"must be an address like you@example.com, got 'you'"* ]]
+  run "$SCRIPT" --dry-run --platform cloud --config "$(owner_config 'owner: { email: you@example.com, passwordFile: PW }' 'short')"
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"must hold a password of 12 to 256 characters"* ]]
+  [[ "$output" != *"short"*"short"* ]]
+}
+
+# kc stub recording its calls and keeping Secret kwerft-bootstrap as files in
+# $SECRET_DIR (one per key); the console's answer is written there by a test.
+owner_env() {
+  setup_state_env
+  LOG_FILE="$BATS_TEST_TMPDIR/install.log"
+  KC_LOG="$BATS_TEST_TMPDIR/kc.log"; : >"$KC_LOG"
+  SECRET_DIR="$BATS_TEST_TMPDIR/kwerft-bootstrap"
+  OWNER_TIMEOUT=0; OWNER_POLL=0; COMPLETE=false
+  kc() {
+    printf 'kc %s\n' "$*" >>"$KC_LOG"
+    case "$*" in
+      *"/proxy/api/v1/setup"*) echo "{\"complete\":$COMPLETE}" ;;
+      *"get secret kwerft-bootstrap"*"{.metadata.name}"*) [[ ! -d "$SECRET_DIR" ]] || echo kwerft-bootstrap ;;
+      *"get secret kwerft-bootstrap"*"{.data."*)
+        [[ "$*" =~ \{\.data\.([a-z]+)\} ]]
+        [[ ! -f "$SECRET_DIR/${BASH_REMATCH[1]}" ]] || base64 <"$SECRET_DIR/${BASH_REMATCH[1]}" ;;
+      *"delete secret kwerft-bootstrap"*) rm -rf "$SECRET_DIR" ;;
+      *"apply"*) cat >>"$KC_LOG" ;;
+    esac
+    return 0
+  }
+}
+
+# console_answers <key=value>...: what the console left in the Secret.
+console_answers() {
+  rm -rf "$SECRET_DIR"; command mkdir -p "$SECRET_DIR"
+  local kv
+  for kv in "$@"; do printf '%s' "${kv#*=}" >"$SECRET_DIR/${kv%%=*}"; done
+}
+
+handoff() {
+  mkdir() { :; }; chmod() { :; }   # CONF_DIR is readonly /etc/kwerft
+  DOMAIN="console.kwerft.test"; PUBLIC_IP="203.0.113.24"
+  getent() { echo "203.0.113.24 STREAM console.kwerft.test"; }
+  create_setup_token() { echo kwft_setup_x >"$SETUP_TOKEN_FILE"; }   # GNU date and sha256sum
+  stage_handoff >"$BATS_TEST_TMPDIR/out" 2>&1
+  output=$(<"$BATS_TEST_TMPDIR/out")
+}
+
+@test "write_owner_secret: the password goes from its file, by server-side apply" {
+  owner_env
+  OWNER_EMAIL=you@example.com; OWNER_NAME="Ada Lovelace"; OWNER_PASSWORD_FILE="$BATS_TEST_TMPDIR/owner.pw"
+  printf 'correct horse battery staple\n' >"$OWNER_PASSWORD_FILE"
+  write_owner_secret
+  grep -q -- "create secret generic kwerft-bootstrap --from-literal=email=you@example.com --from-literal=name=Ada Lovelace --from-file=password=$OWNER_PASSWORD_FILE" "$KC_LOG"
+  grep -q -- "apply --server-side --force-conflicts --field-manager=kwerft-installer -f -" "$KC_LOG"
+  absent "correct horse" "$KC_LOG"
+  absent "delete secret kwerft-bootstrap" "$KC_LOG"
+}
+
+@test "write_owner_secret: nothing to hand over once setup is complete, or without an owner" {
+  owner_env
+  OWNER_EMAIL=you@example.com; OWNER_PASSWORD_FILE="$BATS_TEST_TMPDIR/owner.pw"; COMPLETE=true
+  write_owner_secret
+  absent "create secret" "$KC_LOG"
+  grep -q "delete secret kwerft-bootstrap --ignore-not-found" "$KC_LOG"
+  : >"$KC_LOG"; COMPLETE=false; OWNER_EMAIL=""
+  write_owner_secret
+  absent "create secret" "$KC_LOG"
+  grep -q "delete secret kwerft-bootstrap --ignore-not-found" "$KC_LOG"
+  : >"$KC_LOG"; OWNER_EMAIL=you@example.com; RESTORE_FROM=latest
+  write_owner_secret
+  absent "create secret" "$KC_LOG"
+}
+
+@test "stage_handoff: the owner from --config was created, no setup token" {
+  owner_env
+  echo kwft_setup_old >"$SETUP_TOKEN_FILE"
+  console_answers email=you@example.com status=created
+  handoff
+  [[ "$output" == *"DNS 203.0.113.24 · owner you@example.com from --config"* ]]
+  [ ! -e "$SECRET_DIR" ]
+  [ ! -e "$SETUP_TOKEN_FILE" ]
+  grep -q "delete secret kwerft-setup-token" "$KC_LOG"
+}
+
+@test "stage_handoff: an owner the console rejected falls back to a setup token" {
+  owner_env
+  console_answers email=you@example.com status=rejected "reason=the password in owner.passwordFile does not qualify: use at least 12 characters"
+  handoff
+  [[ "$output" == *"did not create the owner from the config: the password in owner.passwordFile does not qualify: use at least 12 characters. Finish setup with the setup token"* ]]
+  [[ "$output" == *"DNS 203.0.113.24 · owner: setup token ready"* ]]
+  [ ! -e "$SECRET_DIR" ]
+  [ -s "$SETUP_TOKEN_FILE" ]
+}
+
+@test "stage_handoff: a console that never takes the owner: the password goes, a setup token comes" {
+  owner_env
+  CONFIG_FILE=/root/kwerft.yaml
+  console_answers email=you@example.com password=pw
+  handoff
+  [[ "$output" == *"did not create the owner from /root/kwerft.yaml within 0s"* ]]
+  [[ "$output" == *"· owner: setup token ready"* ]]
+  [ ! -e "$SECRET_DIR" ]
+  [ -s "$SETUP_TOKEN_FILE" ]
+}
+
+@test "stage_handoff: setup already complete, the owner from --config is not created" {
+  owner_env
+  console_answers email=you@example.com status=exists
+  handoff
+  [[ "$output" == *"Setup was already complete"* ]]
+  [[ "$output" == *"· setup complete"* ]]
+  [ ! -e "$SECRET_DIR" ]
+}
+
+@test "print_summary: an owner from --config signs in, a setup token wins when there is one" {
+  summary_env
+  CONFIG_FILE=/root/kwerft.yaml; OWNER_EMAIL=you@example.com
+  run print_summary
+  [[ "$output" == *"Sign in with the owner account from /root/kwerft.yaml (you@example.com)"* ]]
+  [[ "$output" != *"/setup"* ]]
+  SETUP_TOKEN_FILE="$BATS_TEST_TMPDIR/setup-token"; echo kwft_setup_x >"$SETUP_TOKEN_FILE"
+  run print_summary
+  [[ "$output" == *"https://ops.example.com/setup"* ]]
+  [[ "$output" != *"owner account"* ]]
 }
 
 @test "detect_addresses: a missing --private-iface is a preflight error, not a crash" {

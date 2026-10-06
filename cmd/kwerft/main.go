@@ -258,6 +258,9 @@ func main() {
 			os.Exit(1)
 		}
 		tokens = &setup.SecretTokenSource{Reader: mgr.GetAPIReader(), Writer: mgr.GetClient(), Namespace: namespace}
+		// The owner from install.sh --config (Secret kwerft-bootstrap).
+		go (&setup.OwnerBootstrap{Reader: mgr.GetAPIReader(), Writer: mgr.GetClient(), Namespace: namespace,
+			Store: st, Tokens: tokens, Logger: log.With("component", "setup")}).Run(ctx)
 		go waitUntilReady(ctx, log, mgr, &ready)
 		go func() {
 			if err := mgr.Start(ctx); err != nil {

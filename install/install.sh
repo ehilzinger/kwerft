@@ -147,6 +147,11 @@ DNS_RECORDS="true"      # --config dns.records: Kwerft keeps the console's and *
 HCLOUD_TOKEN_FILE=""    # --config hcloud.tokenFile: Hetzner Cloud API token (Cloud Firewall, Load Balancer, CSI, CCM)
 HCLOUD_CCM=""           # --config hcloud.cloudControllerManager: true only takes effect on a first install
 HCLOUD_LB=""            # --config hcloud.loadBalancer: true|false, a Load Balancer in front of the ingress
+OWNER_EMAIL=""          # --config owner.email: the owner account the console creates (no setup token)
+OWNER_NAME=""           # --config owner.name (optional)
+OWNER_PASSWORD_FILE=""  # --config owner.passwordFile: its password, at least 12 characters
+OWNER_TIMEOUT=${KWERFT_OWNER_TIMEOUT:-180}   # seconds Handoff waits for the console to create that owner
+OWNER_POLL=${KWERFT_OWNER_POLL:-2}           # seconds between checks; tests set 0
 MODE="install"
 DRY_RUN=0
 ASSUME_YES=0
@@ -269,7 +274,8 @@ Install:
   --acme-server URL      ACME directory for certificates, or "staging" for Let's Encrypt's
                          staging CA (untrusted certificates, generous rate limits: for tests).
                          Default: Let's Encrypt production
-  --config FILE          Pre-seed owner, DNS, Hetzner tokens; skips the setup wizard
+  --config FILE          Pre-seed the owner, DNS, Hetzner tokens; with an owner, no setup
+                         token is needed
   --platform P           auto | cloud | dedicated (default: auto)
   --private-iface IF     Interface for node-to-node and API traffic
   --version V            Kwerft release to install (default: ${KWERFT_VERSION_DEFAULT})
@@ -456,6 +462,12 @@ parse_args() {
     HCLOUD_TOKEN_FILE=$(config_get_in hcloud tokenFile)
     HCLOUD_CCM=$(lower "$(config_get_in hcloud cloudControllerManager)")
     HCLOUD_LB=$(lower "$(config_get_in hcloud loadBalancer)")
+    if grep -q '^owner:' "$CONFIG_FILE"; then
+      OWNER_EMAIL=$(config_get_in owner email)
+      OWNER_NAME=$(config_get_in owner name)
+      OWNER_PASSWORD_FILE=$(config_get_in owner passwordFile)
+      parse_owner
+    fi
   fi
   # A hostname given now is explicit: it replaces what Settings chose. Without
   # one, resolve_domain keeps the cluster's setting.
@@ -497,8 +509,23 @@ parse_args() {
   return 0
 }
 
-# Reads a top-level scalar `key: value` from the config file. The full file is
-# handed to Kwerft as a Secret; the installer only needs a few top-level keys.
+# parse_owner checks the owner: block of --config up front, as the console
+# would (internal/setup, owner.go): an address and a password file whose
+# password has 12 to 256 characters (its trailing line break is not part of it).
+parse_owner() {
+  [[ "$OWNER_EMAIL" =~ ^[^@[:space:]]+@[^@[:space:]]+\.[^@[:space:]]+$ ]] \
+    || die $EXIT_USAGE "owner.email in $CONFIG_FILE must be an address like you@example.com, got '$OWNER_EMAIL'"
+  [[ -n "$OWNER_PASSWORD_FILE" && -r "$OWNER_PASSWORD_FILE" ]] \
+    || die $EXIT_USAGE "owner.passwordFile in $CONFIG_FILE not readable: '$OWNER_PASSWORD_FILE'"
+  local pw
+  pw=$(<"$OWNER_PASSWORD_FILE")
+  (( ${#pw} >= 12 && ${#pw} <= 256 )) \
+    || die $EXIT_USAGE "owner.passwordFile ($OWNER_PASSWORD_FILE) must hold a password of 12 to 256 characters"
+  return 0
+}
+
+# Reads a top-level scalar `key: value` from the config file; the installer
+# applies the settings itself and hands only the owner to Kwerft.
 config_get() {
   sed -n -E "s/^$1:[[:space:]]*['\"]?([^'\"#]*)['\"]?[[:space:]]*(#.*)?$/\1/p" "$CONFIG_FILE" | head -n1 | sed -E 's/[[:space:]]+$//'
 }
@@ -2622,10 +2649,7 @@ check_release() {
 stage_kwerft() {
   kc create namespace kwerft-system --dry-run=client -o yaml | kc apply -f - >/dev/null
   mark_system_namespace kwerft-system
-  if [[ -n "$CONFIG_FILE" ]]; then
-    kc -n kwerft-system create secret generic kwerft-bootstrap \
-      --from-file=config.yaml="$CONFIG_FILE" --dry-run=client -o yaml | kc apply -f - >/dev/null
-  fi
+  write_owner_secret
 
   local ref version_args=() image_args=() acme_args=()
   ref=$(chart_ref)
@@ -2735,6 +2759,28 @@ stage_kwerft_agent() {
   echo "agent ${IMAGE:-$KWERFT_VERSION} · cluster $(cluster_of_token "$CLUSTER_TOKEN") → $CONSOLE_URL${volumes}"
 }
 
+# write_owner_secret hands the owner from --config to the console as Secret
+# kwerft-bootstrap in kwerft-system (email, name, password; see
+# internal/setup/owner.go): the console creates the owner from it and
+# replaces the password with the outcome, which Handoff reports. Only while
+# no owner exists. The password goes from its file into the Secret, never
+# through arguments or the log, and by server-side apply, which keeps no copy
+# of it in a last-applied annotation. Without an owner to hand over, a
+# leftover Secret goes (older releases kept a copy of the whole config there).
+write_owner_secret() {
+  if [[ -z "$OWNER_EMAIL" || -n "$RESTORE_FROM" ]] || console_setup_complete; then
+    kc -n kwerft-system delete secret kwerft-bootstrap --ignore-not-found >>"$LOG_FILE" 2>&1 || true
+    return 0
+  fi
+  local name_args=()
+  [[ -n "$OWNER_NAME" ]] && name_args=(--from-literal=name="$OWNER_NAME")
+  kc -n kwerft-system create secret generic kwerft-bootstrap \
+    --from-literal=email="$OWNER_EMAIL" ${name_args[@]+"${name_args[@]}"} --from-file=password="$OWNER_PASSWORD_FILE" \
+    --dry-run=client -o yaml \
+    | kc apply --server-side --force-conflicts --field-manager=kwerft-installer -f - >>"$LOG_FILE" 2>&1 \
+    || die $EXIT_KWERFT "Could not hand the owner from $CONFIG_FILE to Kwerft"
+}
+
 # write_agent_secret stores the agent token where the chart mounts it
 # (agent.tokenSecret). From stdin, so the token is not in kubectl's
 # arguments; the agent rereads it before every connection, so a rotated
@@ -2834,43 +2880,95 @@ stage_handoff() {
   managed=$(cluster_setting '{.spec.dns.manageRecords}')
   if [[ "$resolved" != "$PUBLIC_IP" && "$managed" == "true" && -z "$resolved" ]]; then
     printf '  DNS         Kwerft creates %s → %s in Hetzner DNS (Settings shows the record); the certificate follows.\n' "$DOMAIN" "$PUBLIC_IP"
-    printf '  Sign in with the owner account from %s\n' "$CONFIG_FILE"
   elif [[ "$resolved" != "$PUBLIC_IP" ]]; then
     warn "$DOMAIN resolves to '${resolved:-nothing}', expected $PUBLIC_IP. The certificate is issued once DNS is fixed."
   fi
 
   mkdir -p "$CONF_DIR"; chmod 0700 "$CONF_DIR"
-  local state
+  local state result owner=""
   state=$(setup_token_state)
+  if [[ "$state" == config ]]; then
+    result=$(config_owner_result)
+    # The outcome is read; the Secret goes, and with it a password the
+    # console did not get to.
+    kc -n kwerft-system delete secret kwerft-bootstrap --ignore-not-found >>"$LOG_FILE" 2>&1 || true
+    case "$result" in
+      created\ *)
+        owner=${result#created }
+        state=complete ;;
+      exists)
+        warn "Setup was already complete, so the owner from ${CONFIG_FILE:-the config} was not created: sign in with an existing account."
+        state=complete ;;
+      rejected\ *)
+        warn "Kwerft did not create the owner from ${CONFIG_FILE:-the config}: ${result#rejected }. Finish setup with the setup token instead."
+        state=$(setup_token_state) ;;
+      *)
+        warn "Kwerft did not create the owner from ${CONFIG_FILE:-the config} within ${OWNER_TIMEOUT}s (kubectl -n kwerft-system logs deploy/kwerft). Finish setup with the setup token instead."
+        state=$(setup_token_state) ;;
+    esac
+    [[ "$state" != config ]] || state=missing   # the Secret would not go: hand out a token all the same
+  fi
   case "$state" in
     missing|expired)
       create_setup_token
-      state="token ready" ;;
+      state="owner: setup token ready" ;;
     complete)
       # Used up or no longer needed; nothing left to protect.
       rm -f "$SETUP_TOKEN_FILE"
       kc -n kwerft-system delete secret kwerft-setup-token --ignore-not-found >/dev/null 2>&1 || true
-      state="setup complete" ;;
+      state="setup complete"
+      [[ -z "$owner" ]] || state="owner $owner from --config" ;;
     pending)
-      state="token ready" ;;
-    config)
-      state="owner from config" ;;
+      state="owner: setup token ready" ;;
     restored)
       state="accounts from the backup" ;;
   esac
   echo "DNS ${resolved:-unresolved} · $state"
 }
 
+# owner_secret_exists: Secret kwerft-bootstrap holds an owner from --config.
+owner_secret_exists() {
+  [[ "$(kc -n kwerft-system get secret kwerft-bootstrap -o 'jsonpath={.metadata.name}' 2>/dev/null || true)" == kwerft-bootstrap ]]
+}
+
+# owner_secret_field <key> prints a key of Secret kwerft-bootstrap, decoded.
+owner_secret_field() {
+  kc -n kwerft-system get secret kwerft-bootstrap -o "jsonpath={.data.$1}" 2>/dev/null | base64 -d 2>/dev/null || true
+}
+
+# config_owner_result waits until the console has taken the owner from Secret
+# kwerft-bootstrap (its password is gone) and prints the outcome: "created
+# <email>", "exists", "rejected <reason>"; nothing when the console did not
+# answer within OWNER_TIMEOUT seconds or the Secret went away. The password is
+# never read back: only whether the Secret still holds one.
+config_owner_result() {
+  local deadline=$(( $(date +%s) + OWNER_TIMEOUT )) waiting status
+  while owner_secret_exists; do
+    waiting=$(kc -n kwerft-system get secret kwerft-bootstrap -o 'jsonpath={.data.password}' 2>/dev/null || true)
+    if [[ -z "$waiting" ]]; then
+      status=$(owner_secret_field status)
+      case "$status" in
+        created)  echo "created $(owner_secret_field email)"; return 0 ;;
+        exists)   echo exists; return 0 ;;
+        rejected) echo "rejected $(owner_secret_field reason)"; return 0 ;;
+      esac
+    fi
+    (( $(date +%s) < deadline )) || return 0
+    sleep "$OWNER_POLL"
+  done
+}
+
 # setup_token_state prints where first-run setup stands:
-#   config    owner comes from --config, no token needed
+#   restored  --restore: the users came back with the console's database
+#   config    an owner from --config waits in Secret kwerft-bootstrap
 #   missing   no token yet (first install, or the file was lost)
 #   pending   a valid token is waiting to be used
 #   expired   the token ran out before setup was done
 #   complete  Kwerft consumed the token (it deletes the Secret once the owner exists)
-#   restored  --restore: the users came back with the console's database
+# --config without an owner block gets a setup token like any install.
 setup_token_state() {
   if [[ -n "$RESTORE_FROM" ]]; then echo restored; return; fi
-  if [[ -n "$CONFIG_FILE" ]]; then echo config; return; fi
+  if owner_secret_exists; then echo config; return; fi
   # The console knows best: once an owner exists, setup is over for good —
   # even if the token file and Secret are gone (a re-run after a re-run).
   if console_setup_complete; then echo complete; return; fi
@@ -2921,12 +3019,12 @@ print_summary() {
     else
       printf '  DNS         point %s and the apps hostnames at this server: %s\n' "$DOMAIN" "$PUBLIC_IP"
     fi
-  elif [[ -n "$CONFIG_FILE" ]]; then
-    printf '  Open        %shttps://%s%s\n' "$C_ACC" "$DOMAIN" "$C_0"
-    printf '  Sign in with the owner account from %s\n' "$CONFIG_FILE"
   elif [[ -s "$SETUP_TOKEN_FILE" ]]; then
     printf '  Open        %shttps://%s/setup%s\n' "$C_ACC" "$DOMAIN" "$C_0"
     printf '  Setup token stored at %s (mode 0600, single use, 24 h)\n' "$SETUP_TOKEN_FILE"
+  elif [[ -n "$OWNER_EMAIL" ]]; then
+    printf '  Open        %shttps://%s%s\n' "$C_ACC" "$DOMAIN" "$C_0"
+    printf '  Sign in with the owner account from %s (%s)\n' "$CONFIG_FILE" "$OWNER_EMAIL"
   else
     printf '  Open        %shttps://%s%s and sign in\n' "$C_ACC" "$DOMAIN" "$C_0"
   fi

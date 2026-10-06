@@ -104,8 +104,8 @@ Stages, each idempotent and recorded in `/var/lib/kwerft/stages/`:
 4. **Kubernetes** — k3s server from `/etc/rancher/k3s/config.yaml` (no flannel, no kube-proxy, no bundled Traefik/servicelb).
    **Registry mirror** — `/etc/rancher/k3s/registries.yaml` maps `registry.kwerft.internal:5000` to zot's ClusterIP; k3s restarts only when the file changed (also on joined nodes).
 5. **Helm**, **Network** (Cilium), **Ingress & TLS** (Gateway API CRDs, cert-manager, Traefik), **Observability**.
-6. **Kwerft** — Helm chart from the checkout or the OCI registry; `--config` becomes the `kwerft-bootstrap` Secret.
-7. **Handoff** — DNS check, single-use setup token (hash only in the cluster), summary.
+6. **Kwerft** — Helm chart from the checkout or the OCI registry; the installer applies `--config`'s settings itself, and its `owner:` becomes the `kwerft-bootstrap` Secret (email, name, password) while no owner exists.
+7. **Handoff** — DNS check; the owner from `--config` (the console creates it from `kwerft-bootstrap` and replaces the password with the outcome, which Handoff reports before deleting the Secret) or else a single-use setup token (hash only in the cluster), summary.
 
 Without `--domain` the console gets a temporary `<public-ip>.sslip.io` hostname
 (public wildcard DNS) so a trial works with zero DNS setup; the installer warns
@@ -275,7 +275,7 @@ Exit codes: 0 ok · 2 usage · 10 preflight · 20 network/DNS · 30 Kubernetes �
 
 ## Security model
 
-- Console unusable until the setup token from the server's disk is presented; no default passwords.
+- Console unusable until the setup token from the server's disk is presented, or the owner from `install.sh --config` exists (its password passes through the `kwerft-bootstrap` Secret only until the console has hashed it); no default passwords.
 - **Identity:** the API reaches Kubernetes as user `kwerft:<email>` in groups `kwerft:role:<role>` and `system:authenticated`; the console's service account may impersonate only those groups (never `system:masters`). Writes and single-object reads go through impersonation; the polled list views (Projects, Apps, Tasks, Schedules, Volumes, Domains, which omit env) read the informer cache confined to the user's project scope (`internal/server/scope.go`), as do metrics, log search, alerts and recordings.
 - **Roles and project access (Phase 4):** owner and admin manage everything in kwerft.dev in every project (cluster-wide bindings). Developers and viewers hold only cluster-scoped reads cluster-wide (projects, Git connections, alert rules, notification channels, settings, firewall rules; developers write alert rules); everything in a project namespace comes from the Project reconciler's RoleBindings there (`kwerft:project-developer`/`-viewer`, `kwerft:pods-read`/`-exec`): to the role groups for projects with access Team (the default, so existing installs keep working), to the listed users `kwerft:<email>` with their project role for access Members. No role reaches Secrets through the API. `internal/server/isolation_test.go` proves it against a real API server.
 - **Sign-in:** argon2id passwords; TOTP, passkeys (also passwordless) and single-use recovery codes, which exist only while a TOTP app or passkey does. Optional per member unless an owner requires two-factor sign-in: members without a factor are then held to the enrolment endpoints after the password (never locked out), and nobody removes their last factor. Owners and admins (admins not for owners) reset a member's factors, which signs them out; audited. Adding a factor needs the password again. Sessions are `__Host-` HttpOnly cookies, 7 days idle / 30 days absolute; same-origin check on every write; rate limits on setup tokens, passwords and second factors. Client addresses (rate limits, audit, firewall lock-out check) come from `X-Real-Ip` only when the TCP peer is a node address — Traefik on the host network — and otherwise from the peer.
@@ -317,6 +317,7 @@ Decided 2026-10-05 (decision table: License, Business model).
 ### Phase 1 checklist
 
 - [x] Setup wizard: one-time token from the installer, owner account; installer renews an expired token and recognises a finished setup
+- [x] Owner from `install.sh --config` (2026-10-06): the console creates the `owner:` block's account from Secret `kwerft-bootstrap` (argon2id, audited as `setup.owner_created` by `setup`), replaces the password with the outcome and Handoff reports it (`owner <email> from --config`); a rejected or unanswered owner, and `--config` without `owner:`, get a setup token. Until then the console never read the Secret and `--config` suppressed the token, so such an install had no way to create its owner (found by the e2e harness, 2026-10-05)
 - [x] Sign-in, sessions, audit log; TOTP, passkeys, recovery codes; account page
 - [x] Domain reconciler: HTTPS listener and certificate per app hostname, HTTP→HTTPS redirect
 - [x] Workload API acting as the user; Kubernetes roles for owner/admin/developer/viewer
@@ -426,7 +427,6 @@ before the beta or move them into a phase.
 - A resolved notification after an alert stops firing; silences from the Alerts tab.
 
 **Small fixes**
-- **Bug (found by the e2e harness, 2026-10-05):** `install.sh --config` with an `owner:` section is documented, but the console never reads the `kwerft-bootstrap` Secret, and `--config` stops the installer from creating a setup token — such an install has no way to create its owner. Fix before relying on `--config` for automation (the e2e uses the setup token).
 - ntfy notifications: set the logs link as the tap target (ntfy `click`), not only in the text.
 - Reconcilers log "object has been modified" conflicts as errors since status writes are guarded (`patchStatus`); retry them quietly instead.
 - After an upgrade, developers and viewers have no project access for the seconds until the Project reconciler's resync writes the per-project RoleBindings; keep the old binding until then or have the installer wait for them.

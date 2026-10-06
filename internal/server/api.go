@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
-	"net/mail"
 	"net/url"
 	"strings"
 	"sync"
@@ -582,10 +581,7 @@ func decode(w http.ResponseWriter, r *http.Request, v any) bool {
 	return true
 }
 
-func validEmail(s string) bool {
-	addr, err := mail.ParseAddress(s)
-	return err == nil && addr.Address == s && len(s) <= 254 && strings.Contains(s[strings.LastIndex(s, "@"):], ".")
-}
+func validEmail(s string) bool { return auth.ValidEmail(s) }
 
 func truncate(s string, n int) string {
 	if len(s) > n {

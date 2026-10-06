@@ -47,8 +47,15 @@ domain: ops.example.com
 email: ops@example.com
 appsDomain: apps.example.com          # apps get <name>.apps.example.com
 dns: { solver: hetzner, tokenFile: /root/dns.token }   # wildcard certificate via Hetzner DNS
-owner: { email: you@example.com, passwordFile: /root/owner.pw }
+owner: { email: you@example.com, passwordFile: /root/owner.pw }   # optional: name: …
 ```
+
+With `owner:` the console creates that owner account (the password file holds
+12 to 256 characters; it passes through the cluster only until the console has
+hashed it) and the installer hands out no setup token; the summary says
+`owner you@example.com from --config`. Without `owner:`, or if the owner
+could not be created, the install gets a setup token as usual. With
+`--restore`, the accounts come from the backup and `owner:` is ignored.
 
 ## Repository
 

@@ -654,11 +654,11 @@ a credential change without the annotation arrives within a minute.
   to staging and the Gateway's Certificates re-requested right after the
   installer, so upgrade runs from them stay off the production rate limit.
 - **Owner**: through the setup token (`/etc/kwerft/setup-token` over SSH →
-  `/api/v1/setup/verify` → `/setup/owner`), not `--config`: the console does
-  not read the `kwerft-bootstrap` Secret yet, and `--config` suppresses the
-  setup token, so an install with `--config` has no way to create the owner
-  (README documents `owner:` in the config). Works on every release, and is
-  the path users take.
+  `/api/v1/setup/verify` → `/setup/owner`), not `--config`: releases before
+  2026-10-06 never read the `kwerft-bootstrap` Secret, and their `--config`
+  suppressed the setup token, so an install with `--config` had no way to
+  create the owner (fixed since: `docs/plan.md` › Phase 1 checklist). Works
+  on every release, and is the path users take.
 - **Checks** (`run.go`): console on HTTPS with a real ACME certificate
   (staging accepted only with a `(STAGING)` issuer and a matching name),
   version, owner, sign-in; then, side by side so each is timed from what it
