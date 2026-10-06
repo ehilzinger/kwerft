@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
-  alertLogsLink, alertingUnavailable, attentionHeadline, attentionItems, channelInput, channelForm, channelProblem, channelTarget,
+  alertLogsLink, alertNodesHref, alertingUnavailable, attentionHeadline, attentionItems, channelInput, channelForm, channelProblem, channelTarget,
   describeChannels, describeCondition, describeScope, durationProblem, goDuration, humanDuration, parseDuration, shortDuration,
   sortAlerts, thresholdProblem, type Alert, type Channel,
 } from "./alerts";
@@ -206,6 +206,15 @@ describe("attentionItems", () => {
     const [item] = attentionItems({ now, origin: "https://x", alerts: [alert({ rule: "node-memory", labels: { node: "fsn1-1" } })] });
     expect(item!.title).toBe("fsn1-1");
     expect(item!.action).toEqual({ label: "Review", href: "/monitoring" });
+  });
+
+  it("sends disk alerts to their cluster's nodes", () => {
+    const disk = alert({ rule: "disk-failing", cluster: "kwerft-dedi-1", consoleURL: "https://x/clusters/local/nodes",
+      labels: { node: "kwerft-dedi-1", device: "nvme0", kwerft_kind: "disk" } });
+    const [item] = attentionItems({ now, origin: "https://x", alerts: [disk] });
+    expect(item!.title).toBe("kwerft-dedi-1");
+    expect(item!.action).toEqual({ label: "Open nodes", href: "/clusters/kwerft-dedi-1/nodes" });
+    expect(alertNodesHref({ labels: { kwerft_kind: "node", node: "n" } })).toBeUndefined();
   });
 
   it("writes a headline", () => {

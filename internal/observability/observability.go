@@ -17,8 +17,20 @@ const (
 	// LabelRule is set on every alert from an AlertRule (its name);
 	// Alertmanager routes on it and the console groups by it.
 	LabelRule = "kwerft_rule"
+	// LabelKind is set on every alert from an AlertRule: what its condition
+	// watches (app, volume, node, disk, …; internal/alerting.Kind), so the
+	// console links an alert to the right page.
+	LabelKind = "kwerft_kind"
 	// LabelDefault marks the AlertRules Kwerft creates (value "true").
 	LabelDefault = "kwerft.dev/default"
+
+	// SMARTJob is the job label of the SMART readings: the chart's
+	// smartctl_exporter DaemonSet on dedicated servers
+	// (charts/kwerft/templates/disk-health.yaml), whose scrape adds the
+	// label node (the pod's node) to every series.
+	SMARTJob = "kwerft-disk-health"
+	// NodeExporterJob is the job label of the stack's node-exporter.
+	NodeExporterJob = "node-exporter"
 
 	// SecretPrefix + channel name is a NotificationChannel's Secret in
 	// Namespace. Keys: url (slack, webhook), password (email), token (ntfy).

@@ -159,6 +159,9 @@ type nodeJSON struct {
 	Platform      string     `json:"platform,omitempty"` // cloud | dedicated
 	Unschedulable bool       `json:"unschedulable"`
 	Created       *time.Time `json:"created,omitempty"`
+	// DiskHealth: RAID arrays and SMART readings (disk_health.go), for
+	// nodes with any and every dedicated server; only in the node list.
+	DiskHealth *diskHealthJSON `json:"diskHealth,omitempty"`
 }
 
 type nodesJSON struct {
@@ -175,6 +178,9 @@ type nodesJSON struct {
 	Cloud bool `json:"cloud"`
 	// ControlPlanes is the number of control-plane nodes now.
 	ControlPlanes int `json:"controlPlanes"`
+	// DiskReadings: the cluster's VictoriaMetrics answered, so nodes
+	// without diskHealth have neither RAID nor SMART readings.
+	DiskReadings bool `json:"diskReadings"`
 }
 
 func shortPool(cluster, name string) string { return strings.TrimPrefix(name, cluster+"-") }
@@ -360,6 +366,12 @@ func (n *nodesAPI) list(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 			slices.SortFunc(out.Nodes, func(a, b nodeJSON) int { return strings.Compare(a.Name, b.Name) })
+			if conn, err := n.clusters.byName(name); err == nil {
+				if health, ok := n.queryDiskHealth(withCluster(ctx, conn, true)); ok {
+					out.DiskReadings = true
+					withDiskHealth(out.Nodes, health)
+				}
+			}
 		}
 	}
 	if n.cfg.SystemReader != nil {

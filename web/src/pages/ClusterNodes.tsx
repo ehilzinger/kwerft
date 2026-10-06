@@ -7,8 +7,9 @@ import { Dialog } from "../components/Dialog";
 import { Field } from "../components/Field";
 import { Icon } from "../components/Icon";
 import {
-  catalogKey, controlPlaneCountProblem, labelsText, nodeTone, nodesApi, nodesKey, parseLabels, phaseTone, poolSummary, priceText, roleText,
-  serverTypeText, type ClusterNode, type ClusterNodes as Nodes, type JoinCommand, type Pool, type PoolRole, type PoolServer,
+  catalogKey, controlPlaneCountProblem, diskHealthText, diskTone, labelsText, nodesWithDisks, nodeTone, nodesApi, nodesKey, parseLabels, percentText,
+  phaseTone, poolSummary, priceText, raidText, roleText, serverTypeText, smartText, type ClusterNode, type ClusterNodes as Nodes, type Disk,
+  type JoinCommand, type Pool, type PoolRole, type PoolServer,
 } from "../nodes";
 import { ClusterLayout } from "./Clusters";
 import { errorText } from "./Apps";
@@ -58,6 +59,7 @@ export function ClusterNodes() {
         <Pools data={d} onScale={(pool) => setDialog({ kind: "scale", pool })} onDelete={(pool) => setDialog({ kind: "delete", pool })}
           onRemoveServer={(pool, server) => setDialog({ kind: "server", pool, server })} onAdd={() => setDialog({ kind: "add" })} />
         <NodesTable data={d} onRemove={(node) => setDialog({ kind: "remove", node })} />
+        <DiskHealthSection data={d} />
         <JoinCard data={d} />
         {dialog?.kind === "add" && <PoolDialog data={d} onClose={() => setDialog(undefined)} />}
         {dialog?.kind === "scale" && <PoolDialog data={d} edit={dialog.pool} onClose={() => setDialog(undefined)} />}
@@ -149,13 +151,14 @@ function NodesTable({ data, onRemove }: { data: Nodes; onRemove: (n: ClusterNode
     onError: (e) => setError(errorText(e)),
   });
   if (!data.reachable && data.nodes.length === 0) return null;
+  const disks = data.nodes.some((n) => n.diskHealth);
   return (
     <section aria-label="Nodes">
       <h2 className="nodes-h">Nodes <span className="dim">{data.nodes.filter((n) => n.ready).length} of {data.nodes.length} ready · {data.controlPlanes} control plane</span></h2>
       {error && <p className="form-error" role="alert">{error}</p>}
       <div className="card scroll-x">
         <table className="t fw-table">
-          <thead><tr><th>Node</th><th>Role</th><th>Status</th><th>Internal IP</th><th>External IP</th><th>Size</th><th>Pool</th><th><span className="sr">Actions</span></th></tr></thead>
+          <thead><tr><th>Node</th><th>Role</th><th>Status</th><th>Internal IP</th><th>External IP</th><th>Size</th><th>Pool</th>{disks && <th>Disks</th>}<th><span className="sr">Actions</span></th></tr></thead>
           <tbody>
             {data.nodes.map((n) => {
               const pool = data.pools.find((p) => p.name === n.pool);
@@ -169,6 +172,13 @@ function NodesTable({ data, onRemove }: { data: Nodes; onRemove: (n: ClusterNode
                   <td className="mono">{n.externalIp ?? "—"}</td>
                   <td>{n.cpu ? `${n.cpu} CPU` : ""}{n.memory ? ` · ${n.memory}` : ""}</td>
                   <td>{pool ? pool.pool : n.pool ?? <span className="dim">—</span>}</td>
+                  {disks && (
+                    <td>
+                      {n.diskHealth
+                        ? <a href={`#disks-${n.name}`} className={`pill disks-pill ${diskTone(n.diskHealth.health)}`} title={n.diskHealth.summary}>{diskHealthText(n.diskHealth.health)}</a>
+                        : <span className="dim">—</span>}
+                    </td>
+                  )}
                   <td className="row-acts">
                     {!busy && (n.unschedulable || n.status === "Draining" || n.status === "Drained"
                       ? <button className="btn sm" disabled={act.isPending} onClick={() => act.mutate({ node: n.name, op: "uncordon" })}>Uncordon</button>
@@ -182,6 +192,91 @@ function NodesTable({ data, onRemove }: { data: Nodes; onRemove: (n: ClusterNode
         </table>
       </div>
     </section>
+  );
+}
+
+// ---- disk health ---------------------------------------------------------------------
+
+// RAID arrays (node-exporter) and SMART readings (dedicated servers), judged
+// by the server the way the disk alerts are.
+function DiskHealthSection({ data }: { data: Nodes }) {
+  const nodes = nodesWithDisks(data.nodes);
+  const dedicated = data.nodes.some((n) => n.platform === "dedicated");
+  if (!data.reachable) return null;
+  if (!data.diskReadings) {
+    if (!dedicated) return null;
+    return (
+      <section aria-label="Disk health">
+        <h2 className="nodes-h">Disk health</h2>
+        <div className="banner warn" role="status"><Icon name="alert" /><span>The cluster's metrics did not answer, so RAID and SMART readings are missing for now.</span></div>
+      </section>
+    );
+  }
+  if (nodes.length === 0) return null;
+  return (
+    <section aria-label="Disk health" className="disks">
+      <h2 className="nodes-h">Disk health <span className="dim">RAID from node-exporter · SMART on dedicated servers, read every 2 minutes</span></h2>
+      {nodes.map((n) => {
+        const h = n.diskHealth!;
+        return (
+          <div className="card disks-node" key={n.name} id={`disks-${n.name}`}>
+            <div className="pool-h">
+              <div>
+                <h2 className="mono">{n.name}</h2>
+                <span className="sub-line">{h.summary}</span>
+              </div>
+              <span className={`pill ${diskTone(h.health)}`}>{diskHealthText(h.health)}</span>
+            </div>
+            {h.arrays.length > 0 && (
+              <ul className="disks-raid" aria-label={`RAID arrays of ${n.name}`}>
+                {h.arrays.map((a) => (
+                  <li key={a.device}>
+                    <span className={`pill ${diskTone(a.health)}`}>{a.device}</span>
+                    <span>{raidText(a)}</span>
+                    {a.problem && <span className={a.health === "bad" ? "form-error" : "dim"}>{a.problem}</span>}
+                  </li>
+                ))}
+              </ul>
+            )}
+            {h.disks.length > 0 && (
+              <div className="scroll-x">
+                <table className="t fw-table">
+                  <thead><tr><th>Disk</th><th>SMART</th><th>Wear</th><th>Spare</th><th>Media errors</th><th>Findings</th></tr></thead>
+                  <tbody>{h.disks.map((d) => <DiskRow key={d.device} disk={d} />)}</tbody>
+                </table>
+              </div>
+            )}
+            {n.platform === "dedicated" && !h.smart && (
+              <p className="note disks-note dim">
+                No SMART readings from this server. They come from the DaemonSet kwerft-disk-health in kwerft-system; check that its pod runs on this node.
+              </p>
+            )}
+          </div>
+        );
+      })}
+    </section>
+  );
+}
+
+function DiskRow({ disk: d }: { disk: Disk }) {
+  const spare = d.availableSpare === undefined ? "—"
+    : `${percentText(d.availableSpare)}${d.availableSpareThreshold !== undefined ? ` (min ${percentText(d.availableSpareThreshold)})` : ""}`;
+  return (
+    <tr>
+      <td className="nm">
+        <span className="mono">{d.device}</span>
+        {(d.model || d.serial) && <span className="sub-line">{[d.model, d.serial && `serial ${d.serial}`].filter(Boolean).join(" · ")}</span>}
+      </td>
+      <td><span className={`pill ${d.smartPassed === false ? "bad" : d.unreadable ? "warn" : d.smartPassed ? "ok" : "mute"}`}>{smartText(d)}</span></td>
+      <td>{percentText(d.percentageUsed)}</td>
+      <td>{spare}</td>
+      <td>{d.mediaErrors ?? "—"}</td>
+      <td>
+        {d.problems.length === 0
+          ? <span className="dim">None</span>
+          : <ul className="disks-problems">{d.problems.map((p) => <li key={p} className={d.health === "bad" ? "form-error" : undefined}>{p}</li>)}</ul>}
+      </td>
+    </tr>
   );
 }
 

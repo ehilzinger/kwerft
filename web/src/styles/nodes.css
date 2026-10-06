@@ -7,6 +7,15 @@
 .nodes-h { font-size: 14px; font-weight: 600; margin: 18px 0 8px; display: flex; gap: 10px; align-items: baseline; flex-wrap: wrap; }
 .nodes-h .dim { font-weight: 400; font-size: 12.5px; }
 .join-card { margin-top: 18px; }
+a.pill.disks-pill { text-decoration: none; }
+.disks { display: grid; gap: 12px; }
+.disks .nodes-h { margin-bottom: 0; }
+.disks-node { scroll-margin-top: 16px; }
+.disks-raid { list-style: none; margin: 0; padding: 10px 16px; display: grid; gap: 6px; border-bottom: 1px solid var(--line-2); font-size: 13px; }
+.disks-raid li { display: flex; gap: 10px; align-items: baseline; flex-wrap: wrap; }
+.disks-note { padding: 10px 16px; margin: 0; }
+.disks-problems { margin: 0; padding-left: 16px; font-size: 12.5px; }
+.disks-problems li + li { margin-top: 2px; }
 .join-card .bd { display: grid; gap: 10px; }
 .join-form { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
 .join-ttl { display: inline-flex; gap: 6px; align-items: center; font-size: 13px; }

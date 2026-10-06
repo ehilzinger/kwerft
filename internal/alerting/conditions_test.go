@@ -118,12 +118,12 @@ func TestEveryConditionRendersValidMetricsQL(t *testing.T) {
 			if _, err := metricsql.Parse(out.Expr); err != nil {
 				t.Errorf("%s %+v: %q does not parse: %v", info.Condition, s, out.Expr, err)
 			}
-			if out.Labels["kwerft_rule"] != "r" || out.Labels["severity"] != "warning" {
+			if out.Labels["kwerft_rule"] != "r" || out.Labels["kwerft_kind"] != string(info.Kind) || out.Labels["severity"] != "warning" {
 				t.Errorf("%s labels = %v", info.Condition, out.Labels)
 			}
 			labels := map[string]string{"namespace": "shop", "app": "web", "pod": "web-1", "container": "web", "node": "n1",
 				"persistentvolumeclaim": "data", "schedule": "nightly", "hostname": "shop.example.com", "domain": "shop", "mountpoint": "/",
-				"plan": "cluster", "component": "Kwerft", "version": "0.6.0", "upgrade": "kwerft-0.6.0-x7k2p", "result": "RolledBack"}
+				"device": "nvme0", "plan": "cluster", "component": "Kwerft", "version": "0.6.0", "upgrade": "kwerft-0.6.0-x7k2p", "result": "RolledBack"}
 			for k, v := range out.Annotations {
 				if got := expand(t, v, labels); got == "" || strings.Contains(got, "<no value>") {
 					t.Errorf("%s annotation %s expands to %q", info.Condition, k, got)
@@ -305,7 +305,7 @@ func TestDefaultRulesAreValid(t *testing.T) {
 			t.Errorf("%s notifies before an owner adds a channel", d.Name)
 		}
 	}
-	if !seen["crash-looping"] || !seen["backup-missing"] || !seen["upgrade-failed"] || len(seen) != 12 {
+	if !seen["crash-looping"] || !seen["backup-missing"] || !seen["upgrade-failed"] || !seen["disk-failing"] || len(seen) != 16 {
 		t.Errorf("defaults = %v", seen)
 	}
 }
@@ -343,5 +343,68 @@ func TestFingerprintMatchesAlertmanager(t *testing.T) {
 	}
 	if got, want := Fingerprint(nil), (model.LabelSet{}).Fingerprint().String(); got != want {
 		t.Errorf("empty: %s, want %s", got, want)
+	}
+}
+
+// Disk alerts are platform alerts per node and disk: RAID from
+// node-exporter's md collector, SMART from the chart's smartctl_exporter
+// (job kwerft-disk-health), with the drive's model and serial number for a
+// replacement request. They link to the node list.
+func TestDiskExpressions(t *testing.T) {
+	raid := Expr(&kwerftv1.AlertRuleSpec{Condition: kwerftv1.AlertRAIDDegraded})
+	for _, want := range []string{`node_md_disks_required - ignoring (state) node_md_disks{state="active"}`, `node_md_disks{state="failed"} > 0`,
+		`node_md_state{state="inactive"} == 1`, "max by (node, instance, device)"} {
+		if !strings.Contains(raid, want) {
+			t.Errorf("raid: no %q in %s", want, raid)
+		}
+	}
+	failing := Expr(&kwerftv1.AlertRuleSpec{Condition: kwerftv1.AlertDiskFailing})
+	for _, want := range []string{`max by (node, device) (smartctl_device_smart_status{job="kwerft-disk-health"}) == 0`,
+		`(smartctl_device_critical_warning{job="kwerft-disk-health"}) > 0`, `(smartctl_device_media_errors{job="kwerft-disk-health"}) > min_over_time((max by (node, device) (smartctl_device_media_errors{job="kwerft-disk-health"}))[1d:5m])`,
+		`group_left (model_name, serial_number)`} {
+		if !strings.Contains(failing, want) {
+			t.Errorf("failing: no %q in %s", want, failing)
+		}
+	}
+	if got := Expr(&kwerftv1.AlertRuleSpec{Condition: kwerftv1.AlertDiskFailing, Window: Duration(time.Hour)}); !strings.Contains(got, "[1h:1m]") {
+		t.Errorf("windowed: %s", got)
+	}
+	wear := Expr(&kwerftv1.AlertRuleSpec{Condition: kwerftv1.AlertDiskWearing})
+	if !strings.Contains(wear, `(smartctl_device_percentage_used{job="kwerft-disk-health"}) > 80`) {
+		t.Errorf("wear: %s", wear)
+	}
+	if got := Expr(&kwerftv1.AlertRuleSpec{Condition: kwerftv1.AlertDiskWearing, Threshold: ptr[int64](95)}); !strings.Contains(got, "> 95") {
+		t.Errorf("wear 95: %s", got)
+	}
+	missing := Expr(&kwerftv1.AlertRuleSpec{Condition: kwerftv1.AlertDiskReadingsMissing})
+	for _, want := range []string{`kube_node_labels{label_kwerft_dev_platform="dedicated"}`, `unless on (node) max by (node) (smartctl_devices{job="kwerft-disk-health"}) > 0`,
+		`up{job="node-exporter"}`, `smartctl_device_smartctl_exit_status{job="kwerft-disk-health"} % 8) > 0`} {
+		if !strings.Contains(missing, want) {
+			t.Errorf("missing: no %q in %s", want, missing)
+		}
+	}
+	for _, c := range []kwerftv1.AlertCondition{kwerftv1.AlertRAIDDegraded, kwerftv1.AlertDiskFailing, kwerftv1.AlertDiskWearing, kwerftv1.AlertDiskReadingsMissing} {
+		if ferr := Validate(&kwerftv1.AlertRuleSpec{Condition: c, Scope: kwerftv1.AlertScope{Projects: []string{"shop"}}}); ferr == nil || ferr.Field != "scope" {
+			t.Errorf("%s took a scope: %v", c, ferr)
+		}
+		r, err := Render(&kwerftv1.AlertRule{ObjectMeta: metav1.ObjectMeta{Name: "d"}, Spec: kwerftv1.AlertRuleSpec{Condition: c}}, "ops.example.com")
+		if err != nil || r.Annotations["console_url"] != "https://ops.example.com/clusters/local/nodes" {
+			t.Errorf("%s render: %+v %v", c, r, err)
+		}
+	}
+	r, _ := Render(&kwerftv1.AlertRule{ObjectMeta: metav1.ObjectMeta{Name: "d"}, Spec: kwerftv1.AlertRuleSpec{Condition: kwerftv1.AlertDiskFailing}}, "")
+	labels := map[string]string{"node": "dedi-1", "device": "nvme0", "model_name": "SAMSUNG MZVL2512HCJQ-00B00", "serial_number": "S64"}
+	if got := expand(t, r.Annotations["summary"], labels); got != "Disk nvme0 on node dedi-1 is failing" {
+		t.Errorf("summary: %s", got)
+	}
+	if got := expand(t, r.Annotations["description"], labels); !strings.Contains(got, "SAMSUNG MZVL2512HCJQ-00B00, serial number S64.") {
+		t.Errorf("description: %s", got)
+	}
+	r, _ = Render(&kwerftv1.AlertRule{ObjectMeta: metav1.ObjectMeta{Name: "d"}, Spec: kwerftv1.AlertRuleSpec{Condition: kwerftv1.AlertDiskReadingsMissing}}, "")
+	if got := expand(t, r.Annotations["summary"], map[string]string{"node": "dedi-1"}); got != "Node dedi-1 reports no disk health" {
+		t.Errorf("missing summary: %s", got)
+	}
+	if got := Describe(&kwerftv1.AlertRuleSpec{Condition: kwerftv1.AlertDiskWearing}); got != "A disk has used more than 80 % of its rated endurance for 10 minutes" {
+		t.Errorf("describe: %s", got)
 	}
 }

@@ -87,6 +87,10 @@ spec:
                 - BackupFailing
                 - BackupMissing
                 - UpgradeFailed
+                - RAIDDegraded
+                - DiskFailing
+                - DiskWearing
+                - DiskReadingsMissing
                 - Custom
                 type: string
               disabled:
@@ -129,14 +133,15 @@ spec:
               threshold:
                 description: |-
                   Threshold of the condition: a count (Restarts), percent (MemoryHigh,
-                  CPUHigh, VolumeFillingUp, Node*, HTTPErrorRate) or milliseconds
+                  CPUHigh, VolumeFillingUp, Node*, HTTPErrorRate, DiskWearing) or milliseconds
                   (HTTPLatency). Empty: the condition's default.
                 format: int64
                 type: integer
               window:
                 description: |-
                   Window the condition looks at (Restarts, VolumeFillingUp prediction,
-                  CertificateExpiring, ScheduleFailing, HTTP*). Empty: the default.
+                  CertificateExpiring, ScheduleFailing, HTTP*, DiskFailing's media
+                  errors). Empty: the default.
                 type: string
             required:
             - condition

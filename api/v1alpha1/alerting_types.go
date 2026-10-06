@@ -5,7 +5,7 @@ import (
 )
 
 // AlertCondition is a condition Kwerft knows how to measure and explain.
-// +kubebuilder:validation:Enum=CrashLooping;Restarts;MemoryHigh;CPUHigh;VolumeFillingUp;NodeMemoryPressure;NodeDiskPressure;CertificateExpiring;ScheduleFailing;BuildFailing;HTTPErrorRate;HTTPLatency;BackupFailing;BackupMissing;UpgradeFailed;Custom
+// +kubebuilder:validation:Enum=CrashLooping;Restarts;MemoryHigh;CPUHigh;VolumeFillingUp;NodeMemoryPressure;NodeDiskPressure;CertificateExpiring;ScheduleFailing;BuildFailing;HTTPErrorRate;HTTPLatency;BackupFailing;BackupMissing;UpgradeFailed;RAIDDegraded;DiskFailing;DiskWearing;DiskReadingsMissing;Custom
 type AlertCondition string
 
 const (
@@ -42,6 +42,19 @@ const (
 	// UpgradeFailed: the newest finished Upgrade of a component (Kwerft or
 	// Kubernetes) failed or was rolled back, within window (default a day).
 	AlertUpgradeFailed AlertCondition = "UpgradeFailed"
+	// RAIDDegraded: a software RAID (md) array on a node has fewer active
+	// disks than it needs, a failed disk, or is inactive (node-exporter).
+	AlertRAIDDegraded AlertCondition = "RAIDDegraded"
+	// DiskFailing: a node's disk reports SMART failed, a critical warning,
+	// spare below its threshold, or new media errors within window (default
+	// a day).
+	AlertDiskFailing AlertCondition = "DiskFailing"
+	// DiskWearing: an SSD has used more than threshold percent of its rated
+	// endurance (NVMe percentage used).
+	AlertDiskWearing AlertCondition = "DiskWearing"
+	// DiskReadingsMissing: a dedicated server reports no disk readings: no
+	// SMART data (or smartctl cannot read a disk), or no node-exporter.
+	AlertDiskReadingsMissing AlertCondition = "DiskReadingsMissing"
 	// Custom: spec.expr, a MetricsQL expression; owners and admins only.
 	AlertCustom AlertCondition = "Custom"
 )
@@ -70,13 +83,14 @@ type AlertRuleSpec struct {
 	Condition AlertCondition `json:"condition"`
 
 	// Threshold of the condition: a count (Restarts), percent (MemoryHigh,
-	// CPUHigh, VolumeFillingUp, Node*, HTTPErrorRate) or milliseconds
+	// CPUHigh, VolumeFillingUp, Node*, HTTPErrorRate, DiskWearing) or milliseconds
 	// (HTTPLatency). Empty: the condition's default.
 	// +optional
 	Threshold *int64 `json:"threshold,omitempty"`
 
 	// Window the condition looks at (Restarts, VolumeFillingUp prediction,
-	// CertificateExpiring, ScheduleFailing, HTTP*). Empty: the default.
+	// CertificateExpiring, ScheduleFailing, HTTP*, DiskFailing's media
+	// errors). Empty: the default.
 	// +optional
 	Window *metav1.Duration `json:"window,omitempty"`
 
