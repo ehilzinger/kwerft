@@ -1,11 +1,13 @@
 package controllers
 
 import (
+	"slices"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus/testutil"
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
@@ -156,6 +158,43 @@ kwerft_upgrade_failed_timestamp_seconds{component="Kwerft",result="RolledBack",u
 `
 	if err := testutil.CollectAndCompare(&MetricsCollector{Reader: c}, strings.NewReader(want), "kwerft_upgrade_failed_timestamp_seconds"); err != nil {
 		t.Fatal(err)
+	}
+
+	// The version arrived another way (install.sh run by hand): running it,
+	// or a newer one, clears the failure; every node must run Kubernetes'.
+	node := func(name, kubelet string) *corev1.Node {
+		return &corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: name},
+			Status: corev1.NodeStatus{NodeInfo: corev1.NodeSystemInfo{KubeletVersion: kubelet}}}
+	}
+	failed := []client.Object{objs[0], objs[1], objs[2], objs[3],
+		up("kubernetes-v1.38.1-k3s1-e", kwerftv1.UpgradeKubernetes, "v1.38.1+k3s1", kwerftv1.UpgradeFailed, 1700000500)}
+	with := func(nodes ...client.Object) client.WithWatch {
+		return fake.NewClientBuilder().WithScheme(NewScheme()).WithObjects(append(slices.Clone(failed), nodes...)...).Build()
+	}
+	c = with(node("cp-1", "v1.38.1+k3s1"), node("worker-1", "v1.37.4+k3s1"))
+	for running, want := range map[string]string{
+		"0.6.0": `
+kwerft_upgrade_failed_timestamp_seconds{component="Kubernetes",result="Failed",upgrade="kubernetes-v1.38.1-k3s1-e",version="v1.38.1+k3s1"} 1.7000005e+09
+kwerft_upgrade_failed_timestamp_seconds{component="Kwerft",result="RolledBack",upgrade="kwerft-0.6.1-b",version="0.6.1"} 1.700001e+09
+`,
+		"0.6.1": `
+kwerft_upgrade_failed_timestamp_seconds{component="Kubernetes",result="Failed",upgrade="kubernetes-v1.38.1-k3s1-e",version="v1.38.1+k3s1"} 1.7000005e+09
+`,
+		"0.6.2-rc.1": `
+kwerft_upgrade_failed_timestamp_seconds{component="Kubernetes",result="Failed",upgrade="kubernetes-v1.38.1-k3s1-e",version="v1.38.1+k3s1"} 1.7000005e+09
+`,
+	} {
+		head := `
+# HELP kwerft_upgrade_failed_timestamp_seconds When the newest finished Upgrade of a component (cancelled ones aside) failed or was rolled back (status.finishedAt); no series once a later one succeeded.
+# TYPE kwerft_upgrade_failed_timestamp_seconds gauge`
+		if err := testutil.CollectAndCompare(&MetricsCollector{Reader: c, Version: running}, strings.NewReader(head+want), "kwerft_upgrade_failed_timestamp_seconds"); err != nil {
+			t.Errorf("running %s: %v", running, err)
+		}
+	}
+	// Once the last node runs it, the Kubernetes failure clears too.
+	c = with(node("cp-1", "v1.38.1+k3s1"), node("worker-1", "v1.38.1+k3s2"))
+	if err := testutil.CollectAndCompare(&MetricsCollector{Reader: c, Version: "0.6.1"}, strings.NewReader(""), "kwerft_upgrade_failed_timestamp_seconds"); err != nil {
+		t.Error(err)
 	}
 }
 

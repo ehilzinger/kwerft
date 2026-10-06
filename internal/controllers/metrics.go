@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
+	corev1 "k8s.io/api/core/v1"
 	toolscache "k8s.io/client-go/tools/cache"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/cache"
@@ -14,6 +15,8 @@ import (
 	gwv1 "sigs.k8s.io/gateway-api/apis/v1"
 
 	kwerftv1 "github.com/ehilzinger/kwerft/api/v1alpha1"
+	"github.com/ehilzinger/kwerft/internal/upgrades"
+	"github.com/ehilzinger/kwerft/internal/version"
 )
 
 // Kwerft's own metrics, served with controller-runtime's on the manager's
@@ -65,7 +68,7 @@ var buildDuration = prometheus.NewHistogramVec(prometheus.HistogramOpts{
 // RegisterMetrics adds Kwerft's metrics to controller-runtime's registry
 // (served by the manager's metrics server) and starts observing builds.
 func RegisterMetrics(mgr ctrl.Manager) error {
-	c := &MetricsCollector{Reader: mgr.GetCache()}
+	c := &MetricsCollector{Reader: mgr.GetCache(), Version: version.Version}
 	if err := ctrlmetrics.Registry.Register(c); err != nil {
 		return err
 	}
@@ -81,6 +84,9 @@ func RegisterMetrics(mgr ctrl.Manager) error {
 // ConsoleSettings and HTTPRoutes at scrape time.
 type MetricsCollector struct {
 	Reader client.Reader
+	// Version is the running Kwerft's; "" leaves a failed Kwerft Upgrade
+	// standing although the version arrived another way.
+	Version string
 	// Timeout bounds one scrape's reads; 0 means 10s.
 	Timeout time.Duration
 }
@@ -143,7 +149,11 @@ func (c *MetricsCollector) Collect(ch chan<- prometheus.Metric) {
 	if err := c.Reader.List(ctx, &ups); err != nil {
 		failed("Upgrade")
 	}
-	for _, u := range FailedUpgrades(ups.Items) {
+	var nodes corev1.NodeList
+	if err := c.Reader.List(ctx, &nodes); err != nil {
+		failed("Node")
+	}
+	for _, u := range FailedUpgrades(ups.Items, runningVersions(c.Version, nodes.Items)) {
 		gauge(descUpgradeFailed, u.Status.FinishedAt.Time, string(u.Spec.Component), u.Spec.Version, u.Name, string(u.Status.Phase))
 	}
 
@@ -219,8 +229,9 @@ func hasBackend(r *gwv1.HTTPRoute) bool {
 // FailedUpgrades are the newest finished Upgrade of each component when it
 // failed or was rolled back (the alert UpgradeFailed). Cancelled Upgrades
 // changed nothing and are passed over; a later success clears the
-// component.
-func FailedUpgrades(items []kwerftv1.Upgrade) []kwerftv1.Upgrade {
+// component, and so does running its version or a newer one already
+// (install.sh run by hand after the Upgrade failed), per running.
+func FailedUpgrades(items []kwerftv1.Upgrade, running map[kwerftv1.UpgradeComponent]upgrades.Version) []kwerftv1.Upgrade {
 	latest := map[kwerftv1.UpgradeComponent]*kwerftv1.Upgrade{}
 	for i := range items {
 		u := &items[i]
@@ -240,8 +251,35 @@ func FailedUpgrades(items []kwerftv1.Upgrade) []kwerftv1.Upgrade {
 	}
 	var out []kwerftv1.Upgrade
 	for _, c := range []kwerftv1.UpgradeComponent{kwerftv1.UpgradeKwerft, kwerftv1.UpgradeKubernetes} {
-		if u := latest[c]; u != nil && u.Status.Phase != kwerftv1.UpgradeSucceeded {
-			out = append(out, *u)
+		u := latest[c]
+		if u == nil || u.Status.Phase == kwerftv1.UpgradeSucceeded {
+			continue
+		}
+		if cur, ok := running[c]; ok {
+			if want, err := upgrades.ParseVersion(u.Spec.Version); err == nil && !cur.Less(want) {
+				continue
+			}
+		}
+		out = append(out, *u)
+	}
+	return out
+}
+
+// runningVersions are what runs now: this Kwerft, and the oldest kubelet,
+// the version every node has reached. A version that does not parse is
+// left out.
+func runningVersions(kwerft string, nodes []corev1.Node) map[kwerftv1.UpgradeComponent]upgrades.Version {
+	out := map[kwerftv1.UpgradeComponent]upgrades.Version{}
+	if v, err := upgrades.ParseVersion(kwerft); err == nil {
+		out[kwerftv1.UpgradeKwerft] = v
+	}
+	for i := range nodes {
+		v, err := upgrades.ParseVersion(nodes[i].Status.NodeInfo.KubeletVersion)
+		if err != nil {
+			continue
+		}
+		if cur, ok := out[kwerftv1.UpgradeKubernetes]; !ok || v.Less(cur) {
+			out[kwerftv1.UpgradeKubernetes] = v
 		}
 	}
 	return out
