@@ -4,6 +4,8 @@
 the one place it deliberately doesn't, and how the same RBAC gives you
 secrets your developers can write but never read.*
 
+![A PATCH request carrying Impersonate-User kwerft:mara and the groups kwerft:role:developer and system:authenticated; Kubernetes' RoleBindings answer allowed or 403 Forbidden](medium-images/cover-rbac.png)
+
 ---
 
 I build [Kwerft](https://kwerft.dev/?utm_source=medium&utm_medium=blog&utm_campaign=rbac-impersonation),
@@ -182,6 +184,9 @@ line: "Never "*" here: bound cluster-wide, a rule on "*"
 would reach every project's namespaced objects too." A wildcard is safe in a
 ClusterRole that a RoleBinding confines to one namespace, and a leak in one
 bound cluster-wide.
+
+![The console's Access › Roles page: each role's Kubernetes group, its ClusterRole, and the roles it gets in each project namespace, such as kwerft:project-developer, kwerft:pods-read and kwerft:pods-exec for developers](medium-images/rbac-shot-roles.png)
+*Kwerft's console, with the demo data of a fictional web shop.*
 
 ![What each role reaches in a project: owners and admins everything but Secret reads, which they get only by name through reveal; developers write workloads and secret values; viewers read; a developer not listed in a Members project reaches nothing in it](medium-images/rbac-fig2-reach-matrix.png)
 
@@ -383,6 +388,9 @@ Developers and viewers read the status through the project's RoleBindings,
 so listing secrets never touches a Secret. It lives in the namespaced set,
 not in the cluster-scoped Project, which every role can read: that would
 leak key names across projects.
+
+![The Secrets page: a project's secret sets with their key names, the apps and schedules using them and who set them last; the payments set open with masked values and Replace, Generate, Remove and Reveal next to each key, and a mail set flagged Missing key](medium-images/rbac-shot-secrets.png)
+*Kwerft's console, with the demo data of a fictional web shop.*
 
 Owners and admins can reveal one value, after their password or a current
 authenticator code, and the reveal is audited as `secret.reveal`. Even that

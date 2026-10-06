@@ -13,9 +13,25 @@ as Enzo, never as "we", no paid reach, no paywall, no trackers.*
 | `medium-upgrades-2026-10-06.md` | Self-upgrading software: the watcher has to be the old version | 3,180 |
 | `medium-backups-2026-10-06.md` | Encrypting Velero backups on object storage that only offers SSE-C | 3,000 |
 
-Figures are in `medium-images/`: one `<prefix>-figures.mjs` per post on the
-shared `figures-lib.mjs` (the Hatchure posts' style), rendered with
-`node render.mjs <prefix>-`.
+Images are in `medium-images/`, five or six per post:
+
+- **A cover** (`cover-<post>.png`, 1440×756) right under the subtitle. In
+  Medium's editor, make it the story's featured image (Story settings ›
+  Preview image) so feeds, Hacker News and social previews show it.
+  `cover-figures.mjs`.
+- **Diagrams** (`<prefix>-figN-*.png`): one `<prefix>-figures.mjs` per post
+  on the shared `figures-lib.mjs` (the Hatchure posts' style), rendered with
+  `node render.mjs <prefix>-`.
+- **Console screenshots** (`<prefix>-shot-*.png`): crops of the cards a post
+  talks about, from the v0.6.0-rc.3 console with the homepage's demo data (a
+  fictional web shop; no real server, name or address). The rolled-back
+  upgrade in the upgrades post is a fixture with the runner's own wording.
+  `console-shots.mjs` (its header says how to build the console from a tag;
+  it uses the mock and Playwright from `../kwerft-homepage/tools/screenshots`).
+  Re-take them when the UI changes before a post goes out.
+
+Paste each image's alt text (the `![…]` text) into Medium's alt text field;
+the italic line under a screenshot is its caption.
 
 ---
 

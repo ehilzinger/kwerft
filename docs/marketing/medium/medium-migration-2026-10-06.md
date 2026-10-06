@@ -5,6 +5,8 @@ tiles left one Compose box for two Kubernetes clusters. What the move found
 missing in the platform, and the cutover pattern that kept a rollback one
 DNS change away.*
 
+![One Docker Compose box with brouter, graphhopper, route-api, caddy and eight cron lines becomes a dedicated server running Apps, Schedules and Tasks, and a Cloud server running the tiles on a 350 GiB Volume](medium-images/cover-migration.png)
+
 ---
 
 [Kwerft](https://kwerft.dev/?utm_source=medium&utm_medium=blog&utm_campaign=compose-migration)
@@ -164,6 +166,9 @@ Each run is a Task, so a scheduled run and one started by hand look the same
 in the console. Task and Schedule were added to Kwerft's first version
 because of this pilot, before the move started. Everything below was found
 during it.
+
+![The Jobs page's schedules: each with its image, cron line and time zone, next and last run, and an On success column where the sitemap job restarts the storefront App](medium-images/migration-shot-schedules.png)
+*Kwerft's console, with the demo data of a fictional web shop.*
 
 ## Restarts that dropped requests
 

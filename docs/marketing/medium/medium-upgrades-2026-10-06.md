@@ -4,6 +4,8 @@
 back by itself: who does the work, who watches, where the progress lives,
 and what is never rolled back automatically.*
 
+![The runner on the old image (0.6.0) verifies the new console (0.6.1) and rolls it back; the phases Backup, Running, Verifying lead to RolledBack, and k3s is never rolled back automatically](medium-images/cover-upgrades.png)
+
 ---
 
 [Kwerft](https://kwerft.dev/?utm_source=medium&utm_medium=blog&utm_campaign=self-upgrade)
@@ -235,6 +237,9 @@ or that check fails, the Upgrade ends `Failed`, and its message lists the
 exact `helm rollback` commands to run by hand, plus the names of the
 snapshot and the database copy.
 
+![The progress card of an upgrade to Kwerft 0.6.1 that rolled back: every installer stage done, Verify failed because shop/storefront had 1 of 2 replicas ready, and Rollback back on 0.6.0](medium-images/upgrade-shot-rolledback.png)
+*An upgrade that failed its verification, as the console shows it. Demo data; the wording is the runner's.*
+
 Just as deliberate is what is **not** rolled back. CRDs stay as they are.
 The database stays as it is. Host changes (sysctls, nftables, the registry
 mirror file) stay, because they are idempotent and the old release tolerates
@@ -319,6 +324,9 @@ maintenance window. Minor releases always need a click. An automatic upgrade
 that ends `RolledBack` or `Failed` after it reached `Running` pauses
 AutoPatch until an owner resumes it; one that failed in preflight or backup
 changed nothing, so AutoPatch stays on.
+
+![Settings › Updates: the console's cluster and an agent cluster, each with Kwerft and Kubernetes versions running and available, an Upgrade button per row and Upgrade all to 0.6.1](medium-images/upgrade-shot-versions.png)
+*Kwerft's console, with the demo data of a fictional web shop.*
 
 ## Testing a rollback on purpose
 

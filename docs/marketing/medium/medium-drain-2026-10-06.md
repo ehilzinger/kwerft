@@ -4,6 +4,8 @@
 traffic after Kubernetes has stopped routing to it, and the five-second fix
 that took the count to zero.*
 
+![The old pod keeps serving through a five-second preStop sleep after the new pod is Ready; 503s during a restart went from 120 of 667 to 0 of 1,881](medium-images/cover-drain.png)
+
 ---
 
 [Kwerft](https://kwerft.dev/?utm_source=medium&utm_medium=blog&utm_campaign=rollout-drain)
@@ -175,6 +177,9 @@ The default is 5 seconds, and the range is 0 to 300. The API server enforces
 both bounds, so an App asking for 301 seconds is refused before any
 reconciler sees it. In the UI the field sits under the App's settings, in
 "Health & draining", next to the health check.
+
+![The App settings card Health & draining: an HTTP GET check on /healthz port 3000, and Drain (seconds) set to 5, with the hint that a replica being replaced keeps answering this long before it is told to stop](medium-images/drain-shot-health.png)
+*Kwerft's console, with the demo data of a fictional web shop.*
 
 The pod renderer turns the field into the hook:
 

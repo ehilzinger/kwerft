@@ -5,6 +5,8 @@ recovery key encrypts everything Kwerft's backups write to Hetzner Object
 Storage, and two details of Velero's AWS plugin worth knowing before you
 copy the idea.*
 
+![One recovery key encrypts Velero's objects and the etcd snapshots through SSE-C with an HKDF-SHA256-derived key, and the volume data through Kopia](medium-images/cover-backups.png)
+
 ---
 
 [Kwerft](https://kwerft.dev/?utm_source=medium&utm_medium=blog&utm_campaign=encrypted-backups)
@@ -48,6 +50,9 @@ writes was not: the object tarball, the backup's log, its resource lists
 and volume info. The first version of the design doc said so plainly in its
 open questions, and the project's risk list named it: "Backups carry
 secret values".
+
+![The Backups page's plans: a daily cluster backup with volumes, an hourly one for the shop project, and a weekly objects-only one for an internal project, each with its last backup and next run](medium-images/backup-shot-plans.png)
+*Kwerft's console, with the demo data of a fictional web shop.*
 
 ## SSE-C or nothing
 
@@ -259,6 +264,9 @@ backup holds, and that backup is now encrypted with the recovery key too.
 `kwerft etcd-snapshot fetch` reads the same config as the installer,
 derives the key and downloads a snapshot; `k3s server --cluster-reset` with
 that token does the rest.
+
+![The Backups card in Settings: endpoint, region, bucket and prefix for Hetzner Object Storage, stored keys that are never shown again, the note that the recovery key was shown once, and the option to send k3s's etcd snapshots to the bucket encrypted with a key derived from the recovery key](medium-images/backup-shot-target.png)
+*Kwerft's console, with the demo data of a fictional web shop.*
 
 ## The exit criterion: a new server and one key
 
