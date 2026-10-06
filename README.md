@@ -7,10 +7,13 @@ Hetzner Cloud or dedicated — and puts a console on top: deploy registry images
 or Git repositories, watch them, and administer network rules, domains, nodes,
 clusters and access.
 
-> **Status: Phase 0 (foundations).** The installer, chart, API types and
-> console shell exist; most console features are still to be built. See
+> **Status: public beta in preparation.** v0.4.0 is the latest stable
+> release; v0.6.0 is in release candidates (v0.6.0-rc.3) with backups to
+> Hetzner Object Storage, upgrades from the console, secret sets and Compose
+> import. Kwerft already runs a real production workload: Hatchure's routing
+> backend, jobs and map tiles, on two clusters managed from one console. See
 > [docs/plan.md](docs/plan.md) for the roadmap and
-> [docs/blueprint.html](docs/blueprint.html) for clickable UI mockups.
+> [docs/blueprint.html](docs/blueprint.html) for the UI mockups.
 
 ## Install
 
@@ -53,9 +56,9 @@ owner: { email: you@example.com, passwordFile: /root/owner.pw }
 |---|---|
 | `install/` | `install.sh` (install, join, uninstall, firewall rescue), `join.sh`, bats tests |
 | `charts/kwerft/` | Helm chart; `crds/` is generated |
-| `api/v1alpha1/` | `Project`, `App`, `Build` custom resource types |
+| `api/v1alpha1/` | Custom resource types (`Project`, `App`, `Task`, `Schedule`, `Volume`, `SecretSet`, `Upgrade`, …) |
 | `cmd/kwerft/` | The console binary: API, reconcilers, embedded UI |
-| `internal/` | Server, version and (soon) controllers, auth, Hetzner clients |
+| `internal/` | API server, reconcilers, auth, builds, backups, upgrades, Hetzner clients, the cluster agent |
 | `web/` | React + TypeScript + Vite console |
 | `docs/` | Plan and blueprint (mockups) |
 
