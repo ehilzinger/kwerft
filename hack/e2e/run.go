@@ -766,9 +766,29 @@ func (r *runner) sh(ctx context.Context, cmd string) (string, int, error) {
 }
 
 func (r *runner) shOn(ctx context.Context, m *machine, cmd string) (string, int, error) {
-	var out bytes.Buffer
+	// SSH copies stdout and stderr in goroutines of their own: one buffer
+	// for both needs a lock (bytes.Buffer is not safe for concurrent use).
+	var out lockedBuffer
 	code, err := m.remote.run(ctx, cmd, &out, &out)
 	return strings.TrimSpace(out.String()), code, err
+}
+
+// lockedBuffer is a bytes.Buffer that several goroutines write to.
+type lockedBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *lockedBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *lockedBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
 }
 
 // installOpts changes how the installer runs.

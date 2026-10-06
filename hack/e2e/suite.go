@@ -233,9 +233,22 @@ rm -f /root/.kwerft-e2e-registry`
 // anonymous push is refused (401) and an anonymous read works (200), as
 // the nodes pull.
 func (r *runner) checkRegistry(ctx context.Context) (string, error) {
-	out, code, err := r.sh(ctx, registryCheckScript)
-	if err != nil || code != 0 {
-		return "", fmt.Errorf("exit %d %v: %s", code, err, out)
+	// The script always prints a line; v0.6.0-rc.11's upgrade run once got
+	// none back (exit 0), so an empty answer is asked again.
+	var out string
+	err := r.waitFor(ctx, time.Minute, func(ctx context.Context) (bool, error) {
+		o, code, err := r.sh(ctx, registryCheckScript)
+		if err != nil || code != 0 {
+			return true, fmt.Errorf("exit %d %v: %s", code, err, o)
+		}
+		out = o
+		if out == "" {
+			return false, errors.New("the check printed nothing")
+		}
+		return true, nil
+	})
+	if err != nil {
+		return "", err
 	}
 	if out == "no-credential" {
 		return "not checked: this version has no per-project registry credentials", nil
