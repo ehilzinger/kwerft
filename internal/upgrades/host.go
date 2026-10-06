@@ -15,11 +15,18 @@ import (
 )
 
 // SystemdHost is the runner's Host: the host's root file system is mounted
-// read-only at Root, and only systemd-run and systemctl run there
-// (chrooted, CAP_SYS_CHROOT), talking to the host's systemd over its
-// private socket. Everything else — k3s, helm, install.sh — runs as a
+// read-only at Root, and only systemd-run runs there (chrooted,
+// CAP_SYS_CHROOT), talking to the host's systemd over the system bus.
+// Everything else — k3s, helm, install.sh, even systemctl — runs as a
 // transient unit of the host's systemd, with the host's full environment,
 // so it outlives the runner pod and sees the host as the installer does.
+//
+// systemctl does not run in the chroot itself: as root it talks to
+// systemd's private socket and checks the peer's credentials, and pid 1 of
+// the host is not in the pod's PID namespace ("No data available").
+// systemd-run goes through the D-Bus daemon, which an AppArmor-confined
+// caller cannot reach: the runner pod is Unconfined
+// (internal/controllers/upgrade_runner.go).
 type SystemdHost struct {
 	// Root is where the host's / is mounted ("/" runs directly).
 	Root string
@@ -85,7 +92,7 @@ func (h *SystemdHost) Start(ctx context.Context, cmd Command) error {
 
 // Unit reads `systemctl show`.
 func (h *SystemdHost) Unit(ctx context.Context, name string) (UnitState, error) {
-	out, err := h.exec(ctx, systemctl, "show", name+".service",
+	out, err := h.systemctl(ctx, name, "show", name+".service",
 		"--property=LoadState,ActiveState,SubState,ExecMainStatus,ExecMainExitTimestampMonotonic")
 	if err != nil {
 		return UnitState{}, fmt.Errorf("systemctl show %s: %w: %s", name, err, strings.TrimSpace(out))
@@ -126,11 +133,17 @@ func ParseUnitState(out string) UnitState {
 
 // Remove stops a unit and resets a failed one.
 func (h *SystemdHost) Remove(ctx context.Context, name string) error {
-	if out, err := h.exec(ctx, systemctl, "stop", name+".service"); err != nil && !strings.Contains(out, "not loaded") {
+	if out, err := h.systemctl(ctx, name, "stop", name+".service"); err != nil && !strings.Contains(out, "not loaded") {
 		return fmt.Errorf("systemctl stop %s: %w: %s", name, err, strings.TrimSpace(out))
 	}
-	_, _ = h.exec(ctx, systemctl, "reset-failed", name+".service")
+	_, _ = h.systemctl(ctx, name, "reset-failed", name+".service")
 	return nil
+}
+
+// systemctl runs systemctl on the host as a transient unit named after the
+// unit it acts on (see SystemdHost).
+func (h *SystemdHost) systemctl(ctx context.Context, unit string, args ...string) (string, error) {
+	return h.Run(ctx, Command{Unit: unit + "-" + args[0], Args: append([]string{systemctl}, args...)})
 }
 
 func (h *SystemdHost) hostPath(p string) string { return filepath.Join(h.Root, p) }

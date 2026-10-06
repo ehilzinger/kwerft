@@ -179,6 +179,10 @@ func TestUpgradeStartsTheRunner(t *testing.T) {
 	if caps := c.SecurityContext.Capabilities; len(caps.Add) != 1 || caps.Add[0] != "SYS_CHROOT" || !*c.SecurityContext.ReadOnlyRootFilesystem {
 		t.Errorf("security context = %+v", c.SecurityContext)
 	}
+	// containerd's default AppArmor profile keeps systemd-run off the bus.
+	if aa := c.SecurityContext.AppArmorProfile; aa == nil || aa.Type != corev1.AppArmorProfileTypeUnconfined {
+		t.Errorf("AppArmor profile = %+v", aa)
+	}
 	if ref := metav1.GetControllerOf(job); ref == nil || ref.Kind != "Upgrade" || ref.UID != u.UID {
 		t.Errorf("owner = %+v", ref)
 	}

@@ -98,7 +98,12 @@ func (r *UpgradeReconciler) runnerJob(u *kwerftv1.Upgrade, image string) *batchv
 						},
 						// Root on the host through systemd-run (chrooted into
 						// the host's /, read-only): CAP_SYS_CHROOT only.
+						// AppArmor Unconfined: containerd's default profile
+						// keeps a pod off the system bus, so systemd-run gets
+						// "Access denied"; the runner is root on the host
+						// through systemd anyway (upgrades.SystemdHost).
 						SecurityContext: &corev1.SecurityContext{
+							AppArmorProfile:          &corev1.AppArmorProfile{Type: corev1.AppArmorProfileTypeUnconfined},
 							RunAsUser:                ptr.To[int64](0),
 							RunAsNonRoot:             ptr.To(false),
 							AllowPrivilegeEscalation: ptr.To(false),

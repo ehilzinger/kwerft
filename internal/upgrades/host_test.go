@@ -57,8 +57,22 @@ func TestSystemdHostCommands(t *testing.T) {
 		!slices.Contains(start, "--property=KillMode=process") || slices.Contains(start, "--wait") {
 		t.Errorf("start = %v", start)
 	}
-	if calls[2][0] != "/usr/bin/systemctl" || calls[2][2] != "kwerft-upgrade-x.service" {
-		t.Errorf("show = %v", calls[2])
+	// systemctl runs on the host as a unit too, never in the chroot.
+	show := calls[2]
+	if show[0] != "/usr/bin/systemd-run" || !slices.Contains(show, "--pipe") || !strings.HasPrefix(show[1], "--unit=kwerft-upgrade-x-show-") {
+		t.Errorf("show = %v", show)
+	}
+	if i := slices.Index(show, "--"); i < 0 || !slices.Equal(show[i+1:i+4], []string{"/usr/bin/systemctl", "show", "kwerft-upgrade-x.service"}) {
+		t.Errorf("show's command = %v", show)
+	}
+	calls = nil
+	if err := h.Remove(ctx, "kwerft-upgrade-x"); err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range calls {
+		if c[0] != "/usr/bin/systemd-run" {
+			t.Errorf("remove ran %v in the chroot", c)
+		}
 	}
 }
 
