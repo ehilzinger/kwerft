@@ -79,6 +79,18 @@ func TestUpgradeThroughTheConsole(t *testing.T) {
 	}
 }
 
+// A release candidate's run upgrades from the candidate before, which the
+// console only offers on the edge channel.
+func TestUpgradeToCandidateThroughTheConsole(t *testing.T) {
+	h := newHarnessWith(t, config{Version: "0.6.0-rc.3", From: "0.6.0-rc.2", ViaConsole: true})
+	h.runner.run(context.Background())
+	mustPass(t, h)
+	wantResults(t, h, pass, "Install v0.6.0-rc.2", "Edge channel", "Upgrade to v0.6.0-rc.3 through the console", "After the upgrade")
+	if h.console.channel != "edge" {
+		t.Errorf("channel = %q", h.console.channel)
+	}
+}
+
 func TestForcedFailureRollsBack(t *testing.T) {
 	h := newHarnessWith(t, config{Version: "0.6.0", From: "0.5.0", ViaConsole: true, Fault: true, RunID: "42-1-fault"})
 	h.runner.run(context.Background())

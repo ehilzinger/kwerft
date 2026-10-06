@@ -78,6 +78,12 @@ type upgradeRequest struct {
 	ConfirmVersion string `json:"confirmVersion,omitempty"`
 }
 
+// setUpdatePolicy is Settings › Updates › Policy, without a window or
+// Kubernetes patches.
+func (c *console) setUpdatePolicy(ctx context.Context, policy, channel string) error {
+	return c.do(ctx, http.MethodPut, "/api/v1/settings/updates", map[string]any{"policy": policy, "channel": channel}, nil)
+}
+
 // startUpgrade is Settings › Updates › Upgrade…: the synchronous preflight,
 // then the Upgrade, created as the owner.
 func (c *console) startUpgrade(ctx context.Context, req upgradeRequest) (*upgradeView, error) {

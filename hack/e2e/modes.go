@@ -60,6 +60,14 @@ func (r *runner) executeViaConsole(ctx context.Context) error {
 	if err := r.chartValues(ctx); err != nil {
 		return err
 	}
+	// A console on the stable channel refuses a release candidate.
+	if v, ok := parseVersion(r.cfg.Version); ok && len(v.pre) > 0 {
+		if err := r.step("Edge channel", func() (string, error) {
+			return "Settings › Updates follows the edge channel, for v" + r.cfg.Version, r.console.setUpdatePolicy(ctx, "Notify", "edge")
+		}); err != nil {
+			return err
+		}
+	}
 	before, err := r.console.appPods(ctx, "e2e-before", "hello")
 	if err != nil {
 		return r.step("App's pods before the upgrade", func() (string, error) { return "", err })

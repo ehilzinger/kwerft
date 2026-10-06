@@ -328,19 +328,24 @@ fake Hetzner API, a fake server and a fake console).
 
 | When | What |
 |---|---|
-| A release tag, after publishing (`release.yml` › `e2e`) | that version: a fresh install, and an upgrade from the newest stable release before it (installer re-run), plus the same upgrade **through the console** once that release has console upgrades (below) |
+| A release tag, after publishing (`release.yml` › `e2e`) | that version: a fresh install, an upgrade from the newest stable release before it (installer re-run), and an upgrade **through the console** from the release just before it, a release candidate included, once that release has console upgrades (below) |
 | Nightly, 02:17 UTC | the latest stable release, the same three runs |
 | By hand: Actions → e2e → Run workflow | any published version (empty: the latest); pick the runs: fresh, installer upgrade, console upgrade (auto/yes/no), forced failure, Kubernetes on 3 nodes, backup restore |
 | Every 3 hours (and nightly) | the sweeper |
 
 **Console upgrades in release runs are conditional.** The console can only
 upgrade a server whose installer remembers its settings in
-`/var/lib/kwerft/install.env` (Phase 6, U2). The `resolve` job downloads the
-published installer of the release before and adds the `-via-console` run
+`/var/lib/kwerft/install.env` (Phase 6, U2). The console run starts from the
+release just before, a release candidate included (`hack/e2e previous
+-prereleases`): v0.6.0-rc.4 from rc.3, v0.6.0 from its last candidate, so a
+candidate's console upgrade is tested too; the run puts the console on the
+edge channel first when the target is a candidate. The `resolve` job
+downloads that release's published installer and adds the `-via-console` run
 only when it contains `INSTALL_ENV_FILE=`; otherwise the run summary carries
-a notice ("v… predates upgrades from the console"). So the first release
-after the Phase 6 release is the first one tested this way, without anyone
-flipping a switch. Asking for it by hand (`console_upgrade: yes`, or
+a notice ("v… predates upgrades from the console"). A console upgrade also
+needs the runner of the release it starts from to work, which v0.6.0-rc.3
+is the first to (rc.1 and rc.2 were refused by AppArmor), so v0.6.0-rc.4 is
+the first release tested this way. Asking for it by hand (`console_upgrade: yes`, or
 `fault`) against such an old release is an error instead.
 
 The forced failure, the Kubernetes run and the restore run are by hand only

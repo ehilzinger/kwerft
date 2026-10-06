@@ -8,7 +8,8 @@
 #   unpublish anything).
 # - Nightly: the latest stable release, fresh and as an upgrade.
 # - Release and nightly runs also upgrade through the console (-via-console)
-#   once the release before has console upgrades (its installer writes
+#   from the release just before, a release candidate included (on the edge
+#   channel), once that one has console upgrades (its installer writes
 #   install.env, Phase 6 U2); before that the run is skipped with a notice.
 # - By hand: Actions → e2e → Run workflow, with a version and the runs to do:
 #   the forced failure (rollback), the Kubernetes upgrade on 3 nodes, and
@@ -148,15 +149,23 @@ jobs:
             [[ -n "$VERSION" ]] || { echo "::error::No stable release to test."; exit 1; }
           fi
           VERSION=${VERSION#v}
-          want_from=false
-          [[ "$UPGRADE" == true || "$CONSOLE_UPGRADE" != no || "$FAULT" == true ]] && want_from=true
+          want_console=false
+          [[ "$CONSOLE_UPGRADE" != no || "$FAULT" == true ]] && want_console=true
+          # The installer upgrade starts from the stable release before; a
+          # console upgrade from the release just before, a release
+          # candidate included, which is how a console on the edge channel
+          # moves from one candidate to the next.
           FROM=""
-          if [[ "$want_from" == true ]]; then
+          if [[ "$UPGRADE" == true ]]; then
             FROM=$(go run ./hack/e2e previous -version "$VERSION" <"$RUNNER_TEMP/tags")
             [[ -n "$FROM" ]] || echo "::notice title=No upgrade run::There is no stable release before v$VERSION to upgrade from."
           fi
+          CONSOLE_FROM=""
+          if [[ "$want_console" == true ]]; then
+            CONSOLE_FROM=$(go run ./hack/e2e previous -prereleases -version "$VERSION" <"$RUNNER_TEMP/tags")
+          fi
           # The published installers must exist before a server is paid for.
-          for v in "$VERSION" ${FROM:+"$FROM"}; do
+          for v in "$VERSION" ${FROM:+"$FROM"} ${CONSOLE_FROM:+"$CONSOLE_FROM"}; do
             url="https://raw.githubusercontent.com/$INSTALL_REPO/main/v$v/install.sh"
             if ! curl -fsSL --retry 3 -o "$RUNNER_TEMP/install-$v.sh" "$url"; then
               echo "::error title=Installer not published::$url is missing. Was the install-repo job of the v$v release skipped (INSTALL_REPO_TOKEN)? See RELEASING.md."
@@ -167,7 +176,7 @@ jobs:
           # remembers its settings in install.env (Phase 6, U2); older ones
           # are refused by the console's own check.
           from_upgradable=false
-          if [[ -n "$FROM" ]] && grep -q 'INSTALL_ENV_FILE=' "$RUNNER_TEMP/install-$FROM.sh"; then
+          if [[ -n "$CONSOLE_FROM" ]] && grep -q 'INSTALL_ENV_FILE=' "$RUNNER_TEMP/install-$CONSOLE_FROM.sh"; then
             from_upgradable=true
           fi
 
@@ -177,22 +186,24 @@ jobs:
               '. + [{name: $name, title: $title, from: $from, args: $args}]' <<<"$matrix")
           }
           [[ "$FRESH" == true ]] && add fresh "fresh install" "" ""
-          if [[ -n "$FROM" ]]; then
-            [[ "$UPGRADE" == true ]] && add upgrade "upgrade from v$FROM" "$FROM" ""
-            if [[ "$CONSOLE_UPGRADE" != no || "$FAULT" == true ]] && [[ "$from_upgradable" != true ]]; then
-              msg="v$FROM predates upgrades from the console (its installer has no install.env, Phase 6 U2), so no console upgrade run."
+          [[ -n "$FROM" ]] && add upgrade "upgrade from v$FROM" "$FROM" ""
+          if [[ "$want_console" == true ]]; then
+            msg=""
+            if [[ -z "$CONSOLE_FROM" ]]; then
+              msg="There is no release before v$VERSION to upgrade from through the console."
+            elif [[ "$from_upgradable" != true ]]; then
+              msg="v$CONSOLE_FROM predates upgrades from the console (its installer has no install.env, Phase 6 U2), so no console upgrade run."
+            fi
+            if [[ -n "$msg" ]]; then
               if [[ "$CONSOLE_UPGRADE" == yes || "$FAULT" == true ]]; then
-                echo "::error title=No console upgrade from v$FROM::$msg"
+                echo "::error title=No console upgrade run::$msg"
                 exit 1
               fi
               echo "::notice title=No console upgrade run::$msg"
-            elif [[ "$from_upgradable" == true ]]; then
-              [[ "$CONSOLE_UPGRADE" != no ]] && add console "upgrade from v$FROM through the console" "$FROM" "-via-console"
-              [[ "$FAULT" == true ]] && add fault "failed upgrade from v$FROM, rolled back" "$FROM" "-fault"
+            else
+              [[ "$CONSOLE_UPGRADE" != no ]] && add console "upgrade from v$CONSOLE_FROM through the console" "$CONSOLE_FROM" "-via-console"
+              [[ "$FAULT" == true ]] && add fault "failed upgrade from v$CONSOLE_FROM, rolled back" "$CONSOLE_FROM" "-fault"
             fi
-          elif [[ "$CONSOLE_UPGRADE" == yes || "$FAULT" == true ]]; then
-            echo "::error::A console upgrade run needs a stable release before v$VERSION."
-            exit 1
           fi
           if [[ "$K3S" == true ]]; then
             for k in "$K3S_FROM" "$K3S_TO"; do

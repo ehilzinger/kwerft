@@ -73,7 +73,8 @@ func usage(w io.Writer) {
   run       install a release on a new Hetzner Cloud server, check it, delete the server
             (-via-console, -fault, -k3s, -restore: the Phase 6 runs)
   sweep     delete e2e servers, networks and SSH keys older than -max-age (or of one -run)
-  previous  print the newest stable release older than -version (tags on stdin)
+  previous  print the newest stable release older than -version (tags on stdin);
+            -prereleases counts release candidates too
   latest    print the newest stable release (tags on stdin)
 
 HCLOUD_TOKEN (environment only) is the Hetzner Cloud API token of the test
@@ -312,6 +313,7 @@ func cmdVersions(cmd string, args []string, stdin io.Reader, stdout io.Writer) e
 	fs := flag.NewFlagSet(cmd, flag.ContinueOnError)
 	fs.SetOutput(stdout)
 	version := fs.String("version", "", "the release under test (previous only)")
+	prereleases := fs.Bool("prereleases", false, "count prereleases too (previous only)")
 	if err := fs.Parse(args); err != nil {
 		return usageError{err}
 	}
@@ -325,7 +327,7 @@ func cmdVersions(cmd string, args []string, stdin io.Reader, stdout io.Writer) e
 		if !validVersion(*version) {
 			return usageError{fmt.Errorf("-version %q is not a release version", *version)}
 		}
-		v, err = previousStable(stdin, *version)
+		v, err = previous(stdin, *version, *prereleases)
 	}
 	if err != nil {
 		return err

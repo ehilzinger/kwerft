@@ -53,6 +53,15 @@ func TestPreviousAndLatestStable(t *testing.T) {
 	if err := cmdVersions("previous", []string{"-version", "0.1.0"}, strings.NewReader(tags), &out); err != nil || out.String() != "" {
 		t.Errorf("no previous release should print nothing: %q %v", out.String(), err)
 	}
+	// A console upgrade starts from the release just before, candidates too.
+	for target, want := range map[string]string{
+		"0.6.0-rc.2": "0.6.0-rc.1", "0.6.0-rc.1": "0.5.0", "0.6.0": "0.6.0-rc.1", "0.5.0": "0.5.0-rc.1", "0.5.0-rc.1": "0.4.0",
+	} {
+		out.Reset()
+		if err := cmdVersions("previous", []string{"-prereleases", "-version", target}, strings.NewReader(tags), &out); err != nil || out.String() != want+"\n" {
+			t.Errorf("previous -prereleases %s = %q, %v; want %s", target, out.String(), err, want)
+		}
+	}
 }
 
 func TestSweep(t *testing.T) {

@@ -106,12 +106,19 @@ func sign(n int) int {
 // list` prints them), the newest stable release older than target: the
 // version an upgrade test starts from. "" when there is none.
 func previousStable(tags io.Reader, target string) (string, error) {
+	return previous(tags, target, false)
+}
+
+// previous is previousStable, with prereleases too when prereleases is set:
+// what a console upgrade starts from, so a release candidate's run upgrades
+// from the candidate before it.
+func previous(tags io.Reader, target string, prereleases bool) (string, error) {
 	best := ""
 	sc := bufio.NewScanner(tags)
 	for sc.Scan() {
 		tag := strings.TrimSpace(sc.Text())
 		v, ok := parseVersion(tag)
-		if !ok || len(v.pre) > 0 || compareVersions(tag, target) >= 0 {
+		if !ok || (len(v.pre) > 0 && !prereleases) || compareVersions(tag, target) >= 0 {
 			continue
 		}
 		if best == "" || compareVersions(tag, best) > 0 {

@@ -113,6 +113,8 @@ type fakeConsole struct {
 	volumes map[string]map[string]string
 	// secret sets: "project/set" → key → value.
 	secrets map[string]map[string]string
+	// channel is Settings › Updates' channel ("" is stable).
+	channel string
 
 	// upgrades
 	upgrades      map[string]*fakeUpgrade
@@ -445,6 +447,15 @@ func (f *fakeConsole) serve(w http.ResponseWriter, r *http.Request) {
 			out = append(out, alert{Rule: "crash-looping", State: "firing", Project: "e2e", App: "crash", Summary: "A container keeps crashing"})
 		}
 		writeJSONTest(w, 200, out)
+	case path == "/api/v1/settings/updates" && r.Method == "PUT":
+		var req struct{ Policy, Channel string }
+		_ = json.Unmarshal(raw, &req)
+		if req.Policy != "Notify" || (req.Channel != "stable" && req.Channel != "edge") {
+			writeJSONTest(w, 400, map[string]string{"error": "bad policy"})
+			return
+		}
+		f.channel = req.Channel
+		writeJSONTest(w, 200, map[string]string{"policy": req.Policy, "channel": req.Channel})
 	case strings.HasPrefix(path, "/api/v1/upgrades"):
 		f.serveUpgrades(w, r, parts, raw)
 	case path == "/api/v1/clusters/local/nodes":
@@ -523,6 +534,10 @@ func (f *fakeConsole) serveUpgrades(w http.ResponseWriter, r *http.Request, part
 		}
 		if req.Cluster != "local" || (req.Component != "Kwerft" && req.Component != "Kubernetes") {
 			writeJSONTest(w, 400, map[string]string{"error": "bad request"})
+			return
+		}
+		if strings.Contains(req.Version, "-") && f.channel != "edge" {
+			writeJSONTest(w, 409, map[string]any{"error": "The preflight failed: " + req.Version + " is on the edge channel; this console follows stable."})
 			return
 		}
 		if f.preflightFail != "" {
