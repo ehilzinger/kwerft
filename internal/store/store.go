@@ -93,8 +93,17 @@ func (s *Store) Snapshot(ctx context.Context, path string) error {
 	if _, err := os.Stat(path); err == nil {
 		return fmt.Errorf("snapshot %s: file exists", path)
 	}
-	_, err := s.db.ExecContext(ctx, `VACUUM INTO ?`, path)
-	return err
+	return vacuumInto(ctx, s.db, path)
+}
+
+// vacuumInto writes the copy readable by its owner only, as the database
+// itself (password hashes, sessions): SQLite creates it with the umask's
+// mode, 0644 in the console's container.
+func vacuumInto(ctx context.Context, db *sql.DB, path string) error {
+	if _, err := db.ExecContext(ctx, `VACUUM INTO ?`, path); err != nil {
+		return err
+	}
+	return os.Chmod(path, 0o600)
 }
 
 // CopyDatabase writes a consistent copy of the database at src to dst
@@ -112,8 +121,7 @@ func CopyDatabase(ctx context.Context, src, dst string) error {
 		return err
 	}
 	defer db.Close()
-	_, err = db.ExecContext(ctx, `VACUUM INTO ?`, dst)
-	return err
+	return vacuumInto(ctx, db, dst)
 }
 
 // migrations run in order; append only, never edit a released one.

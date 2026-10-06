@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"errors"
+	"os"
 	"path/filepath"
 	"sync"
 	"testing"
@@ -130,6 +131,20 @@ func TestSnapshot(t *testing.T) {
 	}
 	if err := s.Snapshot(ctx, copyPath); err == nil {
 		t.Fatal("overwrote an existing snapshot")
+	}
+	// Copies hold password hashes and sessions: owner only, under any umask.
+	other := filepath.Join(dir, "other.db")
+	if err := CopyDatabase(ctx, filepath.Join(dir, "kwerft.db"), other); err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range []string{copyPath, other} {
+		fi, err := os.Stat(p)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if m := fi.Mode().Perm(); m != 0o600 {
+			t.Errorf("%s: mode %v, want 0600", filepath.Base(p), m)
+		}
 	}
 	c, err := Open(ctx, copyPath)
 	if err != nil {
