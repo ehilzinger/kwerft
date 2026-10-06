@@ -165,9 +165,12 @@ jobs:
             CONSOLE_FROM=$(go run ./hack/e2e previous -prereleases -version "$VERSION" <"$RUNNER_TEMP/tags")
           fi
           # The published installers must exist before a server is paid for.
+          # raw.githubusercontent.com answers 404 for a while after the
+          # release's install-repo job pushed (v0.6.0-rc.4's run asked 2 s
+          # after), so a 404 is retried for up to 5 minutes.
           for v in "$VERSION" ${FROM:+"$FROM"} ${CONSOLE_FROM:+"$CONSOLE_FROM"}; do
             url="https://raw.githubusercontent.com/$INSTALL_REPO/main/v$v/install.sh"
-            if ! curl -fsSL --retry 3 -o "$RUNNER_TEMP/install-$v.sh" "$url"; then
+            if ! curl -fsSL --retry 20 --retry-delay 15 --retry-all-errors -o "$RUNNER_TEMP/install-$v.sh" "$url"; then
               echo "::error title=Installer not published::$url is missing. Was the install-repo job of the v$v release skipped (INSTALL_REPO_TOKEN)? See RELEASING.md."
               exit 1
             fi
