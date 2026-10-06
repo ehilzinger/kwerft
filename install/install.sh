@@ -2024,12 +2024,39 @@ stage_observability() {
 # (kube_pod_labels{label_kwerft_dev_app, label_kwerft_dev_project}), which
 # the chart's recording rules join container metrics on. Namespaces carry
 # the project label too, for alert rules scoped to projects.
+# k3s runs the controller manager, the scheduler and etcd inside its own
+# process, with no metrics endpoint the chart can find: scraping them only
+# fired KubeControllerManagerDown, KubeSchedulerDown, ScrapePoolHasNoTargets
+# and their rules' RecordingRulesNoData, so they are off along with their
+# rule groups. RecordingRulesNoData is off too: rules such as count:up0, or
+# Kwerft's own on a cluster with no traffic, are empty when all is well.
+# vmagent gets more CPU than the operator's default limit (200m), which
+# throttled it (CPUThrottlingHigh).
 vm_stack_values() {
   cat <<'EOF'
 kube-state-metrics:
   metricLabelsAllowlist:
     - pods=[kwerft.dev/app,kwerft.dev/project]
     - namespaces=[kwerft.dev/project]
+kubeControllerManager:
+  enabled: false
+kubeScheduler:
+  enabled: false
+kubeEtcd:
+  enabled: false
+defaultRules:
+  rules:
+    RecordingRulesNoData:
+      enabled: false
+vmagent:
+  spec:
+    resources:
+      requests:
+        cpu: 50m
+        memory: 200Mi
+      limits:
+        cpu: "1"
+        memory: 500Mi
 EOF
 }
 
