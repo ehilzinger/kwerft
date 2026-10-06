@@ -303,6 +303,23 @@ func TestBackupTarget(t *testing.T) {
 func TestBackupTargetAdoptsTheRestoredKey(t *testing.T) {
 	requireEnvtest(t)
 	ctx := context.Background()
+	// An earlier test's cleanup clears the key while its settings still
+	// exist, so the reconciler may have taken that test's key back from the
+	// repository password it wrote; with a key stored, nothing is adopted.
+	// No settings exist now: clear it for good.
+	eventually(t, func() error {
+		_, sec, err := secretData(t, GatewayNamespace, BackupKeySecret)
+		if apierrors.IsNotFound(err) || (err == nil && len(sec.Data) == 0) {
+			return nil
+		} else if err != nil {
+			return err
+		}
+		sec.Data = nil
+		if err := k8s.Update(ctx, sec); err != nil {
+			return err
+		}
+		return errors.New("cleared a key left by an earlier test")
+	})
 	key := backups.NewRecoveryKey()
 	repo := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Namespace: VeleroNamespace, Name: RepoPasswordSecret},
 		Data: map[string][]byte{RepoPasswordSecretKey: []byte(strings.ReplaceAll(key, "-", ""))}}
@@ -642,9 +659,16 @@ func serveContents(t *testing.T, restore string, body []byte) {
 		t.Fatal(err)
 	}
 	putSecret(t, VeleroNamespace, BackupEncryptionSecret, map[string][]byte{BackupEncryptionSecretKey: key})
-	want := http.Header{}
-	backups.SetSSEC(want, key)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// The key the Secret holds now: a backup target an earlier test
+		// configured may still be writing its own key there.
+		want := http.Header{}
+		data, _, err := secretData(t, VeleroNamespace, BackupEncryptionSecret)
+		if err != nil {
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		backups.SetSSEC(want, data[BackupEncryptionSecretKey])
 		for _, h := range []string{backups.HeaderSSECAlgorithm, backups.HeaderSSECKey, backups.HeaderSSECKeyMD5} {
 			if r.Header.Get(h) != want.Get(h) {
 				w.WriteHeader(http.StatusBadRequest)
