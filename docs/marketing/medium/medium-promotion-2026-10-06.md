@@ -30,8 +30,28 @@ Images are in `medium-images/`, five or six per post:
   it uses the mock and Playwright from `../kwerft-homepage/tools/screenshots`).
   Re-take them when the UI changes before a post goes out.
 
-Paste each image's alt text (the `![…]` text) into Medium's alt text field;
-the italic line under a screenshot is its caption.
+**Medium drafts (created 6 October, unpublished, not submitted):**
+
+| Post | Draft |
+| --- | --- |
+| Drain | https://medium.com/p/94824031b5fa/edit |
+| Migration | https://medium.com/p/2c522a524622/edit |
+| RBAC | https://medium.com/p/0577a5355c1f/edit |
+| Upgrades | https://medium.com/p/d85da3425f62/edit |
+| Backups | https://medium.com/p/e32898b4f1f9/edit |
+
+Each has its images (re-hosted by Medium), alt text on every image and the
+captions under the screenshots. Before submitting, in each draft:
+
+- **Set the preview image** to the cover (Story settings › Preview image).
+- **Check the code blocks' languages.** Medium guesses per block and
+  sometimes guesses wrong (Go shown as C#); click the language label above a
+  block to fix it. A block with blank lines may have been split into two.
+- **The italic standfirst** under the title is a normal paragraph; make it the
+  subtitle if you want it in the preview.
+- **Changes made in the repo after today** are not in the drafts; edit both.
+
+The Markdown files stay the source; the drafts were pasted from them as HTML.
 
 ---
 
@@ -172,10 +192,9 @@ beyond the homepage.
 
 ## 5. Level Up Coding: submission and AI disclosure
 
-**How.** If Level Up Coding already added you as a writer for the outbox and
-Supabase posts, submit each draft from Medium's editor. Otherwise, one email
-to submit@gitconnected.com with the first two draft links and a sentence
-saying three more follow after a release. Submit as unpublished drafts, not
+**How.** You are already a Level Up Coding writer (the outbox post shows
+"Pending review" there since 6 October), so submit each draft from Medium's
+editor (Publish › Add to publication) rather than by email. Submit as unpublished drafts, not
 member-only. No Medium referral links. If a post isn't accepted within two
 weeks of submitting, publish it under your own name on the planned date.
 

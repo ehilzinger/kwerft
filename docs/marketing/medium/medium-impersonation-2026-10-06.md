@@ -401,22 +401,24 @@ isolation suite plants a known value in two projects and checks that no
 endpoint answers with either one, for any role, and that another project's
 key names come back as 403.
 
-For rotation, the App reconciler hashes the values
-of every Secret key an App's environment references (SHA-256, sorted,
-length-prefixed, the first 32 hex characters) and puts the hash into the pod
-template as `kwerft.dev/secrets-hash`. A new value changes the template and
-rolls the App like a restart, without a new revision. Secrets mounted as
-files are not hashed, since the kubelet updates those files itself, and
-Tasks read the value at their next run. A reference to a key that does not
-exist sets the App's condition `SecretMissing` instead of leaving new pods
-in `CreateContainerConfigError`.
+For rotation, the App reconciler hashes the values of every Secret key an
+App's environment references (sorted, length-prefixed) and puts the hash
+into the pod template as `kwerft.dev/secrets-hash`. A new value changes the
+template and rolls the App like a restart, without a new revision. Secrets
+mounted as files are not hashed, since the kubelet updates those files
+itself, and Tasks read the value at their next run. A reference to a key
+that does not exist sets the App's condition `SecretMissing` instead of
+leaving new pods in `CreateContainerConfigError`.
 
-Writing this post turned up a flaw in that hash. Pods are readable by every
-role, viewers included, and the hash is a plain SHA-256 over values whose
-key names they can see. For a long generated value that reveals nothing.
-For a short one a person typed, a viewer can test guesses against it
-offline. The fix is a keyed hash, an HMAC with a key the console keeps,
-which still changes whenever a value does.
+Writing this post turned up a flaw in that hash. Up to v0.6.0-rc.3 it was a
+plain SHA-256. Pods are readable by every role, viewers included, and the
+key names are in the set's status. For a long generated value that reveals
+nothing; for a short one a person typed, a viewer could test guesses
+against it offline. Since rc.4 the hash is an HMAC-SHA256 under a key of its
+own, a Secret the chart creates once on the console and on every agent
+cluster. It is deliberately not the console's data key: agent clusters have
+none, and rotating the data key would then roll every App. The upgrade to
+rc.4 rolls every App that references secrets once.
 
 ## The short version
 

@@ -274,7 +274,7 @@ The bar for this phase was a full restore onto a brand-new server with one
 installer flag:
 
 ```bash
-curl -fsSL https://kwerft.dev/install.sh | sudo bash -s -- --config kwerft.yaml --restore latest --yes
+curl -fsSL https://kwerft.dev/v0.6.0-rc.4/install.sh | sudo bash -s -- --config kwerft.yaml --restore latest --yes
 ```
 
 `kwerft.yaml` needs only a `backups` block: endpoint, bucket, prefix, and
