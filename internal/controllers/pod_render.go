@@ -4,13 +4,10 @@ import (
 	"maps"
 
 	corev1 "k8s.io/api/core/v1"
-	networkingv1 "k8s.io/api/networking/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/util/intstr"
 	corev1ac "k8s.io/client-go/applyconfigurations/core/v1"
 	metav1ac "k8s.io/client-go/applyconfigurations/meta/v1"
-	networkingv1ac "k8s.io/client-go/applyconfigurations/networking/v1"
 
 	kwerftv1 "github.com/ehilzinger/kwerft/api/v1alpha1"
 )
@@ -180,35 +177,4 @@ func (p *podShape) template() *corev1ac.PodTemplateSpecApplyConfiguration {
 		tmpl.WithAnnotations(p.annotations)
 	}
 	return tmpl
-}
-
-// withEgress limits outbound traffic: none (DNS and the cluster only), https
-// (plus port 443 on the internet) or all (no egress policy).
-func withEgress(spec *networkingv1ac.NetworkPolicySpecApplyConfiguration, egress string) {
-	if egress == "" {
-		egress = "https"
-	}
-	if egress == "all" {
-		return
-	}
-	spec.WithPolicyTypes(networkingv1.PolicyTypeEgress)
-	// DNS, and any pod in the cluster: the target's ingress policy decides.
-	spec.WithEgress(
-		networkingv1ac.NetworkPolicyEgressRule().
-			WithTo(networkingv1ac.NetworkPolicyPeer().
-				WithNamespaceSelector(metav1ac.LabelSelector().WithMatchLabels(map[string]string{"kubernetes.io/metadata.name": "kube-system"})).
-				WithPodSelector(metav1ac.LabelSelector().WithMatchLabels(map[string]string{"k8s-app": "kube-dns"}))).
-			WithPorts(
-				networkingv1ac.NetworkPolicyPort().WithProtocol(corev1.ProtocolUDP).WithPort(intstr.FromInt32(53)),
-				networkingv1ac.NetworkPolicyPort().WithProtocol(corev1.ProtocolTCP).WithPort(intstr.FromInt32(53))),
-		networkingv1ac.NetworkPolicyEgressRule().
-			WithTo(networkingv1ac.NetworkPolicyPeer().WithNamespaceSelector(metav1ac.LabelSelector())),
-	)
-	if egress == "https" {
-		spec.WithEgress(networkingv1ac.NetworkPolicyEgressRule().
-			WithTo(networkingv1ac.NetworkPolicyPeer().WithIPBlock(networkingv1ac.IPBlock().
-				WithCIDR("0.0.0.0/0").
-				WithExcept("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "169.254.0.0/16"))).
-			WithPorts(networkingv1ac.NetworkPolicyPort().WithProtocol(corev1.ProtocolTCP).WithPort(intstr.FromInt32(443))))
-	}
 }

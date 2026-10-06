@@ -346,6 +346,10 @@ type taskJSON struct {
 	Started     *time.Time `json:"started,omitempty"`
 	Finished    *time.Time `json:"finished,omitempty"`
 	ExitCode    *int32     `json:"exitCode,omitempty"`
+	// TerminationReason is the container's (OOMKilled, Error, Completed);
+	// MemoryLimit its limit when it ran out of memory, e.g. "256Mi".
+	TerminationReason string `json:"terminationReason,omitempty"`
+	MemoryLimit       string `json:"memoryLimit,omitempty"`
 }
 
 func taskPhase(t *kwerftv1.Task) string {
@@ -361,7 +365,10 @@ func taskSummary(t *kwerftv1.Task) taskJSON {
 		Schedule: t.Labels[controllers.LabelSchedule], Image: t.Status.Image,
 		StartedBy: t.Annotations[kwerftv1.AnnotationStartedBy], Overrides: []string{}, Restart: []string{},
 		Created: t.CreationTimestamp.UTC(), Started: timePtr(t.Status.StartTime), Finished: timePtr(t.Status.CompletionTime),
-		ExitCode: t.Status.ExitCode,
+		ExitCode: t.Status.ExitCode, TerminationReason: t.Status.TerminationReason,
+	}
+	if q := t.Status.MemoryLimit; q != nil {
+		out.MemoryLimit = q.String()
 	}
 	if out.Image == "" && t.Spec.Source != nil && t.Spec.Source.Image != nil {
 		out.Image = t.Spec.Source.Image.Ref

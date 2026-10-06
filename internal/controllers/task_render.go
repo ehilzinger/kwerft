@@ -5,11 +5,10 @@ import (
 	"slices"
 
 	corev1 "k8s.io/api/core/v1"
-	networkingv1 "k8s.io/api/networking/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	batchv1ac "k8s.io/client-go/applyconfigurations/batch/v1"
 	metav1ac "k8s.io/client-go/applyconfigurations/meta/v1"
-	networkingv1ac "k8s.io/client-go/applyconfigurations/networking/v1"
 
 	kwerftv1 "github.com/ehilzinger/kwerft/api/v1alpha1"
 )
@@ -175,19 +174,23 @@ func (r *taskRun) job() *batchv1ac.JobApplyConfiguration {
 		WithSpec(spec)
 }
 
-// taskPolicyName names a Task's NetworkPolicy. App policies carry the App's
-// name, which has no dot when the App has a Service, so they do not collide.
+// taskPolicyName names a Task's CiliumNetworkPolicy. App policies carry the
+// App's name, which has no dot, so they do not collide.
 func taskPolicyName(task string) string { return task + ".task" }
 
-// networkPolicy closes the Task's pods to all inbound traffic and limits
-// outbound traffic like an App's.
-func (r *taskRun) networkPolicy() *networkingv1ac.NetworkPolicyApplyConfiguration {
-	spec := networkingv1ac.NetworkPolicySpec().
-		WithPodSelector(metav1ac.LabelSelector().WithMatchLabels(map[string]string{LabelTask: r.task.Name})).
-		WithPolicyTypes(networkingv1.PolicyTypeIngress)
-	withEgress(spec, r.egress)
-	return networkingv1ac.NetworkPolicy(taskPolicyName(r.task.Name), r.task.Namespace).
-		WithLabels(r.labels()).
-		WithOwnerReferences(r.owner).
-		WithSpec(spec)
+// ciliumPolicy closes the Task's pods to all inbound traffic and limits
+// outbound traffic like an App's (appEgress). A Cilium policy, not a
+// Kubernetes one: only Cilium's can name the nodes, where this cluster's own
+// hostnames are served.
+func (r *taskRun) ciliumPolicy() *unstructured.Unstructured {
+	spec := map[string]any{
+		"endpointSelector": matchLabels(LabelTask, r.task.Name),
+		// An empty rule allows nothing but turns on default deny.
+		"ingress": []any{map[string]any{}},
+	}
+	if egress := appEgress(r.egress); egress != nil {
+		spec["egress"] = egress
+	}
+	return newCiliumPolicy(taskPolicyName(r.task.Name), r.task.Namespace, r.labels(),
+		ownerRef(r.task, kwerftv1.GroupVersion.WithKind("Task")), spec)
 }

@@ -5,7 +5,7 @@ import { ApiError, api } from "../api";
 import { Dialog } from "../components/Dialog";
 import { Icon } from "../components/Icon";
 import { TaskStatus, phaseOfTask } from "../components/TaskStatus";
-import { duration, jobs, prettyDuration, type Task } from "../jobs";
+import { duration, jobs, outOfMemory, prettyDuration, runEnd, type Task } from "../jobs";
 import { describeMount } from "../mounts";
 import { podsApi, type Replicas } from "../pods";
 import { abilities, ago, sizes, words, workloads, type EnvVar } from "../workloads";
@@ -110,7 +110,7 @@ export function TaskDetail() {
           <h3>Run</h3>
           <div className="stats">
             <div><span className="k">Status</span><span className="v" style={{ fontSize: 16 }}>{ready?.reason === "Cancelled" ? "Cancelled" : words(st.phase ?? "Pending")}</span><span className="s">{ready?.message ?? "Waiting for the controller"}</span></div>
-            <div><span className="k">Exit code</span><span className="v">{st.exitCode ?? "—"}</span><span className="s">{st.pod ? `pod ${st.pod}` : "no pod yet"}</span></div>
+            <div><span className="k">Exit code</span><span className="v">{st.exitCode ?? "—"}</span><span className="s">{outOfMemory(st) ? runEnd(st) : st.pod ? `pod ${st.pod}` : "no pod yet"}</span></div>
             <div><span className="k">Duration</span><span className="v" style={{ fontSize: 16 }}>{st.startTime ? duration(st.startTime, st.completionTime) : "—"}</span><span className="s">{finished ? "finished" : st.startTime ? "so far" : "not started"}</span></div>
           </div>
           <div className="bd sep">

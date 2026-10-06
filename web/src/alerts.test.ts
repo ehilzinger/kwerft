@@ -195,6 +195,17 @@ describe("attentionItems", () => {
     expect(byKey["domain:shop/d3"]!.detail).toMatch(/in 6 days/);
   });
 
+  it("says a scheduled run ran out of memory instead of exit code 137", () => {
+    const items = attentionItems({
+      now, origin: "https://x",
+      schedules: [{ name: "sync", project: "shop", suspend: false, phase: "scheduled", lastRun: {
+        name: "sync-1", project: "shop", phase: "failed", exitCode: 137, terminationReason: "OOMKilled", memoryLimit: "256Mi",
+        created: "2026-10-04T03:00:00Z", finished: "2026-10-04T03:01:00Z",
+      } } as ScheduleSummary],
+    });
+    expect(items).toEqual([expect.objectContaining({ key: "schedule:shop/sync", detail: "Out of memory (limit 256Mi)." })]);
+  });
+
   it("works without alerts", () => {
     expect(attentionItems({ now, origin: "https://x", apps: [app({ phase: "failed", reason: "HostnameInUse", message: "taken" })] })).toEqual([
       expect.objectContaining({ key: "app:shop/api", what: "Hostname in use", detail: "taken" }),

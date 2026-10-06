@@ -11,7 +11,7 @@
 import { request } from "./api";
 import { clusterQuery } from "./clusters";
 import { describePorts, type FirewallRule } from "./firewall";
-import type { Domain, ScheduleSummary, TaskSummary, Volume } from "./jobs";
+import { runEnd, type Domain, type ScheduleSummary, type TaskSummary, type Volume } from "./jobs";
 import type { ClusterNode } from "./nodes";
 import { count, portsLabel, type Drop, type HubbleStatus, type Side, type TrafficPeer, type TrafficRule } from "./traffic";
 import type { AppPort, AppSummary } from "./workloads";
@@ -201,7 +201,7 @@ export function buildModel(t: Topology): Model {
     const last = s.lastRun ? `${s.lastRun.phase === "failed" ? "failed" : s.lastRun.phase === "succeeded" ? "ok" : s.lastRun.phase}` : "not run yet";
     add({ id: `job:${s.project}/${s.name}`, kind: "job", name: s.name, project: s.project, status: scheduleTone(s), sub: s.suspend ? "suspended" : `${s.schedule} · ${last}`, schedule: s });
   }
-  for (const k of t.tasks) add({ id: `task:${k.project}/${k.name}`, kind: "task", name: k.name, project: k.project, status: taskTone(k), sub: k.phase === "failed" && k.exitCode !== undefined ? `failed · exit ${k.exitCode}` : k.phase, task: k });
+  for (const k of t.tasks) add({ id: `task:${k.project}/${k.name}`, kind: "task", name: k.name, project: k.project, status: taskTone(k), sub: k.phase === "failed" && runEnd(k, true) ? `failed · ${runEnd(k, true)}` : k.phase, task: k });
   for (const v of t.volumes) add({ id: volumeId(v.project, v.name), kind: "volume", name: volumeName(v), project: v.project, status: volumeTone(v), sub: volumeSub(v), volume: v });
   for (const d of t.domains) add({ id: `dom:${d.project}/${d.name}`, kind: "domain", name: d.hostname, project: d.project, status: domainTone(d), sub: d.certificate, domain: d });
   const byId = new Map(entities.map((e) => [e.id, e]));

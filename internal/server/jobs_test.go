@@ -13,7 +13,9 @@ import (
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/meta"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	kwerftv1 "github.com/ehilzinger/kwerft/api/v1alpha1"
@@ -637,5 +639,23 @@ func TestDomainsListAcrossProjects(t *testing.T) {
 	c.viewer.do(t, "GET", "/api/v1/domains?project=dom-b", nil, &one)
 	if len(one) != 1 || one[0].Name != "shop-copy" {
 		t.Errorf("filtered = %+v", one)
+	}
+}
+
+// A run the kernel stopped for its memory limit says so, with the limit, in
+// the summary the Jobs view and the alerts read; exit code 137 alone does not.
+func TestTaskSummaryOutOfMemory(t *testing.T) {
+	limit := resource.MustParse("256Mi")
+	task := &kwerftv1.Task{
+		ObjectMeta: metav1.ObjectMeta{Name: "sync-1", Namespace: "shop"},
+		Status:     kwerftv1.TaskStatus{Phase: kwerftv1.TaskFailed, ExitCode: ptr.To[int32](137), TerminationReason: "OOMKilled", MemoryLimit: &limit},
+	}
+	s := taskSummary(task)
+	if s.ExitCode == nil || *s.ExitCode != 137 || s.TerminationReason != "OOMKilled" || s.MemoryLimit != "256Mi" {
+		t.Errorf("summary = exit %v, reason %q, limit %q", s.ExitCode, s.TerminationReason, s.MemoryLimit)
+	}
+	task.Status.TerminationReason, task.Status.MemoryLimit = "Error", nil
+	if s := taskSummary(task); s.TerminationReason != "Error" || s.MemoryLimit != "" {
+		t.Errorf("summary = reason %q, limit %q; want Error and none", s.TerminationReason, s.MemoryLimit)
 	}
 }

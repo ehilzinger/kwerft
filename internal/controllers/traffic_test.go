@@ -94,9 +94,63 @@ egress:
 - toEndpoints: [{matchExpressions: [{key: k8s:io.kubernetes.pod.namespace, operator: Exists}]}]
 - toCIDRSet: [{cidr: 0.0.0.0/0, except: [10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 169.254.0.0/16]}]
   toPorts: [{ports: [{port: "443", protocol: TCP}]}]
+- toEntities: [host, remote-node]
+  toPorts: [{ports: [{port: "443", protocol: TCP}]}]
 `
 
 // ---- rendering (no API server) -----------------------------------------------
+
+// Egress https reaches the cluster's own hostnames: they resolve to a node,
+// which Cilium calls host (this node) or remote-node, never a CIDR, so the
+// internet rule alone dropped the hairpin (hatchure's gh-activate Task timed
+// out on https://router.hatchure.app, 2026-10-06). Only 443 on the nodes,
+// Traefik's port; none stays closed and all has no egress policy. The same
+// for Apps and Tasks.
+func TestEgressReachesTheClustersOwnIngress(t *testing.T) {
+	nodes443 := map[string]any{
+		"toEntities": []any{"host", "remote-node"},
+		"toPorts":    []any{map[string]any{"ports": []any{map[string]any{"port": "443", "protocol": "TCP"}}}},
+	}
+	for _, tc := range []struct {
+		egress   string
+		rules    int  // egress rules; 0: no egress section
+		nodes443 bool // the rule above is one of them
+	}{
+		{"", 4, true}, {"https", 4, true}, {"none", 2, false}, {"all", 0, false},
+	} {
+		app := &kwerftv1.App{ObjectMeta: metav1.ObjectMeta{Name: "web", Namespace: "shop"}, Spec: kwerftv1.AppSpec{Egress: tc.egress}}
+		run := &taskRun{task: &kwerftv1.Task{ObjectMeta: metav1.ObjectMeta{Name: "check", Namespace: "shop"}}, project: "shop", egress: tc.egress}
+		for kind, spec := range map[string]map[string]any{
+			"App":  specOf(newAppRender(app, "img", "shop").ciliumPolicy(true)),
+			"Task": specOf(run.ciliumPolicy()),
+		} {
+			rules, _ := spec["egress"].([]any)
+			_, hasEgress := spec["egress"]
+			if len(rules) != tc.rules || hasEgress != (tc.rules > 0) {
+				t.Errorf("%s egress %q: %d egress rules (section %v), want %d", kind, tc.egress, len(rules), hasEgress, tc.rules)
+			}
+			found := false
+			for _, r := range rules {
+				m := r.(map[string]any)
+				if _, ok := m["toEntities"]; ok {
+					found = true
+					if !reflect.DeepEqual(m, nodes443) {
+						t.Errorf("%s egress %q: node rule %v, want only 443 on host and remote-node", kind, tc.egress, m)
+					}
+				}
+			}
+			if found != tc.nodes443 {
+				t.Errorf("%s egress %q: reaches the nodes = %v, want %v", kind, tc.egress, found, tc.nodes443)
+			}
+		}
+	}
+
+	// A Task never accepts connections.
+	run := &taskRun{task: &kwerftv1.Task{ObjectMeta: metav1.ObjectMeta{Name: "check", Namespace: "shop"}}, project: "shop", egress: "https"}
+	if in := specOf(run.ciliumPolicy())["ingress"]; !reflect.DeepEqual(in, []any{map[string]any{}}) {
+		t.Errorf("Task ingress = %v, want default deny ([{}])", in)
+	}
+}
 
 func TestAppPolicyEgressAndIsolation(t *testing.T) {
 	app := &kwerftv1.App{ObjectMeta: metav1.ObjectMeta{Name: "worker", Namespace: "shop"}, Spec: kwerftv1.AppSpec{Egress: "none"}}

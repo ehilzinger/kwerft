@@ -7,7 +7,7 @@ import { ClusterBadge, ClusterFilter } from "../components/ClusterUI";
 import { inCluster, useClusterFilter } from "../clusters";
 import { TaskStatus } from "../components/TaskStatus";
 import { abilities, ago, words, workloads } from "../workloads";
-import { describeCron, duration, jobs, startedBy, when, type ScheduleSummary, type TaskSummary } from "../jobs";
+import { describeCron, duration, jobs, outOfMemory, runEnd, startedBy, when, type ScheduleSummary, type TaskSummary } from "../jobs";
 import { errorText } from "./Apps";
 import { RunNowDialog, type RunSource } from "./RunNowDialog";
 import "../styles/workloads.css";
@@ -123,12 +123,13 @@ export function Jobs() {
 
 function FailedBanner({ s, more, canRun, onRun }: { s: ScheduleSummary; more: number; canRun: boolean; onRun: () => void }) {
   const r = s.lastRun!;
+  const end = runEnd(r);
   return (
     <div className="banner warn" role="status">
       <Icon name="alert" />
       <span>
         <b>{s.name} failed {ago(r.finished ?? r.created)}.</b>{" "}
-        {r.exitCode !== undefined ? `Exit code ${r.exitCode}` : r.reason ? words(r.reason) : "It failed"}
+        {end ? end.charAt(0).toUpperCase() + end.slice(1) : r.reason ? words(r.reason) : "It failed"}
         {r.started ? ` after ${duration(r.started, r.finished)}` : ""}.{" "}
         {s.suspend ? "The schedule is suspended." : s.nextRun ? `The next run is ${when(s.nextRun)}.` : ""}
         {more > 0 ? ` ${more} more schedule${more > 1 ? "s" : ""} failed too.` : ""}{" "}
@@ -168,7 +169,7 @@ function ScheduleRow({ s, canEdit, onOpen, onRun }: { s: ScheduleSummary; canEdi
           <>
             <TaskStatus phase={last.phase} reason={last.reason} message={last.message} muted={suspended && last.phase === "succeeded"} />
             <span className="sub">
-              {last.phase === "failed" && last.exitCode !== undefined ? `exit ${last.exitCode}` : duration(last.started, last.finished)}
+              {last.phase === "failed" && runEnd(last, true) ? runEnd(last, true) : duration(last.started, last.finished)}
               {" · "}{ago(last.finished ?? last.started ?? last.created)}
             </span>
           </>
@@ -212,7 +213,7 @@ export function RunsTable({ tasks, showProject, showSource = true }: { tasks: Ta
                 <td className={by.who === "schedule" ? "dim" : undefined}>{by.who}{by.how ? <span className="sub">{by.how}</span> : null}</td>
                 <td className="dim nowrap" title={t.started ? new Date(t.started).toLocaleString() : undefined}>{ago(t.started ?? t.created)}</td>
                 <td className="num">{t.started ? duration(t.started, t.finished) : "—"}</td>
-                <td className="num">{t.exitCode ?? "—"}</td>
+                <td className="num" title={runEnd(t)}>{t.exitCode ?? "—"}{outOfMemory(t) && <span className="sub">out of memory</span>}</td>
                 <td><TaskStatus phase={t.phase} reason={t.reason} message={t.message} /></td>
               </tr>
             );

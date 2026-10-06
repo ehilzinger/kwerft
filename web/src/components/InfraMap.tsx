@@ -4,7 +4,7 @@
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type PointerEvent, type ReactNode, type WheelEvent } from "react";
 import { appLogsHref } from "../alerts";
 import { describeSources } from "../firewall";
-import { when } from "../jobs";
+import { runEnd, when } from "../jobs";
 import { RouterLink } from "../pages/MonitoringAlerts";
 import {
   appId, between, buildModel, COLLAPSE_ABOVE, fit, focusOf, fwLabel, geom, gib, layout, openToAll, problemsOf, searchOf, volumeFill,
@@ -840,7 +840,7 @@ function entityDetail(m: Model, e: Entity): Detail {
         { kv: [
           ...(s ? [["Schedule", `${s.schedule}${s.timeZone ? ` (${s.timeZone})` : ""}`] as [string, ReactNode]] : []),
           ["Runs as", (s?.fromApp ?? e.task?.fromApp) ? <button type="button" className="lk" data-goto={appId(e.project, (s?.fromApp ?? e.task?.fromApp)!)}>{s?.fromApp ?? e.task?.fromApp}</button> : (s?.image ?? e.task?.image ?? "its own image")],
-          ["Last run", k ? `${k.phase}${k.exitCode !== undefined && k.phase === "failed" ? ` (exit ${k.exitCode})` : ""} · ${ago(k.finished ?? k.created)}` : "not yet"],
+          ["Last run", k ? `${k.phase}${k.phase === "failed" && runEnd(k, true) ? ` (${runEnd(k, true)})` : ""} · ${ago(k.finished ?? k.created)}` : "not yet"],
           ...(s?.nextRun ? [["Next run", when(s.nextRun)] as [string, ReactNode]] : []),
           ...(node ? [["Ran on", <button type="button" key="n" className="lk" data-goto={`srv:${node}`}>{node}</button>] as [string, ReactNode]] : []),
         ] },

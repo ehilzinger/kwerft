@@ -108,7 +108,9 @@ the contract between them. Shared, already on main: `api/v1alpha1`
     namespaces labelled `kwerft.dev/system`, from `allowFrom` apps and their
     Tasks (`kwerft.dev/as-app`); egress none/https/all exactly as before
     (DNS + any pod; https adds TCP 443 to 0.0.0.0/0 minus RFC 1918 and
-    169.254/16). Same-project apps still need `allowFrom` or a rule (the
+    169.254/16, and since 2026-10-06 TCP 443 to the entities `host` and
+    `remote-node`: the cluster's own hostnames resolve to node addresses,
+    which CIDR rules never match; see docs/repro-2026-10-06.md). Same-project apps still need `allowFrom` or a rule (the
     blueprint's "deny new apps until a rule allows them").
   - **Isolation now means something for apps**: `spec.isolated: false` adds
     "every project namespace's pods" to each App's policy and drops the
@@ -137,8 +139,10 @@ the contract between them. Shared, already on main: `api/v1alpha1`
   delete the NetworkPolicy of the old name if (and only if) Kwerft's
   object controls it. Every App and Project reconciles on start, so an
   upgrade migrates everything; hand-made NetworkPolicies stay. Task
-  policies stay Kubernetes NetworkPolicies (deny ingress + egress), which
-  Cilium enforces alongside.
+  policies stayed Kubernetes NetworkPolicies (deny ingress + egress) until
+  2026-10-06, when they became CiliumNetworkPolicies of the same name
+  (`<task>.task`) to reach the nodes; a Task's old NetworkPolicy goes with
+  the Task.
 - **Hubble source: the relay's gRPC observer API**, not Hubble metrics.
   Hubble's Prometheus metrics carry workloads and verdicts but neither
   policy names nor ports, so they cannot attribute a connection to a rule

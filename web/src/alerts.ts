@@ -6,7 +6,7 @@
 import { ApiError, request } from "./api";
 import { clusterQuery } from "./clusters";
 import type { Build } from "./builds";
-import type { Domain, ScheduleSummary } from "./jobs";
+import { runEnd, type Domain, type ScheduleSummary } from "./jobs";
 import { words, type AppSummary } from "./workloads";
 
 // ---- types -------------------------------------------------------------------
@@ -635,9 +635,10 @@ export function attentionItems(input: AttentionInput): AttentionItem[] {
     if (covered.has(`schedule:${id}`) || s.suspend) continue;
     const r = s.lastRun;
     if (r && r.phase === "failed" && r.reason !== "Cancelled") {
+      const end = runEnd(r);
       items.push({
         key: `schedule:${id}`, tone: "warn", icon: "clock", title: id, what: "Last run failed",
-        detail: r.exitCode !== undefined ? `Exit code ${r.exitCode}.` : r.message || (r.reason ? `${words(r.reason)}.` : "The run failed."),
+        detail: end ? `${end.charAt(0).toUpperCase()}${end.slice(1)}.` : r.message || (r.reason ? `${words(r.reason)}.` : "The run failed."),
         since: r.finished ?? r.created,
         action: { label: "View the run", href: `/jobs/${enc(r.project)}/tasks/${enc(r.name)}` },
       });

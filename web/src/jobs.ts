@@ -79,6 +79,10 @@ export type TaskSummary = {
   started?: string;
   finished?: string;
   exitCode?: number;
+  /** Why the container ended: OOMKilled, Error, Completed. */
+  terminationReason?: string;
+  /** Its memory limit when it ran out of memory, e.g. "256Mi". */
+  memoryLimit?: string;
 };
 
 type Meta = {
@@ -105,6 +109,8 @@ export type Task = {
     startTime?: string;
     completionTime?: string;
     exitCode?: number;
+    terminationReason?: string;
+    memoryLimit?: string;
     conditions?: Condition[];
   };
 };
@@ -322,6 +328,22 @@ export function describeCron(expr: string): string {
   const month = num(mon);
   if (day !== undefined && month !== undefined && month >= 1 && month <= 12 && dow === "*") return `yearly, ${day} ${monthNames[month - 1]} ${at}`;
   return "";
+}
+
+type RunEnd = { exitCode?: number; terminationReason?: string; memoryLimit?: string };
+
+/** Whether the run's container was stopped for using more than its memory limit. */
+export const outOfMemory = (r: RunEnd) => r.terminationReason === "OOMKilled";
+
+/**
+ * How a run's container ended, in words: "out of memory (limit 256Mi)" rather
+ * than its exit code 137, else "exit code 3"; short drops the limit and says
+ * "exit 3". Undefined while nothing has ended.
+ */
+export function runEnd(r: RunEnd, short = false): string | undefined {
+  if (outOfMemory(r)) return short || !r.memoryLimit ? "out of memory" : `out of memory (limit ${r.memoryLimit})`;
+  if (r.exitCode === undefined) return undefined;
+  return short ? `exit ${r.exitCode}` : `exit code ${r.exitCode}`;
 }
 
 /** Who started a run, for the runs table. */

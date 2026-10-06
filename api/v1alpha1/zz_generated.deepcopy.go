@@ -2760,6 +2760,11 @@ func (in *TaskStatus) DeepCopyInto(out *TaskStatus) {
 		*out = new(int32)
 		**out = **in
 	}
+	if in.MemoryLimit != nil {
+		in, out := &in.MemoryLimit, &out.MemoryLimit
+		x := (*in).DeepCopy()
+		*out = &x
+	}
 	if in.Conditions != nil {
 		in, out := &in.Conditions, &out.Conditions
 		*out = make([]v1.Condition, len(*in))

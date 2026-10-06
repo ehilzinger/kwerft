@@ -21,6 +21,9 @@ spec:
     - jsonPath: .status.exitCode
       name: Exit
       type: integer
+    - jsonPath: .status.terminationReason
+      name: Reason
+      type: string
     - jsonPath: .status.startTime
       name: Started
       type: date
@@ -765,6 +768,15 @@ spec:
               job:
                 description: Job is the Kubernetes Job running the Task.
                 type: string
+              memoryLimit:
+                anyOf:
+                - type: integer
+                - type: string
+                description: |-
+                  MemoryLimit is the container's memory limit, recorded when it ran out
+                  of memory (TerminationReason OOMKilled): the size to grow out of.
+                pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                x-kubernetes-int-or-string: true
               observedGeneration:
                 format: int64
                 type: integer
@@ -781,6 +793,12 @@ spec:
                 type: string
               startTime:
                 format: date-time
+                type: string
+              terminationReason:
+                description: |-
+                  TerminationReason is why that container ended, as Kubernetes reports
+                  it: Completed, Error, or OOMKilled when it used more memory than its
+                  limit (exit code 137).
                 type: string
             type: object
         required:

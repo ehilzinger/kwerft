@@ -2,6 +2,7 @@ package v1alpha1
 
 import (
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
@@ -157,6 +158,17 @@ type TaskStatus struct {
 	// +optional
 	ExitCode *int32 `json:"exitCode,omitempty"`
 
+	// TerminationReason is why that container ended, as Kubernetes reports
+	// it: Completed, Error, or OOMKilled when it used more memory than its
+	// limit (exit code 137).
+	// +optional
+	TerminationReason string `json:"terminationReason,omitempty"`
+
+	// MemoryLimit is the container's memory limit, recorded when it ran out
+	// of memory (TerminationReason OOMKilled): the size to grow out of.
+	// +optional
+	MemoryLimit *resource.Quantity `json:"memoryLimit,omitempty"`
+
 	// Conditions: Ready (True once succeeded; the reason says why not) and
 	// AppsRestarted (onSuccess.restart was carried out).
 	// +optional
@@ -173,6 +185,7 @@ type TaskStatus struct {
 // +kubebuilder:validation:XValidation:rule="self.metadata.name.size() <= 63",message="name must be at most 63 characters"
 // +kubebuilder:printcolumn:name="Phase",type=string,JSONPath=`.status.phase`
 // +kubebuilder:printcolumn:name="Exit",type=integer,JSONPath=`.status.exitCode`
+// +kubebuilder:printcolumn:name="Reason",type=string,JSONPath=`.status.terminationReason`
 // +kubebuilder:printcolumn:name="Started",type=date,JSONPath=`.status.startTime`
 // +kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`
 type Task struct {

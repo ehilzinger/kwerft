@@ -122,7 +122,7 @@ Exit codes: 0 ok · 2 usage · 10 preflight · 20 network/DNS · 30 Kubernetes �
 | `Project` (cluster-scoped) | Namespace, quota, Pod Security level, default-deny CiliumNetworkPolicy when isolated (`spec.isolated`, default; off: every project's pods reach its apps), RoleBindings for its access (Team or Members) | reconciler ✔ |
 | `App` | Deployment, or StatefulSet when it has disks of its own (shared Volumes and Secrets as files keep it a Deployment); Service, HTTPRoute per public hostname (a port listed again with another hostname serves under both, e.g. while a site moves), CiliumNetworkPolicy (the ingress via host/remote-node, platform namespaces, `allowFrom`; egress none, https or all); source = image **or** Git. Rollback runs an earlier revision's image again as a new revision (`GitSource.pinnedImage` for Git apps); restart via the `kwerft.dev/restarted-at` annotation, no new revision. Rollouts start the new replica first (maxSurge 1, maxUnavailable 0); a replica being stopped drains first: `drainSeconds` (default 5, 0–300, Apps with ports only, never Tasks) becomes the kubelet's `preStop: sleep` — distroless images have no `sleep` — and a grace period of drain + 30 s | reconciler ✔, API ✔ (HPA later) |
 | `Volume` | PVC (local-path / hcloud-volumes) that Apps and Tasks of a project mount by name; deletion waits while mounted | reconciler ✔ |
-| `Task` | Job (kwerft-batch priority, deny-ingress policy): a one-off run with App's shape, or `fromApp`; "run now" with `envOverrides` | reconciler ✔ |
+| `Task` | Job (kwerft-batch priority, deny-ingress CiliumNetworkPolicy `<task>.task` with the App's egress): a one-off run with App's shape, or `fromApp`; "run now" with `envOverrides`; status says how the run ended (`exitCode`, `terminationReason`, and `memoryLimit` when OOMKilled) | reconciler ✔ |
 | `Schedule` | Tasks on a cron schedule, scheduled by the reconciler (a CronJob could not create Tasks without RBAC in pods) | reconciler ✔ |
 | `SecretSet` | A Secret of the same name (labelled `kwerft.dev/secret-set`) holding a project's shared values, or one App's (`<app>-env`, owned by the App); key names, update times and users in status, values never; a per-namespace Role giving `patch` on exactly these Secrets. Details: Secrets below | Phase 6 |
 | `Build` | Job running rootless BuildKit; pushes to zot; success creates an App revision | types ✔ |
@@ -160,6 +160,17 @@ Exit codes: 0 ok · 2 usage · 10 preflight · 20 network/DNS · 30 Kubernetes �
   every other write.
 - **Console:** a Jobs tab per project listing Schedules (next run, last
   result, suspend toggle) and Tasks (status, duration, exit code, live log).
+- **How a run ended (2026-10-06):** the Task status keeps the container's
+  `terminationReason` next to `exitCode`; an OOM kill (`OOMKilled`, exit
+  137) also records `memoryLimit`, and the Ready condition becomes
+  `OutOfMemory`: "The run used more memory than its limit (256Mi) and was
+  stopped; give the Task a larger size (exit code 137)". The console says
+  "out of memory (limit 256Mi)" wherever it showed the exit code (runs
+  table, failed-schedule banner, alerts, the map). Seen with hatchure's
+  rclone sync (8 transfers) at the default size. The default stays small
+  (256 MiB): a larger default would only move the threshold and reserve
+  memory (request = limit) for every Schedule without a size, including
+  the many small curl/psql jobs; the message names the fix instead.
 - **Batch priority:** Tasks run in a `kwerft-batch` PriorityClass below Apps,
   so under memory pressure the scheduler and kubelet pick a job before a
   service.

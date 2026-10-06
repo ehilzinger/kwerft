@@ -11,6 +11,7 @@ import (
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -202,18 +203,24 @@ func TestTaskRendersJob(t *testing.T) {
 		t.Errorf("imagePullSecrets = %+v", ps)
 	}
 
-	var np networkingv1.NetworkPolicy
-	if err := k8s.Get(ctx, client.ObjectKey{Namespace: "jobs", Name: "import.task"}, &np); err != nil {
+	policy := newCilium()
+	if err := k8s.Get(ctx, client.ObjectKey{Namespace: "jobs", Name: "import.task"}, policy); err != nil {
 		t.Fatal(err)
 	}
-	if !metav1.IsControlledBy(&np, task) || np.Spec.PodSelector.MatchLabels[LabelTask] != "import" {
-		t.Errorf("policy owner/selector = %v %v", np.OwnerReferences, np.Spec.PodSelector)
+	if !metav1.IsControlledBy(policy, task) {
+		t.Errorf("policy owner = %v", policy.GetOwnerReferences())
 	}
-	if len(np.Spec.Ingress) != 0 {
-		t.Errorf("ingress rules = %+v, want none", np.Spec.Ingress)
-	}
-	if len(np.Spec.PolicyTypes) != 2 || len(np.Spec.Egress) != 2 {
-		t.Errorf("policyTypes %v, egress rules %d; want Ingress+Egress and 2 (dns, cluster)", np.Spec.PolicyTypes, len(np.Spec.Egress))
+	// Nothing comes in; egress none: DNS and the cluster, not the nodes.
+	assertSpec(t, specOf(policy), `
+endpointSelector: {matchLabels: {kwerft.dev/task: import}}
+ingress: [{}]
+egress:
+- toEndpoints: [{matchLabels: {k8s:io.kubernetes.pod.namespace: kube-system, k8s-app: kube-dns}}]
+  toPorts: [{ports: [{port: "53", protocol: UDP}, {port: "53", protocol: TCP}]}]
+- toEndpoints: [{matchExpressions: [{key: k8s:io.kubernetes.pod.namespace, operator: Exists}]}]
+`)
+	if err := k8s.Get(ctx, client.ObjectKey{Namespace: "jobs", Name: "import.task"}, &networkingv1.NetworkPolicy{}); !apierrors.IsNotFound(err) {
+		t.Errorf("Kubernetes NetworkPolicy: err = %v, want none", err)
 	}
 
 	if task.Status.Phase != kwerftv1.TaskPending || task.Status.Job != "import" || task.Status.Image != "ghcr.io/acme/importer:2.0" {
@@ -290,6 +297,55 @@ func TestTaskStatusFollowsJobAndPod(t *testing.T) {
 	}
 	if reason, _ := readyReason(task.Status.Conditions, task.Generation); reason != "BackoffLimitExceeded" {
 		t.Errorf("reason = %q", reason)
+	}
+	if task.Status.TerminationReason != "Error" || task.Status.MemoryLimit != nil {
+		t.Errorf("terminationReason %q, memoryLimit %v; want Error and none", task.Status.TerminationReason, task.Status.MemoryLimit)
+	}
+}
+
+// An OOM kill is exit code 137 with reason OOMKilled; the Task says "out of
+// memory" and the limit, which exit code 137 alone does not (hatchure's
+// rclone sync, 2026-10-06).
+func TestTaskOutOfMemory(t *testing.T) {
+	requireEnvtest(t)
+	ctx := context.Background()
+	projectNamespace(t, "oom")
+	task := createTask(t, "oom", "sync", imageTask("rclone/rclone:1.71"))
+	waitForJob(t, "oom", "sync")
+
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "oom", Name: "sync-abcde", Labels: map[string]string{LabelTask: "sync"}},
+		Spec: corev1.PodSpec{
+			RestartPolicy: corev1.RestartPolicyNever,
+			Containers: []corev1.Container{{Name: "task", Image: "rclone/rclone:1.71", Resources: corev1.ResourceRequirements{
+				Limits: corev1.ResourceList{corev1.ResourceMemory: resource.MustParse("256Mi")},
+			}}},
+		},
+	}
+	if err := k8s.Create(ctx, pod); err != nil {
+		t.Fatal(err)
+	}
+	pod.Status = corev1.PodStatus{Phase: corev1.PodFailed, ContainerStatuses: []corev1.ContainerStatus{{
+		Name: "task", Image: "rclone/rclone:1.71",
+		State: corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{ExitCode: 137, Reason: "OOMKilled"}},
+	}}}
+	if err := k8s.Status().Update(ctx, pod); err != nil {
+		t.Fatal(err)
+	}
+	finishJob(t, "oom", "sync", false, time.Now())
+	task = waitForTask(t, task, taskPhase(kwerftv1.TaskFailed))
+
+	st := task.Status
+	if st.ExitCode == nil || *st.ExitCode != 137 || st.TerminationReason != "OOMKilled" {
+		t.Errorf("exitCode %v, terminationReason %q; want 137, OOMKilled", st.ExitCode, st.TerminationReason)
+	}
+	if st.MemoryLimit == nil || st.MemoryLimit.String() != "256Mi" {
+		t.Errorf("memoryLimit = %v, want 256Mi", st.MemoryLimit)
+	}
+	c := meta.FindStatusCondition(st.Conditions, ConditionReady)
+	want := "The run used more memory than its limit (256Mi) and was stopped; give the Task a larger size (exit code 137)"
+	if c == nil || c.Reason != "OutOfMemory" || c.Message != want {
+		t.Errorf("ready = %+v, want OutOfMemory: %s", c, want)
 	}
 }
 
@@ -411,6 +467,15 @@ func TestTaskFromAppInheritsAndOverrides(t *testing.T) {
 	}
 	task := createTask(t, "inherit", "api-now", spec)
 	waitForTask(t, task, taskReason("AppNotFound"))
+	// What an older Kwerft left: a Kubernetes NetworkPolicy of the same name.
+	old := &networkingv1.NetworkPolicy{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "inherit", Name: "api-now.task",
+			OwnerReferences: []metav1.OwnerReference{*metav1.NewControllerRef(task, kwerftv1.GroupVersion.WithKind("Task"))}},
+		Spec: networkingv1.NetworkPolicySpec{PolicyTypes: []networkingv1.PolicyType{networkingv1.PolicyTypeIngress}},
+	}
+	if err := k8s.Create(ctx, old); err != nil {
+		t.Fatal(err)
+	}
 
 	createApp(t, "inherit", "api", kwerftv1.AppSpec{
 		Source:  kwerftv1.AppSource{Image: &kwerftv1.ImageSource{Ref: "ghcr.io/acme/api:1.42.0", PullSecret: "ghcr-acme"}},
@@ -460,13 +525,17 @@ func TestTaskFromAppInheritsAndOverrides(t *testing.T) {
 	if *job.Spec.BackoffLimit != 0 || *job.Spec.TTLSecondsAfterFinished != defaultTaskTTL || job.Spec.ActiveDeadlineSeconds != nil {
 		t.Errorf("defaults: backoffLimit %d ttl %d deadline %v", *job.Spec.BackoffLimit, *job.Spec.TTLSecondsAfterFinished, job.Spec.ActiveDeadlineSeconds)
 	}
-	var np networkingv1.NetworkPolicy
-	if err := k8s.Get(ctx, client.ObjectKey{Namespace: "inherit", Name: "api-now.task"}, &np); err != nil {
-		t.Fatal(err)
-	}
-	if len(np.Spec.PolicyTypes) != 1 || np.Spec.PolicyTypes[0] != networkingv1.PolicyTypeIngress {
-		t.Errorf("policyTypes = %v, want Ingress only (the App's egress: all)", np.Spec.PolicyTypes)
-	}
+	// The App's egress all: no egress section, so nothing outbound is denied.
+	assertSpec(t, ciliumSpec(t, "inherit", "api-now.task"), `
+endpointSelector: {matchLabels: {kwerft.dev/task: api-now}}
+ingress: [{}]
+`)
+	eventually(t, func() error {
+		if err := k8s.Get(ctx, client.ObjectKeyFromObject(old), &networkingv1.NetworkPolicy{}); !apierrors.IsNotFound(err) {
+			return fmt.Errorf("the old NetworkPolicy is still there (err=%v)", err)
+		}
+		return nil
+	})
 	if task.Status.Image != "ghcr.io/acme/api:1.42.0" {
 		t.Errorf("status.image = %q", task.Status.Image)
 	}

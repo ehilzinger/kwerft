@@ -33,9 +33,12 @@ import (
 //     (host, remote-node), platform namespaces (labelled kwerft.dev/system),
 //     the apps and their Tasks listed in spec.allowFrom and, when the project
 //     is not isolated, every project's pods. Outbound follows spec.egress
-//     (none: DNS and the cluster; https: plus port 443 on public addresses;
-//     all: no limit). Apps of the same project do not reach each other
-//     unless allowFrom or a TrafficRule says so.
+//     (none: DNS and the cluster; https: plus port 443 on public addresses
+//     and on the nodes, which is this cluster's own ingress; all: no
+//     limit). Apps of the same project do not reach each other unless
+//     allowFrom or a TrafficRule says so.
+//   - Task "<task>.task": the Task's pods accept nothing; outbound as an
+//     App's.
 //   - TrafficRule "<rule>.traffic-in" / "<rule>.traffic-out": what the rule
 //     allows on top, never denying anything (enableDefaultDeny off), so a
 //     rule cannot cut an App off from what its own policy allows.
@@ -130,7 +133,8 @@ func anyPodEndpoints() map[string]any {
 
 // ingressEntities is where traffic through the ingress comes from: Traefik on
 // this node's host network (host) or another node's (remote-node). Kubelet
-// probes come from host too.
+// probes come from host too. The same entities are where the ingress is
+// reached from inside (appEgress).
 func ingressEntities() []any { return []any{"host", "remote-node"} }
 
 func toPorts(ports ...map[string]any) []any {
@@ -195,8 +199,16 @@ func (a *appRender) ciliumPolicy(isolated bool) *unstructured.Unstructured {
 }
 
 // appEgress limits outbound traffic: none (DNS and the cluster only), https
-// (plus port 443 on public addresses) or all (nil: no egress policy). In the
-// cluster the target's ingress policy decides.
+// (plus port 443 on public addresses and on the nodes) or all (nil: no
+// egress policy). In the cluster the target's ingress policy decides.
+//
+// The nodes need a rule of their own: a hostname this cluster serves (an
+// App's, the console's) resolves to a node's public address, and Cilium
+// gives every node address the identity host or remote-node, which CIDR
+// rules never match. Without it a job checking its own App over HTTPS
+// times out (hatchure, 2026-10-06). Only 443 is opened there, which is
+// Traefik on the host network; the nodes' other ports (SSH, the
+// Kubernetes API on 6443, the kubelet, metrics) stay closed.
 func appEgress(egress string) []any {
 	if egress == "" {
 		egress = "https"
@@ -215,6 +227,9 @@ func appEgress(egress string) []any {
 		out = append(out, map[string]any{
 			"toCIDRSet": []any{internetCIDR()},
 			"toPorts":   toPorts(port(443, corev1.ProtocolTCP)),
+		}, map[string]any{
+			"toEntities": ingressEntities(),
+			"toPorts":    toPorts(port(443, corev1.ProtocolTCP)),
 		})
 	}
 	return out

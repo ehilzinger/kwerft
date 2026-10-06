@@ -12,6 +12,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
@@ -45,8 +46,9 @@ const (
 )
 
 // TaskReconciler runs a Task as a Job (restartPolicy Never, the kwerft-batch
-// priority class, a deny-ingress NetworkPolicy) and reports phase, times, the
-// pod and its exit code. Once the Task succeeded it rolls out the Apps in
+// priority class, a deny-ingress CiliumNetworkPolicy) and reports phase,
+// times, the pod and how it ended (exit code, and the reason with the memory
+// limit when it ran out of memory). Once the Task succeeded it rolls out the Apps in
 // onSuccess.restart. A finished Task that no Schedule keeps is deleted after
 // ttlSecondsAfterFinished, together with its Job and pods.
 type TaskReconciler struct {
@@ -149,7 +151,7 @@ func (r *TaskReconciler) cancel(ctx context.Context, task *kwerftv1.Task, by str
 	return nil
 }
 
-// ensureJob returns the Task's Job, creating it (and its NetworkPolicy) on
+// ensureJob returns the Task's Job, creating it (and its network policy) on
 // the first run. The Job is created once and never re-applied, so changes to
 // the App afterwards cannot touch a running Task.
 func (r *TaskReconciler) ensureJob(ctx context.Context, task *kwerftv1.Task) (*batchv1.Job, *readiness, error) {
@@ -207,16 +209,28 @@ func (r *TaskReconciler) ensureJob(ctx context.Context, task *kwerftv1.Task) (*b
 
 	// The policy first, so the pod never runs unrestricted. Never take over
 	// a policy someone else made.
-	existing := &networkingv1.NetworkPolicy{}
+	existing := &metav1.PartialObjectMetadata{}
+	existing.SetGroupVersionKind(CiliumNetworkPolicyGVK)
 	switch err := r.Get(ctx, client.ObjectKey{Namespace: task.Namespace, Name: taskPolicyName(task.Name)}, existing); {
 	case apierrors.IsNotFound(err):
+	case meta.IsNoMatchError(err):
+		return nil, nil, terminalf("CiliumMissing", "Cilium's CiliumNetworkPolicy is not installed in this cluster; re-run the installer")
 	case err != nil:
 		return nil, nil, err
 	case !metav1.IsControlledBy(existing, task):
-		return nil, nil, terminalf("PolicyConflict", "a NetworkPolicy named %q already exists and does not belong to this Task", existing.Name)
+		return nil, nil, terminalf("PolicyConflict", "a CiliumNetworkPolicy named %q already exists and does not belong to this Task", existing.Name)
 	}
-	if err := apply(ctx, r.Client, run.networkPolicy()); err != nil {
+	if err := apply(ctx, r.Client, client.ApplyConfigurationFromUnstructured(run.ciliumPolicy())); err != nil {
+		if meta.IsNoMatchError(err) {
+			return nil, nil, terminalf("CiliumMissing", "Cilium's CiliumNetworkPolicy is not installed in this cluster; re-run the installer")
+		}
 		return nil, nil, fmt.Errorf("apply network policy: %w", err)
+	}
+	// Through v0.6.0-rc.7 a Task's policy was a Kubernetes NetworkPolicy of
+	// the same name, which cannot name the nodes. A Task that wrote one and
+	// never got its Job (the Job was rejected) would keep it.
+	if err := deleteIfControlledBy(ctx, r.Client, &networkingv1.NetworkPolicy{ObjectMeta: metav1.ObjectMeta{Name: taskPolicyName(task.Name), Namespace: task.Namespace}}, task); err != nil {
+		return nil, nil, err
 	}
 	if err := apply(ctx, r.Client, run.job()); err != nil {
 		if apierrors.IsInvalid(err) {
@@ -260,6 +274,11 @@ func (r *TaskReconciler) observe(ctx context.Context, task *kwerftv1.Task, job *
 			switch {
 			case cs.State.Terminated != nil:
 				st.ExitCode = &cs.State.Terminated.ExitCode
+				st.TerminationReason = cs.State.Terminated.Reason
+				st.MemoryLimit = nil
+				if st.TerminationReason == reasonOOMKilled {
+					st.MemoryLimit = memoryLimit(pod, cs.Name)
+				}
 			case cs.State.Waiting != nil && cs.State.Waiting.Reason != "":
 				waiting = cs.State.Waiting.Reason
 				if cs.State.Waiting.Message != "" {
@@ -288,6 +307,15 @@ func (r *TaskReconciler) observe(ctx context.Context, task *kwerftv1.Task, job *
 		if msg == "" {
 			msg = "The job failed"
 		}
+		if st.TerminationReason == reasonOOMKilled {
+			// Exit code 137 alone reads like a crash; say what happened
+			// and what to change.
+			reason, msg = "OutOfMemory", "The run used more memory than its limit"
+			if st.MemoryLimit != nil {
+				msg += " (" + st.MemoryLimit.String() + ")"
+			}
+			msg += " and was stopped; give the Task a larger size"
+		}
 		if st.ExitCode != nil {
 			msg = fmt.Sprintf("%s (exit code %d)", msg, *st.ExitCode)
 		}
@@ -313,6 +341,20 @@ func (r *TaskReconciler) observe(ctx context.Context, task *kwerftv1.Task, job *
 		}
 	}
 	setReady(&st.Conditions, task.Generation, metav1.ConditionFalse, "Pending", msg)
+	return nil
+}
+
+// reasonOOMKilled is the reason Kubernetes gives a container the kernel
+// stopped for using more memory than its limit.
+const reasonOOMKilled = "OOMKilled"
+
+// memoryLimit is the memory limit of pod's container, nil without one.
+func memoryLimit(pod *corev1.Pod, container string) *resource.Quantity {
+	for _, c := range pod.Spec.Containers {
+		if q, ok := c.Resources.Limits[corev1.ResourceMemory]; ok && c.Name == container {
+			return &q
+		}
+	}
 	return nil
 }
 
@@ -426,13 +468,15 @@ func (r *TaskReconciler) waitingTasks(ctx context.Context, obj client.Object) []
 
 func (r *TaskReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	waiting := handler.EnqueueRequestsFromMapFunc(r.waitingTasks)
+	policy := &metav1.PartialObjectMetadata{}
+	policy.SetGroupVersionKind(CiliumNetworkPolicyGVK)
 	return ctrl.NewControllerManagedBy(mgr).
 		// Status writes do not bump the generation, so they do not re-trigger;
 		// an annotation carries a cancel request.
 		For(&kwerftv1.Task{}, builder.WithPredicates(predicate.Or(
 			predicate.GenerationChangedPredicate{}, predicate.AnnotationChangedPredicate{}))).
 		Owns(&batchv1.Job{}).
-		Owns(&networkingv1.NetworkPolicy{}).
+		Owns(policy, builder.OnlyMetadata).
 		Watches(&kwerftv1.App{}, waiting).
 		Watches(&kwerftv1.Volume{}, waiting).
 		// A successful build gives a Task from a Git app its image.
