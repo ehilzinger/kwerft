@@ -481,9 +481,14 @@ func (r *Runner) helmEnv() []string {
 	return []string{"KUBECONFIG=" + HostKubeconfig, "HOME=/root"}
 }
 
+// HelmListArgs lists every release's current revision, failed and pending
+// ones included. Helm 4 (what install.sh installs) has no --all; these state
+// flags mean the same in Helm 3 and 4.
+var HelmListArgs = []string{"list", "--all-namespaces", "--deployed", "--failed", "--pending", "--output", "json"}
+
 func (r *Runner) helmRevisions(ctx context.Context) (map[string]int32, error) {
 	out, err := r.Host.Run(ctx, Command{Unit: UnitName(r.Name) + "-helm", Env: r.helmEnv(),
-		Args: []string{HostHelm, "list", "--all-namespaces", "--all", "--output", "json"}})
+		Args: append([]string{HostHelm}, HelmListArgs...)})
 	if err != nil {
 		return nil, errors.New(lastLine(out, err))
 	}

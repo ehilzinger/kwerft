@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -535,6 +536,30 @@ func TestParseHelmList(t *testing.T) {
 	}
 	if _, err := ParseHelmList("Error: Kubernetes cluster unreachable"); err == nil {
 		t.Error("no error without JSON")
+	}
+	// Helm 4.3's output, as on a v0.6.0-rc.3 server.
+	revs, err = ParseHelmList(`[{"name":"cert-manager","namespace":"cert-manager","revision":"5","updated":"2026-10-06 08:24:59.80093093 +0000 UTC","status":"deployed","chart":"cert-manager-v1.21.2","app_version":"v1.21.2"}]`)
+	if err != nil || revs["cert-manager/cert-manager"] != 5 {
+		t.Errorf("helm 4: %v %v", revs, err)
+	}
+}
+
+// The runner's helm list flags exist in the helm on this machine (Helm 4
+// dropped --all, which failed v0.6.0-rc.3's console upgrades); skipped
+// without helm.
+func TestHelmListArgsExist(t *testing.T) {
+	helm, err := exec.LookPath("helm")
+	if err != nil {
+		t.Skip("no helm")
+	}
+	out, err := exec.Command(helm, "list", "--help").CombinedOutput()
+	if err != nil {
+		t.Fatalf("helm list --help: %v: %s", err, out)
+	}
+	for _, a := range HelmListArgs[1:] {
+		if strings.HasPrefix(a, "--") && !strings.Contains(string(out), a+" ") {
+			t.Errorf("helm list has no %s", a)
+		}
 	}
 }
 
