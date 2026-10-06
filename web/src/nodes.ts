@@ -36,6 +36,50 @@ export type Pool = {
   servers: PoolServer[];
 };
 
+/** Health of a disk, a RAID array or a node's disks, judged by the server like the disk alerts. */
+export type DiskHealthLevel = "ok" | "warn" | "bad" | "unknown";
+
+/** A software RAID (md) array, from node-exporter. */
+export type RaidArray = {
+  device: string;
+  state: "active" | "inactive" | "recovering" | "resync" | "check" | string;
+  active: number;
+  required: number;
+  failed: number;
+  spare: number;
+  syncedPercent?: number;
+  health: DiskHealthLevel;
+  problem?: string;
+};
+
+/** A disk's SMART readings (dedicated servers). */
+export type Disk = {
+  device: string;
+  model?: string;
+  serial?: string;
+  interface?: string;
+  smartPassed?: boolean;
+  criticalWarning?: number;
+  /** Percent of the rated endurance used (NVMe); may pass 100. */
+  percentageUsed?: number;
+  availableSpare?: number;
+  availableSpareThreshold?: number;
+  mediaErrors?: number;
+  unreadable?: boolean;
+  health: DiskHealthLevel;
+  problems: string[];
+};
+
+export type DiskHealth = {
+  health: DiskHealthLevel;
+  /** "2 disks failing · RAID md1 degraded". */
+  summary: string;
+  /** The node's smartctl exporter answers and found disks. */
+  smart: boolean;
+  arrays: RaidArray[];
+  disks: Disk[];
+};
+
 export type ClusterNode = {
   name: string;
   roles: string[];
@@ -52,6 +96,8 @@ export type ClusterNode = {
   platform?: string;
   unschedulable: boolean;
   created?: string;
+  /** RAID and SMART readings: nodes with any, and every dedicated server. */
+  diskHealth?: DiskHealth;
 };
 
 export type ClusterNodes = {
@@ -64,6 +110,8 @@ export type ClusterNodes = {
   joinable: boolean;
   cloud: boolean;
   controlPlanes: number;
+  /** The cluster's metrics answered: nodes without diskHealth have no RAID or SMART readings. */
+  diskReadings: boolean;
 };
 
 export type ServerType = {
@@ -186,4 +234,53 @@ export function serverTypeText(t: ServerType): string {
   const arch = t.architecture === "arm" ? " · Arm" : "";
   const cpu = t.cpuType === "dedicated" ? "dedicated vCPU" : "vCPU";
   return `${t.name} — ${t.cores} ${cpu}, ${t.memory} GB, ${t.disk} GB${arch}`;
+}
+
+// ---- disk health -----------------------------------------------------------------
+
+export function diskTone(h: DiskHealthLevel): "ok" | "warn" | "bad" | "mute" {
+  switch (h) {
+    case "ok": return "ok";
+    case "bad": return "bad";
+    case "warn":
+    case "unknown": return "warn";
+  }
+  return "mute";
+}
+
+/** The pill text for a node's disks, an array or a disk. */
+export function diskHealthText(h: DiskHealthLevel): string {
+  switch (h) {
+    case "ok": return "Healthy";
+    case "warn": return "Watch";
+    case "bad": return "Failing";
+    case "unknown": return "No readings";
+  }
+  return h;
+}
+
+/** "RAID md1 · 2 of 2 disks active", plus spares and the rebuild. */
+export function raidText(a: RaidArray): string {
+  let t = `${a.active} of ${a.required} ${a.required === 1 ? "disk" : "disks"} active`;
+  if (a.failed > 0) t += ` · ${a.failed} failed`;
+  if (a.spare > 0) t += ` · ${a.spare} ${a.spare === 1 ? "spare" : "spares"}`;
+  if (a.state !== "active") t += ` · ${a.state}`;
+  return t;
+}
+
+/** "115 %", "—" when the drive does not report it. */
+export function percentText(v?: number): string {
+  return v === undefined ? "—" : `${Math.round(v)} %`;
+}
+
+/** The SMART verdict in a word. */
+export function smartText(d: Disk): string {
+  if (d.unreadable) return "Unreadable";
+  if (d.smartPassed === undefined) return "—";
+  return d.smartPassed ? "Passed" : "FAILED";
+}
+
+/** Nodes whose disks the console shows in detail. */
+export function nodesWithDisks(nodes: ClusterNode[]): ClusterNode[] {
+  return nodes.filter((n) => n.diskHealth && (n.diskHealth.arrays.length > 0 || n.diskHealth.disks.length > 0 || n.platform === "dedicated"));
 }

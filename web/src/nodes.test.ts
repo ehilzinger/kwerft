@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { controlPlaneCountProblem, labelsText, parseLabels, phaseTone, poolSummary, priceText, type Pool } from "./nodes";
+import {
+  controlPlaneCountProblem, diskHealthText, diskTone, labelsText, nodesWithDisks, parseLabels, percentText, phaseTone, poolSummary, priceText,
+  raidText, smartText, type ClusterNode, type Disk, type Pool,
+} from "./nodes";
 
 const pool = (p: Partial<Pool>): Pool => ({
   name: "prod-web", pool: "web", role: "worker", serverType: "cx23", location: "fsn1", count: 3, desired: 3, ready: 2,
@@ -33,5 +36,27 @@ describe("nodes", () => {
     expect(phaseTone("Failed")).toBe("bad");
     expect(priceText({ name: "cx23", description: "", cores: 2, memory: 4, disk: 40, cpuType: "shared", architecture: "x86", locations: ["fsn1"], prices: { fsn1: "4.7000" } }, "fsn1")).toBe("€4.70/month");
     expect(priceText(undefined, "fsn1")).toBe("");
+  });
+
+  it("phrases disk health", () => {
+    expect(diskTone("bad")).toBe("bad");
+    expect(diskTone("unknown")).toBe("warn");
+    expect(diskHealthText("unknown")).toBe("No readings");
+    expect(raidText({ device: "md1", state: "active", active: 2, required: 2, failed: 0, spare: 0, health: "ok" })).toBe("2 of 2 disks active");
+    expect(raidText({ device: "md1", state: "recovering", active: 1, required: 2, failed: 1, spare: 1, health: "bad" }))
+      .toBe("1 of 2 disks active · 1 failed · 1 spare · recovering");
+    expect(percentText(114.6)).toBe("115 %");
+    expect(percentText(undefined)).toBe("—");
+    const disk = (d: Partial<Disk>): Disk => ({ device: "nvme0", health: "ok", problems: [], ...d });
+    expect(smartText(disk({ smartPassed: false }))).toBe("FAILED");
+    expect(smartText(disk({ smartPassed: true, unreadable: true }))).toBe("Unreadable");
+    expect(smartText(disk({}))).toBe("—");
+    const node = (n: Partial<ClusterNode>): ClusterNode => ({ name: "n", roles: [], ready: true, status: "Ready", unschedulable: false, ...n });
+    const none = { health: "ok" as const, summary: "", smart: false, arrays: [], disks: [] };
+    expect(nodesWithDisks([
+      node({ name: "cloud" }),
+      node({ name: "cloud-raid", platform: "cloud", diskHealth: { ...none, arrays: [{ device: "md0", state: "active", active: 2, required: 2, failed: 0, spare: 0, health: "ok" }] } }),
+      node({ name: "dedi", platform: "dedicated", diskHealth: { ...none, health: "unknown" } }),
+    ]).map((n) => n.name)).toEqual(["cloud-raid", "dedi"]);
   });
 });

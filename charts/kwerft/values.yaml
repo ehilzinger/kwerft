@@ -161,6 +161,22 @@ firewall:
       requests: { cpu: 5m, memory: 16Mi }
       limits: { memory: 64Mi }
 
+# Disk health on dedicated servers (templates/disk-health.yaml):
+# smartctl_exporter as a DaemonSet on nodes labelled
+# kwerft.dev/platform=dedicated, scraped by vmagent. install.sh sets the tag
+# from its pin.
+diskHealth:
+  enabled: true
+  image:
+    repository: quay.io/prometheuscommunity/smartctl-exporter
+    tag: v0.15.0
+    pullPolicy: IfNotPresent
+  port: 9633
+  interval: 120s               # how often smartctl reads each disk
+  resources:
+    requests: { cpu: 10m, memory: 16Mi }
+    limits: { memory: 64Mi }
+
 # Backups (docs/phase6.md). k3s keeps its etcd snapshots on the etcd nodes; the
 # etcd snapshot agent (templates/etcd-snapshots.yaml: `kwerft node-agent
 # --firewall=false`, a DaemonSet on etcd nodes only, console mode only) uploads

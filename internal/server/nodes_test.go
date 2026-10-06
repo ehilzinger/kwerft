@@ -51,7 +51,7 @@ type nodesEnv struct {
 	sys   client.Client
 }
 
-func newNodesConsole(t *testing.T) *nodesEnv {
+func newNodesConsole(t *testing.T, opts ...func(*Config)) *nodesEnv {
 	t.Helper()
 	requireCluster(t)
 	sys, err := client.New(cluster.console, client.Options{Scheme: cluster.admin.Scheme()})
@@ -70,6 +70,9 @@ func newNodesConsole(t *testing.T) *nodesEnv {
 			n.hcloud = func(context.Context) (*hetzner.Client, error) { return e.cloud.Client(), nil }
 			n.robotBase = e.robot.URL
 			n.consoleURL = func(*http.Request) string { return "https://console.example.com" }
+		}
+		for _, o := range opts {
+			o(cfg)
 		}
 	})
 	return e

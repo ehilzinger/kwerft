@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"github.com/ehilzinger/kwerft/internal/observability"
 )
 
 // Recording rules from the chart (charts/kwerft/templates/metrics-rules.yaml),
@@ -98,4 +100,38 @@ var (
 	// Volume fill per claim (the Overview map); any scope.
 	VolumeUsed     = `sum by (namespace, persistentvolumeclaim) (kubelet_volume_stats_used_bytes)`
 	VolumeCapacity = `sum by (namespace, persistentvolumeclaim) (kubelet_volume_stats_capacity_bytes)`
+)
+
+// Disk health (Clusters › Nodes), for owners and admins. RAID from
+// node-exporter's md collector by nodename; SMART from the chart's
+// smartctl_exporter (job kwerft-disk-health), whose scrape labels every
+// series with node. The alert rules read the same series
+// (internal/alerting).
+var (
+	onNodename = func(expr, by string) string {
+		return `max by (nodename, ` + by + `) ((` + expr + `) * on (instance) group_left (nodename) node_uname_info)`
+	}
+	// Disks per array and state (active, failed, spare), and how many the
+	// array needs.
+	RAIDDisks    = onNodename(`node_md_disks`, "device, state")
+	RAIDRequired = onNodename(`node_md_disks_required`, "device")
+	// The array's state: active, inactive, recovering, resync or check.
+	RAIDState = onNodename(`node_md_state`, "device, state") + ` == 1`
+	// Percent of the array in sync, while it rebuilds.
+	RAIDSynced = onNodename(`100 * node_md_blocks_synced / node_md_blocks`, "device")
+
+	smartSel = func(metric string) string {
+		return `max by (node, device) (` + metric + `{job="` + observability.SMARTJob + `"})`
+	}
+	SMARTStatus          = smartSel("smartctl_device_smart_status")
+	SMARTCriticalWarning = smartSel("smartctl_device_critical_warning")
+	SMARTPercentageUsed  = smartSel("smartctl_device_percentage_used")
+	SMARTSpare           = smartSel("smartctl_device_available_spare")
+	SMARTSpareThreshold  = smartSel("smartctl_device_available_spare_threshold")
+	SMARTMediaErrors     = smartSel("smartctl_device_media_errors")
+	SMARTExitStatus      = smartSel("smartctl_device_smartctl_exit_status")
+	// A disk's identity: model_name, serial_number, interface.
+	SMARTDevice = `max by (node, device, model_name, serial_number, interface) (smartctl_device{job="` + observability.SMARTJob + `"})`
+	// Disks smartctl found per node; the exporter answers.
+	SMARTDevices = `max by (node) (smartctl_devices{job="` + observability.SMARTJob + `"})`
 )

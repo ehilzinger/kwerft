@@ -62,6 +62,9 @@ SYSTEM_UPGRADE_CONTROLLER_VERSION="v0.20.2"
 VELERO_VERSION="v1.18.4"                # docker.io/velero/velero
 VELERO_CHART_VERSION="12.2.0"           # vmware-tanzu/velero
 VELERO_PLUGIN_AWS_VERSION="v1.14.4"     # docker.io/velero/velero-plugin-for-aws (S3-compatible storage)
+# Disk health on dedicated servers (SMART), latest as of 2026-10-06; the
+# chart's values.yaml has the same default.
+SMARTCTL_EXPORTER_VERSION="v0.15.0"     # quay.io/prometheuscommunity/smartctl-exporter
 KWERFT_CHART_REPO="oci://ghcr.io/ehilzinger/charts/kwerft"
 KWERFT_IMAGE_REPO="ghcr.io/ehilzinger/kwerft"   # the chart's image.repository; checked before installing
 
@@ -2023,7 +2026,9 @@ stage_observability() {
 # kube-state-metrics exports the pod labels Kwerft puts on every App's pods
 # (kube_pod_labels{label_kwerft_dev_app, label_kwerft_dev_project}), which
 # the chart's recording rules join container metrics on. Namespaces carry
-# the project label too, for alert rules scoped to projects.
+# the project label too, for alert rules scoped to projects, and nodes their
+# platform (kwerft.dev/platform), so DiskReadingsMissing knows which nodes
+# are dedicated servers that should report SMART readings.
 # k3s runs the controller manager, the scheduler and etcd inside its own
 # process, with no metrics endpoint the chart can find: scraping them only
 # fired KubeControllerManagerDown, KubeSchedulerDown, ScrapePoolHasNoTargets
@@ -2038,6 +2043,7 @@ kube-state-metrics:
   metricLabelsAllowlist:
     - pods=[kwerft.dev/app,kwerft.dev/project]
     - namespaces=[kwerft.dev/project]
+    - nodes=[kwerft.dev/platform]
 kubeControllerManager:
   enabled: false
 kubeScheduler:
@@ -2666,6 +2672,7 @@ stage_kwerft() {
     --set registry.clusterIP="$REGISTRY_CLUSTER_IP" \
     --set builds.buildkitImage="docker.io/moby/buildkit:${BUILDKIT_VERSION}-rootless" \
     --set builds.railpackImage="ghcr.io/railwayapp/railpack-frontend:${RAILPACK_VERSION}" \
+    --set diskHealth.image.tag="$SMARTCTL_EXPORTER_VERSION" \
     >>"$LOG_FILE" 2>&1 || die $EXIT_KWERFT "Kwerft installation failed (chart: $ref)"
   printf '%s\n' "$DOMAIN" >"$DOMAIN_FILE"   # fallback; the cluster setting is the record
   echo "control plane ${IMAGE:-$KWERFT_VERSION} ready · registry zot $ZOT_VERSION at $REGISTRY_CLUSTER_IP:5000"
@@ -2721,6 +2728,7 @@ stage_kwerft_agent() {
     --set registry.clusterIP="$REGISTRY_CLUSTER_IP" \
     --set builds.buildkitImage="docker.io/moby/buildkit:${BUILDKIT_VERSION}-rootless" \
     --set builds.railpackImage="ghcr.io/railwayapp/railpack-frontend:${RAILPACK_VERSION}" \
+    --set diskHealth.image.tag="$SMARTCTL_EXPORTER_VERSION" \
     >>"$LOG_FILE" 2>&1 || die $EXIT_KWERFT "Kwerft installation failed (chart: $ref)"
   local volumes
   volumes=$(await_cloud_volumes)

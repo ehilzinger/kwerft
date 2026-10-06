@@ -31,6 +31,7 @@ const (
 	KindSchedule    Kind = "schedule"    // Schedules: namespace, schedule
 	KindBackup      Kind = "backup"      // BackupPlans: plan; platform alerts, no scope
 	KindUpgrade     Kind = "upgrade"     // Upgrades: component, version, upgrade; platform alerts, no scope
+	KindDisk        Kind = "disk"        // nodes' disks and RAID arrays: node, device; platform alerts, no scope
 	KindCustom      Kind = "custom"      // spec.expr; no scope
 )
 
@@ -68,7 +69,7 @@ type Info struct {
 
 // Scoped reports whether rules of this condition accept a scope.
 func (i Info) Scoped() bool {
-	return i.Kind != KindNode && i.Kind != KindCustom && i.Kind != KindBackup && i.Kind != KindUpgrade
+	return i.Kind != KindNode && i.Kind != KindCustom && i.Kind != KindBackup && i.Kind != KindUpgrade && i.Kind != KindDisk
 }
 
 const day = 24 * time.Hour
@@ -99,6 +100,12 @@ var Catalog = []Info{
 	{Condition: kwerftv1.AlertBackupFailing, Label: "Backup failing", Kind: KindBackup, Severity: "critical"},
 	{Condition: kwerftv1.AlertBackupMissing, Label: "Backup missing", Kind: KindBackup, Severity: "critical", HasWindow: true},
 	{Condition: kwerftv1.AlertUpgradeFailed, Label: "Upgrade failed", Kind: KindUpgrade, Severity: "critical", HasWindow: true, DefaultWindow: day},
+	{Condition: kwerftv1.AlertRAIDDegraded, Label: "RAID degraded", Kind: KindDisk, Severity: "critical", DefaultFor: time.Minute},
+	{Condition: kwerftv1.AlertDiskFailing, Label: "Disk failing", Kind: KindDisk, Severity: "critical",
+		HasWindow: true, DefaultWindow: day, DefaultFor: 5 * time.Minute},
+	{Condition: kwerftv1.AlertDiskWearing, Label: "Disk worn", Kind: KindDisk, Severity: "warning",
+		Threshold: &Threshold{Default: 80, Unit: UnitPercent, Min: 1, Max: 100}, DefaultFor: 10 * time.Minute},
+	{Condition: kwerftv1.AlertDiskReadingsMissing, Label: "Disk readings missing", Kind: KindDisk, Severity: "warning", DefaultFor: 15 * time.Minute},
 	{Condition: kwerftv1.AlertCustom, Label: "Custom expression", Kind: KindCustom, Severity: "warning"},
 }
 
@@ -267,7 +274,7 @@ func Render(rule *kwerftv1.AlertRule, consoleHost string) (Rendered, error) {
 		Expr:     Expr(&rule.Spec),
 		For:      e.For,
 		Interval: e.Interval,
-		Labels:   map[string]string{observability.LabelRule: rule.Name, "severity": severity},
+		Labels:   map[string]string{observability.LabelRule: rule.Name, observability.LabelKind: string(e.Kind), "severity": severity},
 	}
 	summary, description := annotations(e, rule.Name)
 	out.Annotations = map[string]string{"summary": summary, "description": description}
@@ -362,10 +369,67 @@ func Expr(spec *kwerftv1.AlertRuleSpec) string {
 		// ends the alert; otherwise it fires for the window after the
 		// failure, once per Upgrade.
 		return "time() - max by (component, version, upgrade, result) (kwerft_upgrade_failed_timestamp_seconds) < " + itoa(int64(e.Window/time.Second))
+	case kwerftv1.AlertRAIDDegraded:
+		// node-exporter's md collector (/proc/mdstat): fewer active disks
+		// than the array needs (a disk failed, was removed or is being
+		// rebuilt), a disk marked failed, or an inactive array.
+		missing := `(node_md_disks_required - ignoring (state) node_md_disks{state="active"}) > 0`
+		failed := `node_md_disks{state="failed"} > 0`
+		inactive := `node_md_state{state="inactive"} == 1`
+		return nodeExpr(missing+" or "+failed+" or "+inactive, "device")
+	case kwerftv1.AlertDiskFailing:
+		// What the drive itself says (smartctl_exporter, dedicated servers
+		// only): the overall SMART status, the NVMe critical warning bits,
+		// spare blocks below the drive's threshold, and media errors that
+		// are new within the window: an old count stays on the drive for
+		// good, so only a count above the window's lowest fires. Per disk
+		// before looking back, since a restarted exporter pod starts new
+		// series (increase() would count its first value as new).
+		step := "5m"
+		if e.Window < 4*time.Hour {
+			step = "1m"
+		}
+		media := smart("smartctl_device_media_errors") + " > min_over_time((" + smart("smartctl_device_media_errors") +
+			")[" + promDuration(e.Window) + ":" + step + "])"
+		return withDiskInfo(smart("smartctl_device_smart_status") + " == 0 or " +
+			smart("smartctl_device_critical_warning") + " > 0 or " +
+			smart("smartctl_device_available_spare") + " < " + smart("smartctl_device_available_spare_threshold") + " or " + media)
+	case kwerftv1.AlertDiskWearing:
+		// NVMe "percentage used" of the rated endurance; may pass 100.
+		return withDiskInfo(smart("smartctl_device_percentage_used") + " > " + itoa(e.Threshold))
+	case kwerftv1.AlertDiskReadingsMissing:
+		// Dedicated servers (the installer's node label, which
+		// kube-state-metrics exports) are expected to report SMART readings
+		// and node-exporter's (RAID). A node with neither SMART devices nor
+		// a node-exporter answering fires once, labelled node; a disk
+		// smartctl cannot read (exit status bits 0-2: bad command line,
+		// device open failed, a command to the disk failed) fires per disk.
+		dedicated := `max by (node) (kube_node_labels{label_kwerft_dev_platform="dedicated"})`
+		smartDevices := `max by (node) (` + smartSel("smartctl_devices") + `) > 0`
+		exporter := `max by (node) (` + nodeExpr(`up{job="`+observability.NodeExporterJob+`"}`) + `) == 1`
+		unreadable := smartBy + "(" + smartSel("smartctl_device_smartctl_exit_status") + " % 8) > 0"
+		return "(" + dedicated + " unless on (node) " + smartDevices + ") or (" + dedicated + " unless on (node) " + exporter + ") or " + unreadable
 	case kwerftv1.AlertCustom:
 		return strings.TrimSpace(spec.Expr)
 	}
 	return ""
+}
+
+// smartBy groups SMART series per disk; the scrape labels them with node.
+const smartBy = "max by (node, device) "
+
+func smartSel(metric string) string {
+	return metric + `{job="` + observability.SMARTJob + `"}`
+}
+
+func smart(metric string) string { return smartBy + "(" + smartSel(metric) + ")" }
+
+// withDiskInfo adds the drive's model and serial number (for a replacement
+// request) to a per-disk expression; disks without the info series keep
+// their alert.
+func withDiskInfo(expr string) string {
+	info := "max by (node, device, model_name, serial_number) (" + smartSel("smartctl_device") + ")"
+	return "((" + expr + ") * on (node, device) group_left (model_name, serial_number) " + info + " or on (node, device) (" + expr + "))"
 }
 
 // podExpr is a per-container expression (namespace, pod, container) with the
@@ -498,6 +562,8 @@ func promDuration(d time.Duration) string {
 const (
 	appTarget  = `{{ $labels.namespace }}/{{ or $labels.app $labels.pod }}`
 	nodeTarget = `{{ or $labels.node $labels.instance }}`
+	diskTarget = `Disk {{ $labels.device }} on node {{ $labels.node }}`
+	diskSerial = `{{ if $labels.serial_number }} {{ $labels.model_name }}, serial number {{ $labels.serial_number }}.{{ end }}`
 	pctValue   = `{{ printf "%.0f" $value }} %`
 )
 
@@ -554,6 +620,23 @@ func annotations(e Effective, rule string) (summary, description string) {
 		return `The upgrade of {{ $labels.component }} to {{ $labels.version }} {{ if eq $labels.result "RolledBack" }}was rolled back{{ else }}failed{{ end }}`,
 			`Upgrade {{ $labels.upgrade }} did not finish. A rolled-back Kwerft upgrade left the previous version running; a failed one needs a look. ` +
 				`Settings › Updates shows its steps, the reason and the installer log. AutoPatch, when on, waits until an owner resumes it.`
+	case kwerftv1.AlertRAIDDegraded:
+		return `RAID {{ $labels.device }} on node ` + nodeTarget + ` is degraded`,
+			`The software RAID array has lost its redundancy: a disk failed or is missing, the array is rebuilding, or it is inactive. ` +
+				`Until it is whole again, one more failing disk loses data. Clusters › Nodes shows the array and the disks' SMART readings; ` +
+				`replace the failed disk (on a Hetzner dedicated server: a support request in Robot with its serial number) and add the new one to the array with mdadm.`
+	case kwerftv1.AlertDiskFailing:
+		return diskTarget + ` is failing`,
+			`SMART reports the disk failing or about to: overall status FAILED, a critical warning, spare blocks below their threshold, or new media errors within ` +
+				Humanize(e.Window) + `.` + diskSerial + ` Replace it soon; Clusters › Nodes shows its readings and whether its RAID array is still whole.`
+	case kwerftv1.AlertDiskWearing:
+		return diskTarget + ` has used ` + pctValue + ` of its endurance`,
+			`The SSD has written more than ` + t + ` % of what its maker rates it for; worn drives fail more often. Plan its replacement.` + diskSerial
+	case kwerftv1.AlertDiskReadingsMissing:
+		return `{{ if $labels.device }}` + diskTarget + ` cannot be read{{ else }}Node {{ $labels.node }} reports no disk health{{ end }}`,
+			`{{ if $labels.device }}smartctl could not read the disk (exit status {{ $value }}).` +
+				`{{ else }}The dedicated server sends no SMART readings, or no node-exporter readings (RAID): check the pods of the DaemonSets kwerft-disk-health (kwerft-system) and vm-prometheus-node-exporter (kwerft-observability) on it.{{ end }}` +
+				` Without readings a failing disk goes unnoticed.`
 	case kwerftv1.AlertHTTPLatency:
 		return `{{ $labels.namespace }}/{{ $labels.app }} is slow: p95 {{ printf "%.0f" $value }} ms`,
 			`95 % of requests took less than {{ printf "%.0f" $value }} ms over ` + Humanize(e.Window) + `, above the ` + t + ` ms set.`
@@ -586,6 +669,10 @@ func consoleURL(e Effective, host string) string {
 		return base + "/backups"
 	case KindUpgrade:
 		return base + "/settings/updates"
+	case KindDisk:
+		// Rules render in the cluster they watch; links exist only where
+		// that is the console's own (an agent has no console host).
+		return base + "/clusters/local/nodes"
 	}
 	return `{{ if and $labels.namespace $labels.app }}` + base + `/apps/{{ $labels.namespace }}/{{ $labels.app }}?tab=logs{{ else }}` + base + `/monitoring{{ end }}`
 }

@@ -15,11 +15,12 @@ import (
 type AlertRuleSpecApplyConfiguration struct {
 	Condition *apiv1alpha1.AlertCondition `json:"condition,omitempty"`
 	// Threshold of the condition: a count (Restarts), percent (MemoryHigh,
-	// CPUHigh, VolumeFillingUp, Node*, HTTPErrorRate) or milliseconds
+	// CPUHigh, VolumeFillingUp, Node*, HTTPErrorRate, DiskWearing) or milliseconds
 	// (HTTPLatency). Empty: the condition's default.
 	Threshold *int64 `json:"threshold,omitempty"`
 	// Window the condition looks at (Restarts, VolumeFillingUp prediction,
-	// CertificateExpiring, ScheduleFailing, HTTP*). Empty: the default.
+	// CertificateExpiring, ScheduleFailing, HTTP*, DiskFailing's media
+	// errors). Empty: the default.
 	Window *v1.Duration `json:"window,omitempty"`
 	// For is how long the condition must hold before the alert fires.
 	For *v1.Duration `json:"for,omitempty"`

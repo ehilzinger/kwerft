@@ -61,6 +61,14 @@ func Describe(spec *kwerftv1.AlertRuleSpec) string {
 		}
 	case kwerftv1.AlertUpgradeFailed:
 		s = "The latest upgrade of Kwerft or Kubernetes failed or was rolled back (fires for " + Humanize(e.Window) + ")" + forPart
+	case kwerftv1.AlertRAIDDegraded:
+		s = "A software RAID array on a node is degraded" + forPart
+	case kwerftv1.AlertDiskFailing:
+		s = "A disk reports SMART failed, a critical warning, low spare or new media errors within " + Humanize(e.Window) + forPart
+	case kwerftv1.AlertDiskWearing:
+		s = "A disk has used more than " + t + " % of its rated endurance" + forPart
+	case kwerftv1.AlertDiskReadingsMissing:
+		s = "A dedicated server reports no disk readings" + forPart
 	case kwerftv1.AlertCustom:
 		s = "Custom expression" + forPart
 	}
@@ -185,6 +193,10 @@ func DefaultRules() []DefaultRule {
 		rule("backup-failing", kwerftv1.AlertBackupFailing),
 		rule("backup-missing", kwerftv1.AlertBackupMissing),
 		rule("upgrade-failed", kwerftv1.AlertUpgradeFailed),
+		rule("raid-degraded", kwerftv1.AlertRAIDDegraded),
+		rule("disk-failing", kwerftv1.AlertDiskFailing),
+		rule("disk-wearing", kwerftv1.AlertDiskWearing),
+		rule("disk-readings-missing", kwerftv1.AlertDiskReadingsMissing),
 	}
 }
 

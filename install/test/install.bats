@@ -704,7 +704,7 @@ mirror_env() {
 }
 
 # The pins at the top of install.sh, the chart's defaults and internal/builds
-# must name the same registry and images.
+# must name the same registry and images (and the SMART exporter's).
 @test "registry and build pins agree with the chart and internal/builds" {
   KWERFT_SOURCED=1 source "$SCRIPT"
   root="$BATS_TEST_DIRNAME/../.."
@@ -713,6 +713,8 @@ mirror_env() {
   grep -qE "^  clusterIP: $REGISTRY_CLUSTER_IP( |$)" "$values"
   grep -qE "^  buildkitImage: docker.io/moby/buildkit:${BUILDKIT_VERSION}-rootless( |$)" "$values"
   grep -qE "^  railpackImage: ghcr.io/railwayapp/railpack-frontend:${RAILPACK_VERSION}( |$)" "$values"
+  grep -qE "^    repository: quay.io/prometheuscommunity/smartctl-exporter( |$)" "$values"
+  grep -qE "^    tag: $SMARTCTL_EXPORTER_VERSION( |$)" "$values"
   grep -qF "RegistryHost = \"$REGISTRY_HOST\"" "$root/internal/builds/builds.go"
   grep -qF "RegistryClusterIP = \"$REGISTRY_CLUSTER_IP\"" "$root/internal/builds/builds.go"
   # Inside the service CIDR (10.43.0.0/16), in its low range kept for fixed addresses.
@@ -818,6 +820,9 @@ JSON
   out=$(vm_stack_values)
   grep -qx '  metricLabelsAllowlist:' <<<"$out"
   grep -qx '    - pods=\[kwerft.dev/app,kwerft.dev/project\]' <<<"$out"
+  # DiskReadingsMissing finds dedicated servers by the node label.
+  grep -qx '    - nodes=\[kwerft.dev/platform\]' <<<"$out"
+  grep -q 'label_kwerft_dev_platform="dedicated"' "$BATS_TEST_DIRNAME/../../internal/alerting/conditions.go"
   # The recording rules read it under kube-state-metrics' name for it.
   grep -q 'label_kwerft_dev_app' "$BATS_TEST_DIRNAME/../../charts/kwerft/templates/metrics-rules.yaml"
 }

@@ -3,7 +3,7 @@ import { Link, useRouter } from "@tanstack/react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ApiError, api } from "../api";
 import {
-  alertAbilities, alertKeys, alertLogsLink, alertingUnavailable, alertsApi, sortAlerts, severityTone,
+  alertAbilities, alertKeys, alertLogsLink, alertNodesHref, alertingUnavailable, alertsApi, sortAlerts, severityTone,
   type Alert, type AlertState,
 } from "../alerts";
 import { Dialog } from "../components/Dialog";
@@ -122,7 +122,8 @@ function EmptyState({ state }: { state: AlertState }) {
 
 function AlertRow({ a, canAct, onSilence }: { a: Alert; canAct: boolean; onSilence: (hours: number) => void }) {
   const queryClient = useQueryClient();
-  const logs = alertLogsLink(a, window.location.origin);
+  const nodes = alertNodesHref(a);
+  const logs = nodes ? undefined : alertLogsLink(a, window.location.origin);
   const unsilence = useMutation({
     mutationFn: async () => {
       for (const id of a.silencedBy ?? []) await alertsApi.unsilence(id, a.cluster);
@@ -146,6 +147,7 @@ function AlertRow({ a, canAct, onSilence }: { a: Alert; canAct: boolean; onSilen
         </div>
         <div className="acts">
           {logs && <RouterLink href={logs.href} external={logs.external} className="btn sm">Logs</RouterLink>}
+          {nodes && <RouterLink href={nodes} className="btn sm">Open nodes</RouterLink>}
           {a.project && a.app && <Link to="/apps/$project/$name" params={{ project: a.project, name: a.app }} className="btn sm">Open app</Link>}
           {a.state === "firing" && canAct && (
             <>

@@ -41,7 +41,8 @@ export type SilenceInput = { fingerprint: string; duration: string; comment: str
 
 export type AlertCondition =
   | "CrashLooping" | "Restarts" | "MemoryHigh" | "CPUHigh" | "VolumeFillingUp" | "NodeMemoryPressure" | "NodeDiskPressure"
-  | "CertificateExpiring" | "ScheduleFailing" | "BuildFailing" | "HTTPErrorRate" | "HTTPLatency" | "BackupFailing" | "BackupMissing" | "UpgradeFailed" | "Custom";
+  | "CertificateExpiring" | "ScheduleFailing" | "BuildFailing" | "HTTPErrorRate" | "HTTPLatency" | "BackupFailing" | "BackupMissing" | "UpgradeFailed"
+  | "RAIDDegraded" | "DiskFailing" | "DiskWearing" | "DiskReadingsMissing" | "Custom";
 
 export type AlertScope = { projects: string[]; apps: string[] };
 
@@ -293,6 +294,22 @@ export const conditions: Record<AlertCondition, ConditionInfo> = {
     label: "Upgrade failed", hint: "An upgrade of Kwerft or Kubernetes failed or was rolled back", scope: "none", everything: "Kwerft and Kubernetes", severity: "critical",
     window: { default: "1d", label: "Fires for" },
   },
+  RAIDDegraded: {
+    label: "RAID degraded", hint: "A server's software RAID lost a disk or is rebuilding", scope: "none", everything: "All nodes", severity: "critical",
+    for: { default: "1m", label: "For" },
+  },
+  DiskFailing: {
+    label: "Disk failing", hint: "SMART says a server's disk is failing", scope: "none", everything: "All dedicated servers", severity: "critical",
+    window: { default: "1d", label: "New media errors within" }, for: { default: "5m", label: "For" },
+  },
+  DiskWearing: {
+    label: "Disk worn", hint: "An SSD has used up most of its rated endurance", scope: "none", everything: "All dedicated servers", severity: "warning",
+    threshold: { unit: "percent", default: 80, label: "More than", suffix: "% of its endurance used" }, for: { default: "10m", label: "For" },
+  },
+  DiskReadingsMissing: {
+    label: "Disk readings missing", hint: "A dedicated server sends no disk health readings", scope: "none", everything: "All dedicated servers", severity: "warning",
+    for: { default: "15m", label: "For" },
+  },
   Custom: {
     label: "Custom expression", hint: "A MetricsQL expression; each result is an alert", scope: "none", everything: "What the expression returns", severity: "warning",
     for: { default: "", label: "For" },
@@ -337,6 +354,10 @@ export function describeCondition(r: Measured): string {
     case "BackupFailing": return `A backup plan's latest backup failed${forText}`;
     case "BackupMissing": return `A backup plan has not completed a backup within ${w ? humanDuration(w) : "twice its interval"}${forText}`;
     case "UpgradeFailed": return `The latest upgrade failed or was rolled back (fires for ${humanDuration(w)})${forText}`;
+    case "RAIDDegraded": return `A software RAID array on a node is degraded${forText}`;
+    case "DiskFailing": return `A disk reports SMART failed, a critical warning, low spare or new media errors within ${humanDuration(w)}${forText}`;
+    case "DiskWearing": return `A disk has used more than ${n} % of its rated endurance${forText}`;
+    case "DiskReadingsMissing": return `A dedicated server reports no disk readings${forText}`;
     case "Custom": return `Custom expression${forText}`;
   }
 }
@@ -504,6 +525,11 @@ export function alertLogsLink(a: Pick<Alert, "consoleURL" | "project" | "app">, 
   return undefined;
 }
 
+/** Disk alerts (RAID, SMART) open their cluster › Nodes, which shows the readings. */
+export function alertNodesHref(a: Pick<Alert, "labels" | "cluster">): string | undefined {
+  return a.labels?.kwerft_kind === "disk" ? `/clusters/${enc(a.cluster ?? "local")}/nodes` : undefined;
+}
+
 // ---- needs attention ---------------------------------------------------------
 
 export type AttentionTone = "bad" | "warn" | "info";
@@ -557,6 +583,7 @@ export function attentionItems(input: AttentionInput): AttentionItem[] {
     if (a.project && a.labels?.schedule) covered.add(`schedule:${a.project}/${a.labels.schedule}`);
     if (a.labels?.hostname) covered.add(`domain:${a.labels.hostname}`);
     const logs = alertLogsLink(a, input.origin);
+    const nodes = alertNodesHref(a);
     items.push({
       key: `alert:${a.fingerprint}`,
       tone: a.severity === "critical" ? "bad" : a.severity === "warning" ? "warn" : "info",
@@ -565,7 +592,8 @@ export function attentionItems(input: AttentionInput): AttentionItem[] {
       what: where ? a.rule : conditionLabel(a.rule),
       detail: a.summary || a.description,
       since: a.startsAt,
-      action: logs && !logs.external ? { label: a.app ? "Open logs" : "Open", href: logs.href } : { label: "Review", href: "/monitoring" },
+      action: nodes ? { label: "Open nodes", href: nodes }
+        : logs && !logs.external ? { label: a.app ? "Open logs" : "Open", href: logs.href } : { label: "Review", href: "/monitoring" },
       alert: a,
     });
   }
