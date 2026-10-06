@@ -85,6 +85,10 @@ spec:
             # Its own pod: the image the upgrade runner is pinned to.
             - name: POD_NAME
               valueFrom: { fieldRef: { fieldPath: metadata.name } }
+            # Keys the hash of secret values on App pod templates
+            # (secretshashkey.yaml); agents too.
+            - name: KWERFT_SECRETS_HASH_KEY
+              valueFrom: { secretKeyRef: { name: {{ include "kwerft.fullname" . }}-secrets-hash-key, key: key } }
             {{- if not $agent }}
             - name: KWERFT_DATA_KEY
               valueFrom: { secretKeyRef: { name: {{ include "kwerft.fullname" . }}-data-key, key: key } }

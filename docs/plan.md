@@ -236,7 +236,16 @@ Exit codes: 0 ok · 2 usage · 10 preflight · 20 network/DNS · 30 Kubernetes �
 - **Rotation rolls the app.** The App reconciler hashes the referenced keys'
   values into the pod template (`kwerft.dev/secrets-hash`), so a changed
   value rolls the App like a restart (no new revision); Tasks read the value
-  at their next run. A reference to a missing set or key sets the App
+  at their next run. The hash is an HMAC-SHA256 (2026-10-06): every role,
+  viewers included, reads pod templates and the key names, so a plain hash
+  let a viewer confirm a guessed low-entropy value offline. Its key is
+  `KWERFT_SECRETS_HASH_KEY` from the Secret `kwerft-secrets-hash-key`, which
+  the chart creates once (console and agents) and keeps across upgrades and
+  uninstalls. It is not the data key: agents have none, and a data-key
+  rotation would roll every App. A new hash key (lost Secret, fresh cluster
+  from a backup) rolls every App that references secrets once, nothing
+  more. Upgrading the controller to the keyed hash also rolls every App that
+  references secrets once. A reference to a missing set or key sets the App
   condition `SecretMissing` instead of leaving pods in
   `CreateContainerConfigError`.
 - **Not shared across projects.** Owners and admins can copy a set into
@@ -315,6 +324,7 @@ Decided 2026-10-05 (decision table: License, Business model).
 - [x] Exit criterion on a fresh Cloud server from the published release (rc.2, 2026-10-04): app on HTTPS in 7:06; a schedule restarted an app on success
 - [x] Rollouts and restarts drain (2026-10-05): a restart of `brouter` on kwerft-dedi-1 had dropped 1 of 671 requests through `edge` (Caddy) — the old pod got SIGTERM as soon as the new one was Ready, while Cilium and Caddy's keep-alive connections still sent to it. Apps with ports now get a `preStop` sleep of `drainSeconds` (App settings › Health & draining). A terminating pod is `ready: false` in its EndpointSlice at once, whatever its probe says, so readiness needs no change; the sleep covers the time until Cilium and callers have caught up. It does not cover a request still running when SIGTERM arrives: an app that exits at once instead of finishing it loses that request (Go clients, Caddy among them, retry idempotent requests on a reused connection that closed before answering). Upgrading the controller rolls every App with ports once, and that rollout runs without the drain. Verified on kwerft-dedi-1 (agent `dev-17ab9df`): 8 parallel loops through `edge` while `brouter` restarted — before, 120 of 667 requests answered 503 within ~1 s of the new pod turning Ready; with the default 5 s drain, 0 of 1,881 over three restarts
 - [x] Secrets as files (hatchure migration W3, 2026-10-05): a third `AppVolume` form `secret` (+ `mode`) for Apps, Tasks and Schedules; mounts read-only, keeps an App a Deployment, never counts as a shared Volume; App settings, deploy wizard and schedule form offer "Mount a secret as files". Not yet: ConfigMaps as files and `envFrom` a whole Secret (the rest of W3)
+- [x] Keyed secrets hash (2026-10-06): `kwerft.dev/secrets-hash` on App pod templates is an HMAC-SHA256 under `kwerft-secrets-hash-key` instead of a plain SHA-256, which a viewer (pods are readable by every role, key names by the SecretSet status) could test guessed values against offline. Upgrading the controller rolls every App that references secrets once (Secrets › Rotation rolls the app)
 - [ ] Not yet: shared storage for pending logins before running more than one replica (admin reset of second factors, "require 2FA" and data-key rotation: done in Phase 4)
 
 ### Phase 5 checklist

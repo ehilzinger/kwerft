@@ -156,7 +156,7 @@ func startTestCluster() (_ *testCluster, _ func(), err error) {
 	if err := (&controllers.ProjectReconciler{Client: mgr.GetClient()}).SetupWithManager(mgr); err != nil {
 		return fail("project reconciler", err)
 	}
-	if err := (&controllers.AppReconciler{Client: mgr.GetClient(), APIReader: mgr.GetAPIReader()}).SetupWithManager(mgr); err != nil {
+	if err := (&controllers.AppReconciler{Client: mgr.GetClient(), APIReader: mgr.GetAPIReader(), SecretsHashKey: []byte("secrets hash key of the tests!!!")}).SetupWithManager(mgr); err != nil {
 		return fail("app reconciler", err)
 	}
 	// Traffic rules (traffic_test.go).

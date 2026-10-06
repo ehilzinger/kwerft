@@ -2,6 +2,7 @@ package controllers
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -42,6 +43,10 @@ type AppReconciler struct {
 	// the ones it mounts, to say which one is missing, and its pods' events,
 	// to say why a disk does not mount; nil skips all of it.
 	APIReader client.Reader
+	// SecretsHashKey keys the secrets hash on the pod template (secretRefs):
+	// the Secret kwerft-secrets-hash-key, made once by the chart. Required
+	// with an APIReader.
+	SecretsHashKey []byte
 }
 
 func (r *AppReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
@@ -137,7 +142,7 @@ func (r *AppReconciler) reconcile(ctx context.Context, app *kwerftv1.App) (*read
 		return &readiness{metav1.ConditionFalse, "VolumeNotFound", "Waiting for Volume " + strings.Join(missing, ", ")}, nil
 	}
 
-	hash, missingRefs, err := secretRefs(ctx, r.APIReader, app.Namespace, app.Spec.Env)
+	hash, missingRefs, err := secretRefs(ctx, r.APIReader, r.SecretsHashKey, app.Namespace, app.Spec.Env)
 	if err != nil {
 		return nil, err
 	}
@@ -513,6 +518,9 @@ func (r *AppReconciler) appsInProject(ctx context.Context, p client.Object) []re
 }
 
 func (r *AppReconciler) SetupWithManager(mgr ctrl.Manager) error {
+	if r.APIReader != nil && len(r.SecretsHashKey) == 0 {
+		return errors.New("the App reconciler needs a secrets hash key")
+	}
 	policy := &metav1.PartialObjectMetadata{}
 	policy.SetGroupVersionKind(CiliumNetworkPolicyGVK)
 	return ctrl.NewControllerManagedBy(mgr).

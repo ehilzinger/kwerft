@@ -175,8 +175,9 @@ helpers in `secretset.go`):
 - Watches Secrets **metadata only** (labelled ones), Apps, Schedules, Tasks
   and Projects. Secrets are read with the APIReader, never cached.
 
-**App reconciler:** `kwerft.dev/secrets-hash` (sha256 over the env's
-`secretKeyRef` values, sorted, first 32 hex) on the pod template; a value
+**App reconciler:** `kwerft.dev/secrets-hash` (HMAC-SHA256 under the
+Secret `kwerft-secrets-hash-key` over the env's `secretKeyRef` values,
+sorted, first 32 hex; plain SHA-256 before 2026-10-06) on the pod template; a value
 change rolls the workload, no revision. A non-optional reference to a
 missing Secret or key → Ready False `SecretMissing` ("Waiting for secret
 values: payments has no key STRIPE_KEY. …") and the workload is not

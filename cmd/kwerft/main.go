@@ -148,7 +148,11 @@ func main() {
 			go flows.Run(ctx, hubble.NewRelay(*hubbleRelay))
 			traffic.Counts = flows
 		}
-		mgr, err := newManager(log, *leaderElect, *metricsListen, *privateNetwork, !agentMode, traffic, &controllers.DomainReconciler{
+		hashKey, err := secretsHashKey(log, *dev, *dataDir)
+		if err != nil {
+			return nil, err
+		}
+		mgr, err := newManager(log, *leaderElect, *metricsListen, *privateNetwork, !agentMode, hashKey, traffic, &controllers.DomainReconciler{
 			ConsoleDomain: *consoleDomain,
 			GatewayClass:  *gatewayClass,
 			ClusterIssuer: *clusterIssuer,
@@ -409,8 +413,9 @@ func waitUntilReady(ctx context.Context, log *slog.Logger, mgr ctrl.Manager, rea
 }
 
 // console: the console's cluster (not agent mode), whose DNS reconciler
-// also keeps the records of remote clusters' hostnames.
-func newManager(log *slog.Logger, leaderElect bool, metricsListen, privateNetwork string, console bool, traffic *controllers.TrafficRuleReconciler, domains *controllers.DomainReconciler, builds *controllers.BuildReconciler) (ctrl.Manager, error) {
+// also keeps the records of remote clusters' hostnames. secretsHashKey:
+// see secretsHashKey.
+func newManager(log *slog.Logger, leaderElect bool, metricsListen, privateNetwork string, console bool, secretsHashKey []byte, traffic *controllers.TrafficRuleReconciler, domains *controllers.DomainReconciler, builds *controllers.BuildReconciler) (ctrl.Manager, error) {
 	ctrl.SetLogger(logr.FromSlogHandler(log.Handler()))
 	cfg, err := ctrl.GetConfig()
 	if err != nil {
@@ -438,7 +443,7 @@ func newManager(log *slog.Logger, leaderElect bool, metricsListen, privateNetwor
 	if err := (&controllers.ProjectReconciler{Client: mgr.GetClient()}).SetupWithManager(mgr); err != nil {
 		return nil, err
 	}
-	apps := &controllers.AppReconciler{Client: mgr.GetClient(), APIReader: mgr.GetAPIReader(), Registry: &controllers.RegistryKeeper{URL: controllers.DefaultRegistryURL}}
+	apps := &controllers.AppReconciler{Client: mgr.GetClient(), APIReader: mgr.GetAPIReader(), SecretsHashKey: secretsHashKey, Registry: &controllers.RegistryKeeper{URL: controllers.DefaultRegistryURL}}
 	if err := apps.SetupWithManager(mgr); err != nil {
 		return nil, err
 	}

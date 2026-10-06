@@ -76,6 +76,11 @@ helm-lint: ## Lint and render the Helm chart
 	helm template kwerft charts/kwerft --set mode=agent --set agent.consoleURL=https://ops.example.com \
 		| grep -q -- '- --console-url=https://ops.example.com'
 	! helm template kwerft charts/kwerft --set mode=agent --set agent.consoleURL=https://ops.example.com | grep -qE 'name: kwerft-data(-key)?$$'
+	@# The secrets hash key (secretshashkey.yaml): agents run the App reconciler too.
+	helm template kwerft charts/kwerft --set mode=agent --set agent.consoleURL=https://ops.example.com \
+		| grep -A1 -x '            - name: KWERFT_SECRETS_HASH_KEY' | grep -qF 'name: kwerft-secrets-hash-key, key: key'
+	helm template kwerft charts/kwerft --set console.domain=ops.example.com --show-only templates/secretshashkey.yaml \
+		| grep -qx '    helm.sh/resource-policy: keep'
 	@# Backups: Velero's pre-backup hook copies the console's database (docs/phase6.md); agents have none.
 	helm template kwerft charts/kwerft --set console.domain=ops.example.com \
 		| grep -qF "pre.hook.backup.velero.io/command: '[\"/usr/local/bin/kwerft\", \"db-snapshot\", \"--data-dir=/var/lib/kwerft\"]'"

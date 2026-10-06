@@ -3,11 +3,13 @@ package controllers
 import (
 	"cmp"
 	"context"
+	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"regexp"
 	"slices"
@@ -156,17 +158,25 @@ type secretRef struct{ secret, key string }
 // returns a hash of the referenced values, in a stable order, and the
 // references that cannot be satisfied (optional ones never count). A nil
 // reader or no references: "" and nothing missing.
-func secretRefs(ctx context.Context, r client.Reader, namespace string, env []corev1.EnvVar) (string, []secretRef, error) {
+//
+// The hash is an HMAC under key (the Secret kwerft-secrets-hash-key): the
+// pod template that carries it is readable by every role, viewers included,
+// and a plain hash would let them confirm a guessed low-entropy value
+// offline.
+func secretRefs(ctx context.Context, r client.Reader, key []byte, namespace string, env []corev1.EnvVar) (string, []secretRef, error) {
 	refs := envSecretRefs(env)
 	if r == nil || len(refs) == 0 {
 		return "", nil, nil
+	}
+	if len(key) == 0 {
+		return "", nil, errors.New("no secrets hash key")
 	}
 	slices.SortFunc(refs, func(a, b *corev1.SecretKeySelector) int {
 		return cmp.Or(strings.Compare(a.Name, b.Name), strings.Compare(a.Key, b.Key))
 	})
 	secrets := map[string]*corev1.Secret{}
 	var missing []secretRef
-	h := sha256.New()
+	h := hmac.New(sha256.New, key)
 	for _, ref := range refs {
 		sec, seen := secrets[ref.Name]
 		if !seen {

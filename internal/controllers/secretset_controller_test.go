@@ -2,6 +2,8 @@ package controllers
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"slices"
@@ -15,6 +17,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	kwerftv1 "github.com/ehilzinger/kwerft/api/v1alpha1"
 )
@@ -321,6 +324,17 @@ func TestAppRollsWhenASecretValueChanges(t *testing.T) {
 		}
 		return nil
 	})
+	// Keyed: the reconciler's key reproduces it (across reconciles and
+	// restarts), another key or none does not.
+	if h, _, err := secretRefs(ctx, k8s, testSecretsHashKey, "rolling", spec.Env); err != nil || h != first {
+		t.Errorf("hash %q with the reconciler's key, want %q (err=%v)", h, first, err)
+	}
+	if h, _, _ := secretRefs(ctx, k8s, []byte("another key, also 32 bytes long!"), "rolling", spec.Env); h == first {
+		t.Error("another key gives the same hash")
+	}
+	if first == unkeyedSecretsHash("payments", "STRIPE_KEY", "sk_live_1") {
+		t.Error("the hash is a plain SHA-256 of the value")
+	}
 	app = waitForApp(t, app, "Progressing")
 	revision := app.Status.Revision
 
@@ -358,6 +372,58 @@ func TestAppRollsWhenASecretValueChanges(t *testing.T) {
 	raw, _ := json.Marshal(d.Spec.Template)
 	if strings.Contains(string(raw), "sk_live") {
 		t.Error("the pod template carries the value")
+	}
+}
+
+// unkeyedSecretsHash is the secrets hash before it had a key: SHA-256 over
+// the length-prefixed reference and value.
+func unkeyedSecretsHash(secret, key, value string) string {
+	h := sha256.New()
+	fmt.Fprintf(h, "%d:%s%d:%s%t%d:%s", len(secret), secret, len(key), key, true, len(value), value)
+	return hex.EncodeToString(h.Sum(nil))[:32]
+}
+
+func TestSecretRefsHashIsKeyed(t *testing.T) {
+	ctx := context.Background()
+	env := []corev1.EnvVar{{Name: "DB_PASSWORD", ValueFrom: &corev1.EnvVarSource{SecretKeyRef: &corev1.SecretKeySelector{
+		LocalObjectReference: corev1.LocalObjectReference{Name: "db"}, Key: "PASSWORD"}}}}
+	reader := func(value string) client.Reader {
+		return fake.NewClientBuilder().WithScheme(NewScheme()).WithObjects(&corev1.Secret{
+			ObjectMeta: metav1.ObjectMeta{Namespace: "shop", Name: "db"},
+			Data:       map[string][]byte{"PASSWORD": []byte(value)},
+		}).Build()
+	}
+	hash := func(key []byte, value string) string {
+		t.Helper()
+		h, missing, err := secretRefs(ctx, reader(value), key, "shop", env)
+		if err != nil || len(missing) > 0 || h == "" {
+			t.Fatalf("secretRefs: %q, missing %v, err %v", h, missing, err)
+		}
+		return h
+	}
+	key := []byte("secrets hash key of the tests!!!")
+	h := hash(key, "hunter2")
+	if again := hash(slices.Clone(key), "hunter2"); again != h {
+		t.Errorf("the same key and value hash to %q and %q", h, again)
+	}
+	if len(h) != 32 {
+		t.Errorf("hash %q, want 32 hex characters", h)
+	}
+	if hash(key, "hunter3") == h {
+		t.Error("a changed value keeps the hash")
+	}
+	if hash([]byte("another key, also 32 bytes long!"), "hunter2") == h {
+		t.Error("another key gives the same hash")
+	}
+	if h == unkeyedSecretsHash("db", "PASSWORD", "hunter2") {
+		t.Error("the hash is a plain SHA-256 of the value")
+	}
+	if _, _, err := secretRefs(ctx, reader("hunter2"), nil, "shop", env); err == nil {
+		t.Error("no key: hashed anyway")
+	}
+	// Nothing to hash needs no key.
+	if h, _, err := secretRefs(ctx, reader("hunter2"), nil, "shop", nil); err != nil || h != "" {
+		t.Errorf("no references: %q, %v", h, err)
 	}
 }
 

@@ -31,6 +31,9 @@ var k8s client.Client
 
 const testConsoleDomain = "console.example.com"
 
+// testSecretsHashKey is the App reconciler's secrets hash key.
+var testSecretsHashKey = []byte("secrets hash key of the tests!!!")
+
 // TestMain starts a real kube-apiserver + etcd (envtest) with the Kwerft and
 // Gateway API CRDs, and runs both reconcilers against it. There are no
 // built-in controllers (no pods, no garbage collection), so tests assert on
@@ -101,7 +104,7 @@ func TestMain(m *testing.M) {
 		os.Exit(1)
 	}
 	must((&ProjectReconciler{Client: mgr.GetClient()}).SetupWithManager(mgr))
-	must((&AppReconciler{Client: mgr.GetClient(), APIReader: mgr.GetAPIReader()}).SetupWithManager(mgr))
+	must((&AppReconciler{Client: mgr.GetClient(), APIReader: mgr.GetAPIReader(), SecretsHashKey: testSecretsHashKey}).SetupWithManager(mgr))
 	must((&TrafficRuleReconciler{Client: mgr.GetClient(), Counts: counts}).SetupWithManager(mgr))
 	must((&DomainReconciler{
 		Client:        mgr.GetClient(),
