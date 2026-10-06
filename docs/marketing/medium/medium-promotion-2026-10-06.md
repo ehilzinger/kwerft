@@ -66,10 +66,11 @@ The Markdown files stay the source; the drafts were pasted from them as HTML.
   those three wait for the stable v0.6.0. Two of them also wait for a real
   run of what they describe, because each says honestly that it has only
   passed against fakes so far:
-  - **Upgrades:** one successful console upgrade on the production clusters
-    from rc.3 on (the AppArmor fix the post describes is in v0.6.0-rc.3, and
-    servers on rc.2 or earlier need one `install.sh` run first). Then update
-    the post's "only against fakes" paragraph with what happened.
+  - **Upgrades:** one successful console upgrade on a real server from rc.3
+    on (the rc.3 → rc.4 run on kwerft-dev-test on 6 October, or the rc.4
+    release's e2e; servers on rc.2 or earlier need one `install.sh` run
+    first). Then update the post's "only against fakes" paragraph with what
+    happened.
   - **Backups:** one backup to a real Hetzner bucket and a full restore onto
     a new server, which is Phase 6's exit criterion anyway. The post's "Not
     yet proven" section changes with it. Whether Hetzner accepts SSE-C on
@@ -83,10 +84,10 @@ The Markdown files stay the source; the drafts were pasted from them as HTML.
   which is what its guidelines ask for. Unlike TrailPhysics, none of them is
   a Show HN: Kwerft's own Show HN belongs to the public beta (see §4), and
   these posts are what it can point back to.
-- **The front door is the repository, and it isn't ready yet.** The README
-  still says "Status: Phase 0 (foundations)", the repository has no
-  description, no topics and no open issues. A visitor from Hacker News gives
-  it ten seconds. §1 comes before any post.
+- **The front door is the repository, and it isn't ready yet.** The README's
+  status is current since 6 October, but the repository has no description,
+  no topics and no open issues. A visitor from Hacker News gives it ten
+  seconds. §1 comes before any post.
 - **Disclose the AI assistance.** Each draft carries one disclosure line in
   its first paragraphs, as Medium requires for AI-assisted text. Rewriting a
   post in your own words is what makes it eligible for Boost and General
@@ -98,6 +99,8 @@ The Markdown files stay the source; the drafts were pasted from them as HTML.
   (§6).
 
 ## 1. Before the first post: the repository (by Monday 12 October)
+
+Done 6 October: the README's status line (item 1).
 
 In rough order of how much each matters:
 
@@ -129,20 +132,32 @@ In rough order of how much each matters:
 
 ## 2. The schedule
 
-| Date | Post | Where, besides Medium |
-| --- | --- | --- |
-| Fri 9 Oct | Submit the drain and migration drafts to Level Up Coding (§5) | |
-| **Thu 22 Oct** | Zero dropped requests during a Kubernetes rollout: the case for a preStop sleep | Hacker News (ordinary submission), r/kubernetes, r/golang (for the shutdown section), KubeWeekly and DevOps Weekly submissions |
-| **Thu 29 Oct** | Moving a real production stack from Docker Compose onto my own Kubernetes platform | r/selfhosted, r/hetzner, Hacker News |
-| v0.6.0 + 1 week | Let Kubernetes RBAC be your app's authorization layer: impersonation in Go | r/kubernetes, r/golang, Golang Weekly, KubeWeekly |
-| + 2 weeks | Self-upgrading software: the watcher has to be the old version | Hacker News, r/devops, r/selfhosted |
-| + 3 weeks | Encrypting Velero backups on object storage that only offers SSE-C | r/kubernetes, r/hetzner, Velero's community (§3) |
+Revised 6 October: the first version put the drain post on 22 October, the
+iPhone release day.
+
+| When | What | Where, besides Medium | Gate |
+| --- | --- | --- | --- |
+| **Wed 7 Oct** | In the drain and migration drafts: cover as preview image, code-block languages checked; submit both to Level Up Coding from the editor (§5) | | — |
+| by Mon 12 Oct | The repository's front door (§1) | | — |
+| **Thu 15 Oct** | Zero dropped requests during a Kubernetes rollout: the case for a preStop sleep | Hacker News (ordinary submission), r/kubernetes, r/golang (for the shutdown section), KubeWeekly and DevOps Weekly submissions | Level Up Coding's date if later, never 22 Oct |
+| Thu 22 Oct | — | | iPhone release: keep free |
+| Tue 27 Oct | Hatchure: the offline outbox post | | already pending review |
+| **Thu 29 Oct** | Moving a real production stack from Docker Compose onto my own Kubernetes platform | r/selfhosted, r/hetzner, Hacker News | not during an outage of the dedicated server (its NVMe swap) |
+| Tue 3 Nov | Hatchure: the Supabase post | | |
+| v0.6.0 + 1 week | Let Kubernetes RBAC be your app's authorization layer: impersonation in Go | r/kubernetes, r/golang, Golang Weekly, KubeWeekly | v0.6.0 stable |
+| + 2 weeks | Self-upgrading software: the watcher has to be the old version | Hacker News, r/devops, r/selfhosted | v0.6.0 stable, and one console upgrade passed on a real server (the rc.3 → rc.4 run on kwerft-dev-test, 6 Oct, or the rc.4 e2e); then rewrite the post's "only against fakes" paragraph |
+| + 3 weeks | Encrypting Velero backups on object storage that only offers SSE-C | r/kubernetes, r/hetzner, Velero's community (§3) | v0.6.0 stable, a real backup to a Hetzner bucket and a full restore onto a new server (Phase 6's exit criterion); the upstream plugin issue opened first |
+| Public beta day | Kwerft's own Show HN (§4) | | Phase 6 exit criterion |
 
 The drain post goes first because it has the widest audience and needs
 nothing from Kwerft to be useful. The migration post follows because it is
-the "why trust this" story: a real stack, moved, with the numbers. If Level
-Up Coding schedules either later than the date above, take its date: nothing
-else depends on these.
+the "why trust this" story: a real stack, moved, with the numbers. Level Up
+Coding usually decides within about a week, so a submission on 7 October
+fits 15 October; if it schedules either post later, take its date, except
+22 October. Nothing else depends on these two.
+
+The last three have no date until v0.6.0 is out. If v0.6.0 ships in early
+November, the backups post lands in late November.
 
 Each post closes by pointing to the ones already out (add the links when
 publishing; the drafts don't have them yet).
