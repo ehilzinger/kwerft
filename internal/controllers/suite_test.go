@@ -130,6 +130,10 @@ func TestMain(m *testing.M) {
 		Ignore: func(b *kwerftv1.Build) bool { return b.Namespace == "gitstatus" },
 	}).SetupWithManager(mgr))
 
+	// Registry credentials (registry_auth_test.go): no zot; the probe says
+	// what tests want it to.
+	must((&RegistryAuthReconciler{Client: mgr.GetClient(), APIReader: mgr.GetAPIReader(), Probe: testRegistryProbe}).SetupWithManager(mgr))
+
 	must((&AlertRuleReconciler{Client: mgr.GetClient(), ConsoleDomain: testConsoleDomain}).SetupWithManager(mgr))
 	must((&NotificationChannelReconciler{Client: mgr.GetClient(), APIReader: mgr.GetAPIReader(), Now: channelClock.Now}).SetupWithManager(mgr))
 	must((&FirewallReconciler{Client: mgr.GetClient(), APIReader: mgr.GetAPIReader(), PrivateNetwork: testPrivateNetwork}).SetupWithManager(mgr))

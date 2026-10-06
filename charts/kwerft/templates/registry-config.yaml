@@ -1,7 +1,10 @@
 {{- if .Values.registry.enabled }}
 {{- $r := .Values.registry }}
-# zot's configuration (https://zotregistry.dev). The registry Deployment
-# restarts when it changes.
+# zot's configuration (https://zotregistry.dev), without users and access
+# control: Kwerft's controller adds those ("http.auth", "http.accessControl")
+# and writes the result to the Secret kwerft-registry-auth that zot runs
+# with (internal/controllers/registry_auth.go). The registry Deployment
+# restarts when this changes.
 apiVersion: v1
 kind: ConfigMap
 metadata:

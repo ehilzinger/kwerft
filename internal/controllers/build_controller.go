@@ -439,6 +439,19 @@ func (r *BuildReconciler) prepare(ctx context.Context, b *kwerftv1.Build) (*buil
 			"Waiting for the registry (Service " + builds.RegistryNamespace + "/" + builds.RegistryService + ")"}, nil
 	}
 	run.registryIP = svc.Spec.ClusterIP
+	// The project's registry credential (RegistryAuthReconciler), once the
+	// registry accepts it: without it the pod could not start, and the
+	// registry refuses anonymous pushes.
+	run.registrySecret = builds.RegistrySecret(b.Namespace)
+	var cred corev1.Secret
+	err = r.APIReader.Get(ctx, client.ObjectKey{Namespace: builds.Namespace, Name: run.registrySecret}, &cred)
+	switch {
+	case apierrors.IsNotFound(err) || err == nil && !RegistryCredentialActive(&cred):
+		return nil, nil, &readiness{metav1.ConditionFalse, "RegistryCredentialsMissing",
+			"Waiting for the project's registry credentials"}, nil
+	case err != nil:
+		return nil, nil, nil, err
+	}
 	if run.buildNodes, err = buildNodesExist(ctx, cmpReader(r.APIReader, r.Client)); err != nil {
 		return nil, nil, nil, err
 	}
@@ -888,6 +901,22 @@ func buildForJob(_ context.Context, obj client.Object) []reconcile.Request {
 	return []reconcile.Request{{NamespacedName: types.NamespacedName{Namespace: l[LabelProject], Name: l[builds.LabelBuild]}}}
 }
 
+// projectBuildsWaiting enqueues the waiting builds of the project whose
+// registry credential changed.
+func (r *BuildReconciler) projectBuildsWaiting(ctx context.Context, obj client.Object) []reconcile.Request {
+	var list kwerftv1.BuildList
+	if err := r.List(ctx, &list, client.InNamespace(obj.GetLabels()[LabelRegistryCredential])); err != nil {
+		return nil
+	}
+	var reqs []reconcile.Request
+	for i := range list.Items {
+		if waiting(&list.Items[i]) {
+			reqs = append(reqs, reconcile.Request{NamespacedName: client.ObjectKeyFromObject(&list.Items[i])})
+		}
+	}
+	return reqs
+}
+
 // queuedBuilds enqueues every waiting build: a slot may have opened.
 func (r *BuildReconciler) queuedBuilds(ctx context.Context, _ client.Object) []reconcile.Request {
 	queue, err := r.queue(ctx)
@@ -926,6 +955,11 @@ func (r *BuildReconciler) SetupWithManager(mgr ctrl.Manager) error {
 			predicate.GenerationChangedPredicate{}, predicate.AnnotationChangedPredicate{}))).
 		Watches(&batchv1.Job{}, handler.EnqueueRequestsFromMapFunc(buildForJob), builder.WithPredicates(inBuilds)).
 		Watches(&kwerftv1.Build{}, handler.EnqueueRequestsFromMapFunc(r.queuedBuilds), builder.WithPredicates(slotFreed)).
+		// A project's registry credential appears: its waiting builds start.
+		Watches(&corev1.Secret{}, handler.EnqueueRequestsFromMapFunc(r.projectBuildsWaiting), builder.OnlyMetadata,
+			builder.WithPredicates(predicate.NewPredicateFuncs(func(o client.Object) bool {
+				return o.GetNamespace() == builds.Namespace && o.GetLabels()[LabelRegistryCredential] != ""
+			}))).
 		Named("build").
 		Complete(r)
 }

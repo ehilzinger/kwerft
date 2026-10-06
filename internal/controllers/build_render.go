@@ -47,6 +47,10 @@ const (
 	buildUID = 1000
 
 	registryHostAlias = "registry.kwerft.internal"
+	// registryConfigDir holds the project's registry credential as a Docker
+	// config.json in the build container (DOCKER_CONFIG), which buildctl
+	// hands to BuildKit for the push.
+	registryConfigDir = "/kwerft/registry"
 
 	// Build container resources, within the kwerft-builds LimitRange (at
 	// most 6Gi per container) and quota.
@@ -72,7 +76,10 @@ type buildRun struct {
 	railpackImage string
 	appArmor      string // Localhost profile for the build container; "" = unconfined
 	registryIP    string
-	timeout       time.Duration
+	// registrySecret is the project's registry credential in
+	// builds.Namespace (builds.RegistrySecret): the build pushes with it.
+	registrySecret string
+	timeout        time.Duration
 	// buildNodes: run on a builds pool's nodes (tainted kwerft.dev/builds).
 	buildNodes bool
 
@@ -177,6 +184,8 @@ func (r *buildRun) builder() string {
 
 func (r *buildRun) job() *batchv1ac.JobApplyConfiguration {
 	labels := buildLabels(r.build)
+	jobLabels := buildLabels(r.build)
+	jobLabels[builds.LabelRegistryAuth] = "true"
 	spec := corev1ac.PodSpec().
 		WithRestartPolicy(corev1.RestartPolicyNever).
 		WithPriorityClassName(BatchPriorityClass).
@@ -197,6 +206,12 @@ func (r *buildRun) job() *batchv1ac.JobApplyConfiguration {
 			corev1ac.Volume().WithName("scratch").WithEmptyDir(corev1ac.EmptyDirVolumeSource().
 				WithMedium(corev1.StorageMediumMemory).WithSizeLimit(resource.MustParse("16Mi"))),
 			emptyDir("buildkit", buildkitStateSize),
+			// The project's registry credential, for the build container
+			// alone: it may push to the project's repositories and no others.
+			corev1ac.Volume().WithName("registry").WithSecret(corev1ac.SecretVolumeSource().
+				WithSecretName(r.registrySecret).
+				WithItems(corev1ac.KeyToPath().WithKey(corev1.DockerConfigJsonKey).WithPath("config.json")).
+				WithDefaultMode(0o440)),
 		)
 	if r.buildNodes {
 		spec.WithTolerations(corev1ac.Toleration().WithKey(LabelBuildNode).WithOperator(corev1.TolerationOpEqual).
@@ -230,7 +245,7 @@ func (r *buildRun) job() *batchv1ac.JobApplyConfiguration {
 	}
 
 	return batchv1ac.Job(r.jobName, builds.Namespace).
-		WithLabels(labels).
+		WithLabels(jobLabels).
 		WithAnnotations(map[string]string{"kwerft.dev/commit": r.build.Spec.Commit}).
 		WithSpec(batchv1ac.JobSpec().
 			WithBackoffLimit(0).
@@ -272,8 +287,10 @@ func lockedDown() *corev1ac.SecurityContextApplyConfiguration {
 }
 
 // cloneContainer fetches exactly the commit into /workspace/src. It is the
-// only container that sees credentials; the build container, where the
-// repository's own code runs, never mounts them.
+// only container that sees Git credentials; the build container, where the
+// repository's own code runs, never mounts them. (The build container has
+// the project's registry credential, which pushes to the project's own
+// repositories and nowhere else: what any build of the project may do.)
 func (r *buildRun) cloneContainer() *corev1ac.ContainerApplyConfiguration {
 	c := corev1ac.Container().
 		WithName(builds.ContainerClone).
@@ -340,6 +357,7 @@ func (r *buildRun) buildContainer() *corev1ac.ContainerApplyConfiguration {
 			env("KWERFT_REGISTRY", builds.RegistryHost),
 			env("KWERFT_RAILPACK_FRONTEND", r.railpackImage),
 			env("KWERFT_CACHE_KEY", r.project+"/"+r.build.Spec.App),
+			env("DOCKER_CONFIG", registryConfigDir),
 			// Rootless buildkitd can take a while to start on a busy node.
 			env("BUILDCTL_CONNECT_RETRIES_MAX", "60"),
 		).
@@ -351,6 +369,7 @@ func (r *buildRun) buildContainer() *corev1ac.ContainerApplyConfiguration {
 		WithVolumeMounts(
 			corev1ac.VolumeMount().WithName("workspace").WithMountPath("/workspace").WithReadOnly(true),
 			corev1ac.VolumeMount().WithName("buildkit").WithMountPath("/home/user/.local/share/buildkit"),
+			corev1ac.VolumeMount().WithName("registry").WithMountPath(registryConfigDir).WithReadOnly(true),
 		)
 }
 
@@ -373,7 +392,7 @@ func (r *buildRun) tokenSecret(token string, jobUID string) *corev1ac.SecretAppl
 // never fail: each writes its output to /workspace/.kwerft/<step>.log, its
 // exit code to <step>.status and a known failure to <step>.error. The build
 // container prints those logs first and fails for them with "Clone failed:"
-// or "Railpack:". Credentials stay in the clone container; the build
+// or "Railpack:". Git credentials stay in the clone container; the build
 // container, where the repository's code runs, never sees them.
 
 // cloneScript runs in the BuildKit image (git, ssh, BusyBox). Every input
@@ -433,7 +452,8 @@ cat "$k/prepare.log"
 // buildScript prints the earlier steps' logs, then runs buildctl against a
 // buildkitd it starts itself (buildctl-daemonless.sh). The registry is plain
 // HTTP; the pod resolves its name through a host alias to the registry
-// Service. On success the image digest goes to the termination log as
+// Service. buildctl pushes with the project's credential from
+// $DOCKER_CONFIG/config.json. On success the image digest goes to the termination log as
 // "digest=sha256:..."; a known failure as "error=<message>"; otherwise the
 // kubelet falls back to the log tail.
 const buildScript = `set -eu

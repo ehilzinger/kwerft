@@ -73,6 +73,8 @@ spec:
             - --build-apparmor-profile={{ .appArmorProfile }}
             {{- end }}
             {{- end }}
+            # The registry's users and access control (registry-config.yaml).
+            - --registry-auth={{ .Values.registry.enabled }}
             {{- with .Values.upgrades.installBaseURL }}
             - --install-base-url={{ . }}
             {{- end }}

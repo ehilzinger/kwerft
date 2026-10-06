@@ -59,7 +59,8 @@ mention them in the commit message.
   it with `hostAliases` to that address (BuildKit pushes to the name in the
   image reference; its registry config needs `http = true` for it). zot keeps
   `buildcache`, the newest 20 tags and tags pulled within 90 days per
-  repository.
+  repository. Pulls need no credential; pushes need the project's own
+  (since 2026-10-06, see Registry credentials below).
 - Build namespace (chart): Pod Security `privileged`, a LimitRange (default
   request 500m / 1Gi, limit 3Gi, max 6Gi per container) and a ResourceQuota;
   a NetworkPolicy denies all ingress and allows egress to DNS, zot (5000)
@@ -149,3 +150,125 @@ Each worker: `make check` green (Go 1.26 for CI too), envtest tests for
 reconcilers, fakes for provider APIs (like `internal/hetzner/hetznertest`).
 The coordinator merges, deploys to the test server and runs the exit
 criterion with a real repository.
+
+## Registry credentials (as built, 2026-10-06)
+
+Until v0.6 zot had no authentication: a build of project A could push tags
+into project B's repository (running Apps were safe only through digest
+pinning). Now every push needs a credential, and a project's credential
+pushes to that project's repositories and nowhere else.
+
+**Who is who in zot** (`internal/controllers/registry_auth.go`,
+`RegistryAuthReconciler`, flag `--registry-auth`, set by the chart when
+`registry.enabled`):
+
+| User | Secret | May | Used by |
+|---|---|---|---|
+| `project-<project>` | `registry-<project>` in `kwerft-builds` (type `kubernetes.io/dockerconfigjson`, owned by the Project) | read, create, update in `<project>/**` | that project's build pods (BuildKit push and cache) |
+| `kwerft` | `kwerft-registry-admin` in `kwerft-system` | read, create, update, delete everywhere (zot's `adminPolicy`) | the App reconciler's `RegistryKeeper` (keep tags and their removal) |
+| anonymous | — | read everywhere | the nodes' containerd through the k3s mirror, `RegistryKeeper` reads |
+
+Passwords are 256 random bits; the Secrets also hold the user's htpasswd line
+(bcrypt, the minimum cost, since zot checks it on every authenticated
+request and no cost factor makes 256 random bits harder to guess), so zot's
+files only change when a credential does. A Secret that is missing or
+inconsistent is replaced with a new credential; a deleted project's Secret is
+garbage-collected and removed by the reconciler, and its user leaves zot.
+
+**Who can read the credentials.** No console role reaches Secrets in
+`kwerft-builds` or `kwerft-system` (`roles.yaml`; the isolation tests hold
+it), so no user reads any registry credential, not even their own project's
+(nobody needs to: pushes happen in builds). A build pod mounts only its own
+project's Secret (`/kwerft/registry/config.json`, `DOCKER_CONFIG`), in the
+build container only; the clone container never sees it. The repository's
+own code runs in that container under BuildKit and may be able to read it:
+that is acceptable, because the credential only lets it do what any build
+of the project does anyway — push to the project's own repositories.
+
+**Access control** (rendered into zot's `http.accessControl`; zot picks the
+longest repository pattern that matches, then the admin policy):
+`"**"` — anonymous read, nothing else; `"<project>/**"` — anonymous read, and
+read/create/update for `project-<project>`. Unit tests check the rendered
+config with zot's decision rule (`TestRegistryConfigIsolatesProjects`:
+project A's user is refused B's repositories, a project name that starts
+like another's, and anything outside a project). Checked against
+zot-minimal v2.1.21 itself (podman, 2026-10-06): a push with project A's
+credential to B's repository is refused (403, also by BuildKit
+v0.33.1-rootless with the build pod's `DOCKER_CONFIG`), anonymous pushes
+and deletes are refused (401), A's own pushes, cache export/import and
+re-tags work, anonymous pulls by tag and digest work, and only `kwerft`
+writes and deletes keep tags.
+
+**How zot gets it.** The chart's ConfigMap `kwerft-registry` stays the base
+(storage, retention, gc, listen address). The reconciler adds `http.auth`
+(htpasswd at `/etc/zot/htpasswd`) and `http.accessControl` and writes
+`config.json` and `htpasswd` to the Secret `kwerft-registry-auth`, which the
+chart mounts into zot instead of the ConfigMap. zot 2.1 reloads both files
+when they change (its config hot-reloader and htpasswd watcher poll the
+files every second, which catches the kubelet's symlink swap), so a new
+project needs no restart; checked with a kubelet-style volume. The kubelet
+updates a Secret volume up to about a minute after the Secret changed, so
+a new credential is not live at once: the reconciler asks zot (an
+authenticated read in the project's repositories: 404 once zot knows the
+user, 401/403 before) and then marks the project's Secret with
+`kwerft.dev/registry-active` (a fingerprint of the credential). The Build
+reconciler starts a build only when its project's credential is active
+("Waiting for the project's registry credentials" until then).
+
+**Reads stay anonymous (decided 2026-10-06).** The nodes' containerd pulls
+through the k3s mirror; giving it a credential means `configs` with auth in
+`/etc/rancher/k3s/registries.yaml` on every node, joined nodes and agent
+clusters included (the join API would have to hand it out), and a k3s
+restart on each when it changes. Not worth it for this change, so
+`anonymousPolicy: ["read"]` stays. Consequence: anything that reaches zot
+can pull any project's images — the nodes, the console, and **build pods**
+(a project's build can `FROM` or `curl` another project's image). Images
+built from private repositories contain their source, so this is a real,
+remaining cross-project read. Apps' pods cannot reach zot (CiliumNetworkPolicy).
+The next step, when it matters: a node-level read credential in
+`registries.yaml` (installer + join API + agent hand-over), then
+`anonymousPolicy: []` and per-project read for the builds. Authenticated
+users are already confined: project A's user is refused B's repositories
+even for reads (403), so only anonymous reads are open.
+
+**Upgrade from an open registry.** Nothing changes on the nodes:
+`registries.yaml` carries no credential, so the installer leaves it and k3s
+alone (bats test), and running Apps keep pulling their digest-pinned images
+anonymously. The chart switches zot from the ConfigMap to the Secret, so zot
+restarts once (as on any config change; `Recreate`) and its new pod waits
+until the new controller has written `kwerft-registry-auth` (seconds after
+it wins leader election), for which `helm --wait` waits. Existing images and
+tags stay where they are. Builds that were running during the upgrade were
+started without a credential: while such a Job (no
+`kwerft.dev/registry-auth` label) runs, its own repository
+(`<project>/**/<app>`, a pattern that is always longer than
+`<project>/**`) also takes anonymous pushes, and the exception ends with
+the Job; a push that fell into zot's restart fails as before. A rollback to
+the previous chart mounts the ConfigMap again (an open registry, as
+before); the Secrets left behind are harmless.
+
+**Tests.** Unit: rendering and zot's decision rule, credentials, the probe,
+the legacy repository of a Job, `RegistryKeeper` with credentials, the
+build Job (volume, mount, `DOCKER_CONFIG`, label). envtest: credentials per
+project (types, owners, labels, distinct passwords, htpasswd, admin),
+stable across reconciles, a broken one replaced, removed with the project;
+legacy builds' anonymous push and its end; a build waits until the registry
+accepts the credential. Chart: `make helm-lint` checks zot mounts the Secret
+and `--registry-auth`. e2e: "Registry refuses other projects' pushes" asks
+zot from the server, with the e2e project's credential, for its own
+repository (200), a push into another project (403), an anonymous push
+(401) and an anonymous pull (200).
+
+**Manual check on a server** (as root on the console's node):
+
+```sh
+pw=$(k3s kubectl -n kwerft-builds get secret registry-<A> -o jsonpath='{.data.password}' | base64 -d)
+curl -s -o /dev/null -w '%{http_code}\n' -u "project-<A>:$pw" -X POST http://10.43.0.50:5000/v2/<B>/x/blobs/uploads/   # 403
+curl -s -o /dev/null -w '%{http_code}\n' -X POST http://10.43.0.50:5000/v2/<A>/x/blobs/uploads/                        # 401
+curl -s -o /dev/null -w '%{http_code}\n' http://10.43.0.50:5000/v2/<A>/<app>/tags/list                               # 200
+```
+
+**Open.** Anonymous reads (above). Not yet tried on a real server: the
+upgrade of an install with existing images and a build running across it,
+and how long the kubelet takes to update zot's Secret volume there (builds
+of a new project wait for it).

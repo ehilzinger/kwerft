@@ -616,6 +616,33 @@ mirror_env() {
   grep -q '10.43.0.50' "$REGISTRIES_FILE"
 }
 
+@test "registries_yaml: the nodes pull without a credential, so upgrades keep the file and k3s running" {
+  # docs/phase2.md › Registry credentials: pushes need a project's
+  # credential, pulls none. Adding auth here would restart k3s on every node
+  # and need the credential on joined nodes first.
+  mirror_env
+  run registries_yaml
+  [ "$status" -eq 0 ]
+  [[ "$output" != *configs:* && "$output" != *auth:* && "$output" != *password* ]]
+  # The file the release before credentials wrote is this one's: the stage
+  # leaves it, and k3s, alone.
+  mkdir -p "$(dirname "$REGISTRIES_FILE")"
+  cat >"$REGISTRIES_FILE" <<'EOF'
+# Managed by Kwerft installer (registry mirror).
+# Images built from Git (registry.kwerft.internal:5000) come from the in-cluster registry
+# through its fixed ClusterIP. k3s reads this file only when it starts.
+mirrors:
+  "registry.kwerft.internal:5000":
+    endpoint:
+      - "http://10.43.0.50:5000"
+EOF
+  ACTIVE=k3s
+  run stage_registry_mirror
+  [ "$status" -eq 0 ]
+  [[ "$output" != *restarted* ]]
+  ! grep -q restart "$SYSTEMCTL_LOG"
+}
+
 @test "write_registry_mirror: never touches the operator's own registries.yaml" {
   mirror_env
   mkdir -p "$(dirname "$REGISTRIES_FILE")"

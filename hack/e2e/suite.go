@@ -70,7 +70,10 @@ func (r *runner) suite(ctx context.Context) error {
 			{"Task runs and restarts web", time.Time{}, 0, func() (string, error) { return r.checkTask(ctx, web, marker) }},
 			{"Log search", time.Time{}, 0, func() (string, error) { return r.checkLogs(ctx, marker) }},
 		},
-		{{"Git build deploys", buildAt, 3 * time.Minute, func() (string, error) { return r.checkBuild(ctx, buildName, buildAt, gitHost) }}},
+		{
+			{"Git build deploys", buildAt, 3 * time.Minute, func() (string, error) { return r.checkBuild(ctx, buildName, buildAt, gitHost) }},
+			{"Registry refuses other projects' pushes", time.Time{}, 0, func() (string, error) { return r.checkRegistry(ctx) }},
+		},
 		{{"Metrics", time.Time{}, 0, func() (string, error) { return r.checkMetrics(ctx) }}},
 		{{"Crash loop alert", crashAt, 2 * time.Minute, func() (string, error) { return r.checkAlert(ctx, crashAt) }}},
 	}
@@ -207,6 +210,41 @@ func (r *runner) checkBuild(ctx context.Context, name string, since time.Time, h
 		return "build succeeded in " + fmtDuration(built), err
 	}
 	return fmt.Sprintf("%s built in %s; https://%s answered %s after Build now", r.cfg.GitRepo, fmtDuration(built), host, fmtDuration(r.now().Sub(since))), nil
+}
+
+// registryCheckScript asks the in-cluster registry (zot, from the server
+// itself, as the nodes reach it) what the project's build credential may do
+// (docs/phase2.md › Registry credentials): read and push in its own
+// repositories, nothing in another project's; anonymous reads only.
+const registryCheckScript = `pw=$(k3s kubectl -n kwerft-builds get secret registry-` + project + ` -o jsonpath='{.data.password}' 2>/dev/null | base64 -d)
+[ -n "$pw" ] || { echo no-credential; exit 0; }
+r=http://10.43.0.50:5000/v2
+code() { curl -s -o /dev/null -w '%{http_code}' --max-time 10 "$@"; }
+umask 077
+printf 'user = "project-` + project + `:%s"\n' "$pw" >/root/.kwerft-e2e-registry
+echo "own=$(code -K /root/.kwerft-e2e-registry $r/` + project + `/git/tags/list)" \
+  "other=$(code -K /root/.kwerft-e2e-registry -X POST $r/` + project + `-other/x/blobs/uploads/)" \
+  "anonymous=$(code -X POST $r/` + project + `/git/blobs/uploads/)" \
+  "pull=$(code $r/` + project + `/git/tags/list)"
+rm -f /root/.kwerft-e2e-registry`
+
+// checkRegistry runs after the build pushed: the project's credential reads
+// its own repository (200), is refused another project's push (403), an
+// anonymous push is refused (401) and an anonymous read works (200), as
+// the nodes pull.
+func (r *runner) checkRegistry(ctx context.Context) (string, error) {
+	out, code, err := r.sh(ctx, registryCheckScript)
+	if err != nil || code != 0 {
+		return "", fmt.Errorf("exit %d %v: %s", code, err, out)
+	}
+	if out == "no-credential" {
+		return "not checked: this version has no per-project registry credentials", nil
+	}
+	want := "own=200 other=403 anonymous=401 pull=200"
+	if out != want {
+		return "", fmt.Errorf("registry answered %q, want %q", out, want)
+	}
+	return "build credential: own repository 200, another project's push 403; anonymous push 401, anonymous pull 200", nil
 }
 
 func (r *runner) checkLogs(ctx context.Context, marker string) (string, error) {

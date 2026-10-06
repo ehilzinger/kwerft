@@ -28,6 +28,11 @@ type RegistryKeeper struct {
 	// URL of the registry API, e.g. DefaultRegistryURL.
 	URL  string
 	HTTP *http.Client
+	// Credentials returns Kwerft's own registry user and password
+	// (RegistryAdminCredentials); nil or an empty user: anonymous. zot
+	// lets only that user tag images in a project's repository and delete
+	// tags (RegistryAuthReconciler).
+	Credentials func(context.Context) (user, password string, err error)
 
 	mu     sync.Mutex
 	synced map[string]string // repository → keep set last written
@@ -90,7 +95,21 @@ func (k *RegistryKeeper) client() *http.Client {
 	return &http.Client{Timeout: 15 * time.Second}
 }
 
-func (k *RegistryKeeper) do(ctx context.Context, method, path string, header http.Header, body []byte) (*http.Response, []byte, error) {
+// registryAuth is a basic-auth user and password; empty: anonymous.
+type registryAuth struct{ user, password string }
+
+func (k *RegistryKeeper) auth(ctx context.Context) (registryAuth, error) {
+	if k.Credentials == nil {
+		return registryAuth{}, nil
+	}
+	user, password, err := k.Credentials(ctx)
+	if err != nil {
+		return registryAuth{}, fmt.Errorf("registry credentials: %w", err)
+	}
+	return registryAuth{user, password}, nil
+}
+
+func (k *RegistryKeeper) do(ctx context.Context, auth registryAuth, method, path string, header http.Header, body []byte) (*http.Response, []byte, error) {
 	var r io.Reader
 	if body != nil {
 		r = strings.NewReader(string(body))
@@ -100,6 +119,9 @@ func (k *RegistryKeeper) do(ctx context.Context, method, path string, header htt
 		return nil, nil, err
 	}
 	maps.Copy(req.Header, header)
+	if auth.user != "" {
+		req.SetBasicAuth(auth.user, auth.password)
+	}
 	resp, err := k.client().Do(req)
 	if err != nil {
 		return nil, nil, err
@@ -117,7 +139,11 @@ var manifestTypes = strings.Join([]string{
 }, ", ")
 
 func (k *RegistryKeeper) sync(ctx context.Context, repo string, want map[string]string) error {
-	resp, data, err := k.do(ctx, http.MethodGet, "/v2/"+repo+"/tags/list", nil, nil)
+	auth, err := k.auth(ctx)
+	if err != nil {
+		return err
+	}
+	resp, data, err := k.do(ctx, auth, http.MethodGet, "/v2/"+repo+"/tags/list", nil, nil)
 	if err != nil {
 		return fmt.Errorf("registry: %w", err)
 	}
@@ -138,7 +164,7 @@ func (k *RegistryKeeper) sync(ctx context.Context, repo string, want map[string]
 		if slices.Contains(list.Tags, tag) {
 			continue // the tag names its digest; it cannot point elsewhere
 		}
-		resp, manifest, err := k.do(ctx, http.MethodGet, "/v2/"+repo+"/manifests/"+digest, accept, nil)
+		resp, manifest, err := k.do(ctx, auth, http.MethodGet, "/v2/"+repo+"/manifests/"+digest, accept, nil)
 		if err != nil {
 			return fmt.Errorf("registry: %w", err)
 		}
@@ -149,7 +175,7 @@ func (k *RegistryKeeper) sync(ctx context.Context, repo string, want map[string]
 			return fmt.Errorf("registry: get %s@%s: %s", repo, digest, resp.Status)
 		}
 		put := http.Header{"Content-Type": {resp.Header.Get("Content-Type")}}
-		resp, _, err = k.do(ctx, http.MethodPut, "/v2/"+repo+"/manifests/"+tag, put, manifest)
+		resp, _, err = k.do(ctx, auth, http.MethodPut, "/v2/"+repo+"/manifests/"+tag, put, manifest)
 		if err != nil {
 			return fmt.Errorf("registry: %w", err)
 		}
@@ -161,7 +187,7 @@ func (k *RegistryKeeper) sync(ctx context.Context, repo string, want map[string]
 		if _, keep := want[tag]; keep || !strings.HasPrefix(tag, builds.KeepTagPrefix) {
 			continue
 		}
-		resp, _, err := k.do(ctx, http.MethodDelete, "/v2/"+repo+"/manifests/"+tag, nil, nil)
+		resp, _, err := k.do(ctx, auth, http.MethodDelete, "/v2/"+repo+"/manifests/"+tag, nil, nil)
 		if err != nil {
 			return fmt.Errorf("registry: %w", err)
 		}
