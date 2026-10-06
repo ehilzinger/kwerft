@@ -980,9 +980,18 @@ func (r *runner) firstSignIn(ctx context.Context, version string) error {
 		return err
 	}
 	return r.step("Owner from the setup token, sign in", func() (string, error) {
-		token, code, err := r.sh(ctx, "cat /etc/kwerft/setup-token")
-		if err != nil || code != 0 || token == "" {
-			return "", fmt.Errorf("read the setup token: exit %d %v", code, err)
+		// The file can be empty for a moment right after the install
+		// (v0.6.0-rc.6's run read it empty from v0.4.0): read it again.
+		var token string
+		if err := r.waitFor(ctx, time.Minute, func(ctx context.Context) (bool, error) {
+			out, code, err := r.sh(ctx, "cat /etc/kwerft/setup-token")
+			token = strings.TrimSpace(out)
+			if err != nil || code != 0 || token == "" {
+				return false, fmt.Errorf("read the setup token: exit %d, %d bytes, %v", code, len(token), err)
+			}
+			return true, nil
+		}); err != nil {
+			return "", err
 		}
 		r.mask(token)
 		r.owner = owner{Name: "e2e owner", Email: "owner@e2e.kwerft.dev", Password: randomString(24)}
