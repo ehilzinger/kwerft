@@ -53,9 +53,21 @@ func TestSystemdHostCommands(t *testing.T) {
 	if i := slices.Index(run, "--"); i < 0 || !slices.Equal(run[i+1:], []string{HostHelm, "list"}) {
 		t.Errorf("run's command = %v", run)
 	}
-	if !slices.Contains(start, "--unit=kwerft-upgrade-x") || !slices.Contains(start, "--property=RemainAfterExit=yes") ||
-		!slices.Contains(start, "--property=KillMode=process") || slices.Contains(start, "--wait") {
+	// The installer's unit is started by a systemd-run on the host, in a
+	// unit the runner waits for: one that neither waits nor pipes cannot
+	// reach systemd from the pod.
+	if start[0] != "/usr/bin/systemd-run" || !slices.Contains(start, "--wait") || !slices.Contains(start, "--pipe") ||
+		!strings.HasPrefix(start[1], "--unit=kwerft-upgrade-x-start-") {
 		t.Errorf("start = %v", start)
+	}
+	inner := start[slices.Index(start, "--")+1:]
+	if inner[0] != "/usr/bin/systemd-run" || !slices.Contains(inner, "--unit=kwerft-upgrade-x") ||
+		!slices.Contains(inner, "--property=RemainAfterExit=yes") || !slices.Contains(inner, "--property=KillMode=process") ||
+		slices.Contains(inner, "--wait") || slices.Contains(inner, "--pipe") {
+		t.Errorf("installer unit = %v", inner)
+	}
+	if i := slices.Index(inner, "--"); i < 0 || !slices.Equal(inner[i+1:], []string{"/var/lib/kwerft/upgrade/x/install.sh", "--yes"}) {
+		t.Errorf("installer command = %v", inner)
 	}
 	// systemctl runs on the host as a unit too, never in the chroot.
 	show := calls[2]

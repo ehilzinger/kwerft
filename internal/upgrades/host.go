@@ -15,8 +15,9 @@ import (
 )
 
 // SystemdHost is the runner's Host: the host's root file system is mounted
-// read-only at Root, and only systemd-run runs there (chrooted,
-// CAP_SYS_CHROOT), talking to the host's systemd over the system bus.
+// read-only at Root, and only systemd-run --wait --pipe runs there
+// (chrooted, CAP_SYS_CHROOT), talking to the host's systemd over the system
+// bus.
 // Everything else — k3s, helm, install.sh, even systemctl — runs as a
 // transient unit of the host's systemd, with the host's full environment,
 // so it outlives the runner pod and sees the host as the installer does.
@@ -79,11 +80,16 @@ func (h *SystemdHost) Run(ctx context.Context, cmd Command) (string, error) {
 // Start starts cmd as unit cmd.Unit. RemainAfterExit keeps its exit status
 // readable; KillMode=process lets the k3s and helm processes it started
 // outlive a stop.
+//
+// A systemd-run that neither waits nor pipes talks to systemd's private
+// socket, which fails from the pod like systemctl does (see SystemdHost), so
+// that systemd-run runs on the host, in a short unit Run waits for; it
+// returns once the installer's unit is started.
 func (h *SystemdHost) Start(ctx context.Context, cmd Command) error {
 	args := append([]string{systemdRun, "--unit=" + cmd.Unit, "--quiet",
 		"--property=RemainAfterExit=yes", "--property=KillMode=process", "--property=TimeoutStopSec=30",
 		"--description=Kwerft upgrade (install.sh)"}, unitArgs(cmd)...)
-	out, err := h.exec(ctx, args...)
+	out, err := h.Run(ctx, Command{Unit: cmd.Unit + "-start", Args: args})
 	if err != nil {
 		return fmt.Errorf("%w: %s", err, strings.TrimSpace(out))
 	}
