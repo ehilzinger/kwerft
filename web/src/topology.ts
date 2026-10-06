@@ -348,6 +348,11 @@ export type Layout = { items: Record<string, Item>; edges: Edge[] };
 export const CHIP = { w: 164, h: 40 };
 const X = { net: 64, fw: 172, gw: 282, dom: 414, cols: [600, 770, 940], box: [505, 1035] as const, vol: 1135, out: 1270 };
 const ROW = 60, BOX_HEAD = 64, BOX_GAP = 22, SERVER_W = 230, SERVER_GAP = 16, SLOT = 52;
+/** Placement: the gateway's and SSH's lines to the servers run in lanes this far above the server cards. */
+export const LANE = { route: 18, ssh: 36 };
+/** Where those lines turn up into their lane, left of the first server; SSH's turn lies further right, so the two cross once. */
+const TURN = { route: X.box[0] - 120, ssh: X.box[0] - 90 };
+
 /** Above this many apps the map opens with every project collapsed. */
 export const COLLAPSE_ABOVE = 40;
 
@@ -451,7 +456,8 @@ export function layout(m: Model, v: View): Layout {
     midY = domYs.length ? avg(domYs) : (24 + bottom) / 2;
     bottom = Math.max(bottom, ...Object.values(items).map((i) => i.y + i.h / 2));
   } else {
-    const top = 24;
+    // Room above the server cards for the gateway's and SSH's lanes (geom).
+    const top = 24 + LANE.ssh + 16;
     const servers = [...t.nodes];
     type Slot = { key: string; e: Entity; pod?: Item["pod"]; dashed?: boolean; vol?: boolean };
     const per = new Map<string, Slot[]>(servers.map((s) => [s.name, []]));
@@ -568,20 +574,31 @@ export function fit(l: Layout, minW = 1000): ViewBox {
     y0 = Math.min(y0, i.y - i.h / 2); y1 = Math.max(y1, i.y + i.h / 2 + (i.kind === "net" ? 30 : 0));
   }
   if (!isFinite(x0)) return { x: 0, y: 0, w: minW, h: 600 };
-  const pad = 22;
-  const vb = { x: x0 - pad, y: y0 - pad, w: x1 - x0 + 2 * pad, h: y1 - y0 + 2 * pad + 44 };
+  // Room at the sides too, so a little panning does not clip the internet or the outbound node.
+  const pad = 22, padX = 48;
+  const vb = { x: x0 - padX, y: y0 - pad, w: x1 - x0 + 2 * padX, h: y1 - y0 + 2 * pad + 44 };
   if (vb.w < minW) { vb.x -= (minW - vb.w) / 2; vb.w = minW; }
   return vb;
 }
 
-type Pt = [number, number];
-export type Geom = { d: string; at: (t: number) => Pt };
+export type Pt = [number, number];
+/** An edge's path, a point at t (0 at a, 1 at b), its two ends, and a fixed spot for its label if it has one. */
+export type Geom = { d: string; at: (t: number) => Pt; ends: [Pt, Pt]; label?: Pt };
 
 const r1 = (n: number) => Math.round(n * 10) / 10;
 const anchorY = (i: Item) => (i.kind === "server" || i.kind === "pbox" ? i.y - i.h / 2 + 30 : i.y);
 
-/** A curve from a to b: sideways between columns, round the right side within one. */
-export function geom(a: Item, b: Item): Geom {
+/**
+ * A curve from a to b: sideways between columns, round the right side within one.
+ * In Placement, the gateway's and SSH's lines to a server run in a lane above the
+ * cards and drop into the server from the top, so they cross no other server's header.
+ */
+export function geom(a: Item, b: Item, kind?: Edge["kind"]): Geom {
+  if (b.kind === "server" && a.kind !== "server" && (kind === "route" || kind === "ssh")) {
+    const top = b.y - b.h / 2, ly = top - LANE[kind], tx = TURN[kind];
+    const g = polyline([[r1(a.x + a.w / 2), r1(a.y)], [tx, r1(a.y)], [tx, r1(ly)], [r1(b.x), r1(ly)], [r1(b.x), r1(top)]]);
+    return { ...g, label: [b.x, ly] };
+  }
   const dx = b.x - a.x;
   let p1: Pt, p2: Pt, c1: Pt, c2: Pt;
   if (Math.abs(dx) < 30) {
@@ -598,7 +615,53 @@ export function geom(a: Item, b: Item): Geom {
     const u = 1 - t;
     return [0, 1].map((k) => u * u * u * p1[k] + 3 * u * u * t * c1[k] + 3 * u * t * t * c2[k] + t * t * t * p2[k]) as Pt;
   };
-  return { d: `M${p1}C${c1} ${c2} ${p2}`, at };
+  return { d: `M${p1}C${c1} ${c2} ${p2}`, at, ends: [p1, p2] };
+}
+
+/** Straight segments with rounded corners; at(t) goes by length along them. */
+function polyline(pts: Pt[], r = 8): Geom {
+  const len = (p: Pt, q: Pt) => Math.hypot(q[0] - p[0], q[1] - p[1]);
+  const toward = (p: Pt, q: Pt, d: number): Pt => { const l = len(p, q) || 1; return [r1(p[0] + ((q[0] - p[0]) * d) / l), r1(p[1] + ((q[1] - p[1]) * d) / l)]; };
+  let d = `M${pts[0]}`;
+  for (let i = 1; i < pts.length - 1; i++) {
+    const c = pts[i], k = Math.min(r, len(pts[i - 1], c) / 2, len(c, pts[i + 1]) / 2);
+    d += `L${toward(c, pts[i - 1], k)}Q${c} ${toward(c, pts[i + 1], k)}`;
+  }
+  d += `L${pts[pts.length - 1]}`;
+  const segs = pts.slice(1).map((q, i) => len(pts[i], q));
+  const total = segs.reduce((s, x) => s + x, 0);
+  const at = (t: number): Pt => {
+    let rest = Math.max(0, Math.min(1, t)) * total;
+    for (let i = 0; i < segs.length; i++) {
+      if (rest <= segs[i] || i === segs.length - 1) return toward(pts[i], pts[i + 1], Math.min(rest, segs[i]));
+      rest -= segs[i];
+    }
+    return pts[pts.length - 1];
+  };
+  return { d, at, ends: [pts[0], pts[pts.length - 1]] };
+}
+
+/**
+ * Where an edge's label (w wide, 18 high) goes: its fixed spot if it has one; else
+ * the first point along the edge, from `prefer` outwards, where it covers none of
+ * `chips`; else in the gap between two rows beside the edge's start (apps in
+ * neighbouring columns leave no room between them); else at `prefer`.
+ */
+export function labelAt(g: Geom, w: number, prefer: number, chips: Item[]): Pt {
+  if (g.label) return g.label;
+  const covers = ([x, y]: Pt) => chips.some((i) => Math.abs(i.x - x) < (i.w + w) / 2 + 1 && Math.abs(i.y - y) < (i.h + 18) / 2 + 1);
+  for (const d of [0, 0.08, -0.08, 0.16, -0.16, 0.24, -0.24, 0.32, -0.32]) {
+    const t = prefer + d;
+    if (t < 0.1 || t > 0.9) continue;
+    const p = g.at(t);
+    if (!covers(p)) return p;
+  }
+  const [p1, p2] = g.ends;
+  for (const dy of p2[1] < p1[1] ? [-ROW / 2, ROW / 2] : [ROW / 2, -ROW / 2]) {
+    const p: Pt = [(p1[0] + p2[0]) / 2, p1[1] + dy];
+    if (!covers(p)) return p;
+  }
+  return g.at(prefer);
 }
 
 /** Linear interpolation of two layouts, for the lens change. */

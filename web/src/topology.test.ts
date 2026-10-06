@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
-  attentionTarget, between, buildModel, fit, focusOf, layout, peerId, problemsOf, sideId, volumeName,
-  type Layers, type TopoApp, type Topology, type View,
+  attentionTarget, between, buildModel, fit, focusOf, geom, labelAt, LANE, layout, peerId, problemsOf, sideId, volumeName,
+  type Item, type Layers, type TopoApp, type Topology, type View,
 } from "./topology";
 
 const allLayers: Layers = { jobs: true, volumes: true, domains: true, rules: true, firewall: true };
@@ -204,6 +204,57 @@ describe("focus, tween and fit", () => {
     const vb = fit(l);
     expect(vb.w).toBeGreaterThanOrEqual(1000);
     for (const i of Object.values(l.items)) expect(i.x - i.w / 2).toBeGreaterThanOrEqual(vb.x);
+  });
+});
+
+describe("edges and labels", () => {
+  const inside = ([x, y]: [number, number], i: Item, x0: number, x1: number, y0: number, y1: number) =>
+    x > i.x + x0 && x < i.x + x1 && y > y0 && y < y1;
+
+  it("placement: the gateway and SSH lines reach each server from above, past no other server's header", () => {
+    const t = shop();
+    t.nodes = ["n1", "n2", "n3"].map((name) => ({ ...t.nodes[0], name }));
+    const l = layout(buildModel(t), traffic({ lens: "placement" }));
+    const servers = Object.values(l.items).filter((i) => i.kind === "server");
+    const lines = l.edges.filter((e) => e.kind === "route" || e.kind === "ssh").filter((e) => e.b.startsWith("srv:"));
+    expect(lines.length).toBe(2 * t.nodes.length);
+    for (const e of lines) {
+      const a = l.items[e.a], b = l.items[e.b], g = geom(a, b, e.kind);
+      const top = b.y - b.h / 2;
+      expect(g.ends[1][0]).toBeCloseTo(b.x, 0);
+      expect(g.ends[1][1]).toBeCloseTo(top, 0);
+      expect(g.label![1]).toBeCloseTo(top - LANE[e.kind as "route" | "ssh"], 0);
+      for (let k = 0; k <= 100; k++) {
+        const p = g.at(k / 100);
+        for (const s of servers) {
+          if (s.key === b.key) continue;
+          const st = s.y - s.h / 2;
+          expect(inside(p, s, -s.w / 2, s.w / 2, st - 1, st + 46), `${e.id} crosses ${s.key}`).toBe(false);
+        }
+      }
+    }
+  });
+
+  it("labels keep off the chips, also between apps in neighbouring columns", () => {
+    const t = shop();
+    t.drops = [{ from: { kind: "pod", namespace: "shop", app: "web" }, to: { kind: "pod", namespace: "shop", app: "api" }, port: 8080, protocol: "TCP", egress: false, count: 14, first: "", last: "" }];
+    const l = layout(buildModel(t), traffic());
+    const chips = Object.values(l.items).filter((i) => !["pbox", "server", "fwband"].includes(i.kind));
+    const drop = l.edges.find((e) => e.kind === "drop")!;
+    const a = l.items[drop.a], b = l.items[drop.b];
+    expect(Math.abs(b.x - a.x)).toBeLessThan(200); // neighbouring columns: no room between the chips
+    const w = (drop.label ?? "14 dropped").length * 6.1 + 12;
+    const g = geom(a, b, drop.kind);
+    const covers = ([x, y]: [number, number]) => chips.some((i) => Math.abs(i.x - x) < (i.w + w) / 2 && Math.abs(i.y - y) < (i.h + 18) / 2);
+    expect(covers(g.at(0.28))).toBe(true); // where the label used to go
+    expect(covers(labelAt(g, w, 0.28, chips))).toBe(false);
+  });
+
+  it("fit leaves room beside the outermost items", () => {
+    const l = layout(buildModel(shop()), traffic());
+    const vb = fit(l);
+    const xs = Object.values(l.items).map((i) => i.x - i.w / 2);
+    expect(Math.min(...xs) - vb.x).toBeGreaterThanOrEqual(40);
   });
 });
 

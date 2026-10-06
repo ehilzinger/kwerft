@@ -7,7 +7,7 @@ import { describeSources } from "../firewall";
 import { runEnd, when } from "../jobs";
 import { RouterLink } from "../pages/MonitoringAlerts";
 import {
-  appId, between, buildModel, COLLAPSE_ABOVE, fit, focusOf, fwLabel, geom, gib, layout, openToAll, problemsOf, searchOf, volumeFill,
+  appId, between, buildModel, COLLAPSE_ABOVE, fit, focusOf, fwLabel, geom, gib, labelAt, layout, openToAll, problemsOf, searchOf, volumeFill,
   type Edge, type Entity, type Focus, type Item, type Layers, type Lens, type Model, type Tone, type Topology, type TopoNode, type ViewBox,
 } from "../topology";
 import { count, portsLabel, sideLabel } from "../traffic";
@@ -129,19 +129,30 @@ export function InfraMap({ topology, error, loading, clusters, cluster, onCluste
     cardRef.current?.scrollIntoView({ behavior: reducedMotion() ? "auto" : "smooth", block: "center" });
   }, [request?.seq]);
 
-  // Keep the selected item out from under the inspector.
+  // Keep the selection out from under the inspector: an item, or both ends of a
+  // selected connection (a rule, a drop), with its whole width left of the panel.
   useEffect(() => {
     if (!selected || !shown || !vb || !svgRef.current || !canvasRef.current) return;
-    const it = Object.values(shown.items).find((i) => i.sel === selected);
+    let its = Object.values(shown.items).filter((i) => i.sel === selected);
+    if (!its.length) {
+      const e = shown.edges.find((x) => x.sel === selected);
+      if (e) its = [shown.items[e.a], shown.items[e.b]].filter((i): i is Item => !!i);
+    }
     const m = svgRef.current.getScreenCTM();
-    if (!it || !m) return;
+    if (!its.length || !m) return;
     const box = canvasRef.current.getBoundingClientRect();
-    const sx = it.x * m.a + m.e - box.left, sy = it.y * m.d + m.f - box.top;
-    const limit = box.width - 340;
-    if (sx > limit || sx < 20 || sy < 20 || sy > box.height - 20) {
+    const panel = canvasRef.current.querySelector(".imap-insp")?.getBoundingClientRect();
+    const right = (panel ? panel.left - box.left : box.width - 340) - 16;
+    const sx = (x: number) => x * m.a + m.e - box.left, sy = (y: number) => y * m.d + m.f - box.top;
+    const x0 = Math.min(...its.map((i) => sx(i.x - i.w / 2))), x1 = Math.max(...its.map((i) => sx(i.x + i.w / 2)));
+    const y0 = Math.min(...its.map((i) => sy(i.y - i.h / 2))), y1 = Math.max(...its.map((i) => sy(i.y + i.h / 2)));
+    // Shift by what sticks out; when it is too big to fit, its left or top edge wins.
+    let dx = Math.max(0, x1 - right), dy = Math.max(0, y1 - (box.height - 20));
+    if (x0 - dx < 20) dx = x0 - 20;
+    if (y0 - dy < 20) dy = y0 - 20;
+    if (dx || dy) {
       const u = 1 / m.a;
-      const tx = Math.min(limit, Math.max(60, sx)), ty = Math.min(box.height - 60, Math.max(60, sy));
-      setVB({ ...vb, x: vb.x + (sx - tx) * u, y: vb.y + (sy - ty) * u });
+      setVB({ ...vb, x: vb.x + dx * u, y: vb.y + dy * u });
       setUserZoom(true);
     }
   }, [selected]);
@@ -343,7 +354,9 @@ function Drawing({ layout: l, focus, selected, animating }: { layout: Layout; fo
   const edges = l.edges
     .map((e) => ({ e, a: l.items[e.a], b: l.items[e.b] }))
     .filter((o) => o.a && o.b && o.a.op > 0.01 && o.b.op > 0.01 && (o.e.op ?? 1) > 0.01)
-    .map((o) => ({ ...o, g: geom(o.a, o.b), op: Math.min(o.a.op, o.b.op, o.e.op ?? 1) }));
+    .map((o) => ({ ...o, g: geom(o.a, o.b, o.e.kind), op: Math.min(o.a.op, o.b.op, o.e.op ?? 1) }));
+  // Labels keep off the chips (not off the boxes and server cards they sit in).
+  const chips = items.filter((i) => !BACK.has(i.kind));
   const motion = !animating && !reducedMotion();
   const hl = (on: boolean) => (focus && on ? " hl" : "");
   return (
@@ -363,9 +376,9 @@ function Drawing({ layout: l, focus, selected, animating }: { layout: Layout; fo
       <g>{items.filter((i) => !BACK.has(i.kind)).map((i) => <Shape key={i.key} it={i} lit={!!focus?.keys.has(i.key)} selected={selected} />)}</g>
       <g>
         {edges.filter(({ e }) => e.label).map(({ e, g, op }) => {
-          // Dropped counts sit near the source so they don't land on the chips the edge passes.
-          const [x, y] = g.at(e.kind === "drop" ? 0.28 : 0.5);
+          // Dropped counts prefer a spot near the source; every label moves along its edge, or between rows, off the chips.
           const w = e.label!.length * 6.1 + 12;
+          const [x, y] = labelAt(g, w, e.kind === "drop" ? 0.28 : 0.5, chips);
           return (
             <g key={e.id} className={`imap-lbl k-${e.kind}${hl(!!focus?.edges.has(e.id))}`} transform={`translate(${x.toFixed(1)},${y.toFixed(1)})`} opacity={op < 1 ? op : undefined}>
               <rect x={-w / 2} y={-9} width={w} height={18} rx={4} />
