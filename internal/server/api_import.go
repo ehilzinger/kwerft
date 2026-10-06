@@ -297,6 +297,10 @@ func (a *api) runPlan(w http.ResponseWriter, r *http.Request, ctx context.Contex
 		}
 		out.Problems = problems
 	}
+	if out.Problems == nil {
+		// [] rather than null: the console reads problems.length.
+		out.Problems = []problemJSON{}
+	}
 	if dryRun {
 		writeJSON(w, http.StatusOK, out)
 		return

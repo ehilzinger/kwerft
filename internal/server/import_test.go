@@ -87,6 +87,13 @@ func TestComposeImportDryRunThenApply(t *testing.T) {
 	if !plan.DryRun || len(plan.Problems) != 0 || len(plan.Apps) != 2 || len(plan.Volumes) != 1 || len(plan.SecretSets) != 2 {
 		t.Fatalf("dry run plan %+v", plan)
 	}
+	// The console reads every list's length: none may be null (v0.6.0-rc.10
+	// sent "problems":null for a clean plan, and the review page crashed).
+	for _, key := range []string{"problems", "apps", "volumes", "secretSets", "warnings", "renames", "created"} {
+		if !strings.Contains(body, `"`+key+`":[`) {
+			t.Errorf("dry run: %q is not a list: %s", key, body)
+		}
+	}
 	nothingIn(t, "imp-a")
 
 	// Apply.
