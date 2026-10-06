@@ -30,9 +30,10 @@ changed anything.
 
 *I drafted this post with the help of an AI writing assistant. The system, the bugs and the numbers are Kwerft's own.*
 
-Console upgrades are in the 0.6 release candidates (v0.6.0-rc.1 to rc.3).
-The latest stable release, v0.4.0, still upgrades by re-running the
-installer.
+Console upgrades work from v0.6.0-rc.3 on. rc.1 and rc.2 ship the feature,
+but on Ubuntu their runner is refused by the host (the last section explains
+why), so those need `install.sh` once. The latest stable release, v0.4.0,
+still upgrades by re-running the installer.
 
 ## Don't write the upgrade twice
 
