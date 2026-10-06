@@ -8,6 +8,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"net/mail"
 	"strings"
 	"unicode/utf8"
 
@@ -28,6 +29,13 @@ const (
 )
 
 var ErrWeakPassword = fmt.Errorf("use at least %d characters", MinPasswordLen)
+
+// ValidEmail accepts a plain address (you@example.com) whose domain has a dot:
+// what sign-in, invitations and the owner account use.
+func ValidEmail(s string) bool {
+	addr, err := mail.ParseAddress(s)
+	return err == nil && addr.Address == s && len(s) <= 254 && strings.Contains(s[strings.LastIndex(s, "@"):], ".")
+}
 
 // CheckPassword enforces length only: long passphrases beat composition rules.
 func CheckPassword(pw string) error {
