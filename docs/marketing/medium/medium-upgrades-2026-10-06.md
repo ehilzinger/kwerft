@@ -30,7 +30,7 @@ changed anything.
 
 *I drafted this post with the help of an AI writing assistant. The system, the bugs and the numbers are Kwerft's own.*
 
-Console upgrades are in the 0.6 release candidates (v0.6.0-rc.1 to rc.3).
+Console upgrades are in the 0.6 release candidates (v0.6.0-rc.1 and later).
 The latest stable release, v0.4.0, still upgrades by re-running the
 installer.
 
