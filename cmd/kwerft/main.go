@@ -211,12 +211,18 @@ func main() {
 		// A rolled-back upgrade may ask this version to restore its copy.
 		restoreDatabase(ctx, log, *dataDir, dbFile)
 	}
+	// A new version keeps its predecessor's database before migrating it
+	// (dbversion.go).
+	keepDatabaseAcrossVersions(ctx, log, *dataDir, dbFile, version.Version)
 	st, err := store.Open(ctx, dbFile)
 	if err != nil {
 		log.Error("cannot open the database", "err", err)
 		os.Exit(1)
 	}
 	defer st.Close()
+	if err := recordVersion(*dataDir, version.Version); err != nil {
+		log.Warn("cannot record the version that opened the database", "err", err)
+	}
 	database = st
 	go cleanSessions(ctx, log, st)
 

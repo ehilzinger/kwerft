@@ -732,6 +732,23 @@ Kwerft release back; the console of exactly that version
 copies `status.backup.database` (only from `<data-dir>/backups/`) over
 `kwerft.db`, removes `-wal`/`-shm` and sets the annotation to `done`.
 
+**Database copy on a version's first start (v0.6.0-rc.4).** An upgrade by
+re-running `install.sh` creates no Upgrade, so nothing above copies the
+database. The console therefore keeps its predecessor's database itself
+(`cmd/kwerft/dbversion.go`): `<data-dir>/version` records the version that
+last opened the database; a different version (or none recorded, i.e.
+consoles before rc.4) copies `kwerft.db` with `store.CopyDatabase` (`VACUUM
+INTO` without migrating) to `<data-dir>/backups/pre-<version>-from-<previous>.db`
+before `store.Open` migrates it, after the old pod stopped (`Recreate`). A
+copy left by a failed start of the same upgrade is kept, the version is
+recorded only after `store.Open` succeeded, and the copies share the newest-3
+pruning with the Upgrades' own (so a console Upgrade leaves two: its own and
+this one). A failed copy is logged and the console starts anyway. To roll a
+hand-run upgrade back with its data: re-run the old release's `install.sh`
+with `--version`, then copy the `pre-…` file to `<data-dir>/backup/kwerft.db`,
+create `<data-dir>/backup/RESTORE` and restart the console pod; it swaps the
+copy in at start (`applyRestoredDatabase`, as after `install.sh --restore`).
+
 **Lifecycle and who writes what.**
 
 | Phase | Writer | What happens |

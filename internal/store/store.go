@@ -97,6 +97,25 @@ func (s *Store) Snapshot(ctx context.Context, path string) error {
 	return err
 }
 
+// CopyDatabase writes a consistent copy of the database at src to dst
+// (VACUUM INTO) without migrating src: the copy a new version keeps of its
+// predecessor's database. src must exist and dst must not.
+func CopyDatabase(ctx context.Context, src, dst string) error {
+	if _, err := os.Stat(src); err != nil {
+		return err
+	}
+	if _, err := os.Stat(dst); err == nil {
+		return fmt.Errorf("copy %s: file exists", dst)
+	}
+	db, err := sql.Open("sqlite", "file:"+src+"?_pragma=busy_timeout(5000)")
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+	_, err = db.ExecContext(ctx, `VACUUM INTO ?`, dst)
+	return err
+}
+
 // migrations run in order; append only, never edit a released one.
 var migrations = []string{
 	`CREATE TABLE users (

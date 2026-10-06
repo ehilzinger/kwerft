@@ -47,12 +47,12 @@ func BackupDatabase(ctx context.Context, s Snapshotter, dataDir, upgrade string)
 	if err := os.Rename(tmp, path); err != nil {
 		return "", err
 	}
-	return path, pruneBackups(dir, path)
+	return path, PruneDatabaseBackups(dir, path)
 }
 
-// pruneBackups keeps the newest copies (by modification time); keep is
-// never removed.
-func pruneBackups(dir, keep string) error {
+// PruneDatabaseBackups keeps the newest KeepDatabaseBackups copies
+// (pre-*.db, by modification time) in dir; keep is never removed.
+func PruneDatabaseBackups(dir, keep string) error {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return err
