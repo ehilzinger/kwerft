@@ -97,6 +97,17 @@ helm-lint: ## Lint and render the Helm chart
 		| grep -A1 -x '    resources: \[secrets\]' | grep -qx '    resourceNames: \[kwerft-etcd-backup\]'
 	! helm template kwerft charts/kwerft --set console.domain=ops.example.com --show-only templates/etcd-snapshots.yaml | grep -qE 'hostNetwork|NET_ADMIN|add:'
 	! helm template kwerft charts/kwerft --set mode=agent --set agent.consoleURL=https://ops.example.com | grep -q 'kwerft-etcd-snapshots'
+	@# Registry credentials (docs/phase2.md › Registry credentials): zot runs with the Secret the
+	@# controller writes (users, access control), never the bare ConfigMap; agents keep theirs too.
+	helm template kwerft charts/kwerft --set console.domain=ops.example.com --show-only templates/registry.yaml \
+		| grep -A1 -x '          secret:' | grep -qx '            secretName: kwerft-registry-auth'
+	! helm template kwerft charts/kwerft --set console.domain=ops.example.com --show-only templates/registry.yaml | grep -q 'configMap:'
+	helm template kwerft charts/kwerft --set console.domain=ops.example.com --show-only templates/deployment.yaml \
+		| grep -qx -- '            - --registry-auth=true'
+	helm template kwerft charts/kwerft --set mode=agent --set agent.consoleURL=https://ops.example.com --show-only templates/deployment.yaml \
+		| grep -qx -- '            - --registry-auth=true'
+	helm template kwerft charts/kwerft --set console.domain=ops.example.com --set registry.enabled=false --show-only templates/deployment.yaml \
+		| grep -qx -- '            - --registry-auth=false'
 	@# With the VictoriaMetrics operator's CRDs, as install.sh installs them (metrics-*.yaml).
 	helm template kwerft charts/kwerft --set console.domain=ops.example.com --api-versions operator.victoriametrics.com/v1beta1 | grep -q 'kind: VMRule'
 

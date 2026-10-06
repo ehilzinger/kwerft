@@ -86,6 +86,7 @@ func main() {
 		maxConcurrentBuilds = flag.Int("max-concurrent-builds", 1, "builds running at once in the cluster; more wait in a queue")
 		buildTimeout        = flag.Duration("build-timeout", controllers.DefaultBuildTimeout, "a build running longer fails")
 		buildAppArmor       = flag.String("build-apparmor-profile", "kwerft-buildkit", "AppArmor profile (loaded on every node) build containers run under; empty runs them unconfined")
+		registryAuth        = flag.Bool("registry-auth", false, "keep the in-cluster registry's credentials and access control: a push credential per project, Kwerft's own, zot's config (chart: registry.enabled)")
 		hubbleRelay         = flag.String("hubble-relay", hubble.DefaultRelayAddress, "Hubble relay (host:port, plain gRPC) for traffic rule counts and dropped connections; empty turns them off (install.sh --lite has no Hubble)")
 
 		consoleURL         = flag.String("console-url", os.Getenv("KWERFT_CONSOLE_URL"), "agent mode: the console to connect to, https://<console>")
@@ -152,7 +153,7 @@ func main() {
 		if err != nil {
 			return nil, err
 		}
-		mgr, err := newManager(log, *leaderElect, *metricsListen, *privateNetwork, !agentMode, hashKey, traffic, &controllers.DomainReconciler{
+		mgr, err := newManager(log, *leaderElect, *metricsListen, *privateNetwork, !agentMode, *registryAuth, hashKey, traffic, &controllers.DomainReconciler{
 			ConsoleDomain: *consoleDomain,
 			GatewayClass:  *gatewayClass,
 			ClusterIssuer: *clusterIssuer,
@@ -424,7 +425,7 @@ func waitUntilReady(ctx context.Context, log *slog.Logger, mgr ctrl.Manager, rea
 // console: the console's cluster (not agent mode), whose DNS reconciler
 // also keeps the records of remote clusters' hostnames. secretsHashKey:
 // see secretsHashKey.
-func newManager(log *slog.Logger, leaderElect bool, metricsListen, privateNetwork string, console bool, secretsHashKey []byte, traffic *controllers.TrafficRuleReconciler, domains *controllers.DomainReconciler, builds *controllers.BuildReconciler) (ctrl.Manager, error) {
+func newManager(log *slog.Logger, leaderElect bool, metricsListen, privateNetwork string, console, registryAuth bool, secretsHashKey []byte, traffic *controllers.TrafficRuleReconciler, domains *controllers.DomainReconciler, builds *controllers.BuildReconciler) (ctrl.Manager, error) {
 	ctrl.SetLogger(logr.FromSlogHandler(log.Handler()))
 	cfg, err := ctrl.GetConfig()
 	if err != nil {
@@ -452,9 +453,18 @@ func newManager(log *slog.Logger, leaderElect bool, metricsListen, privateNetwor
 	if err := (&controllers.ProjectReconciler{Client: mgr.GetClient()}).SetupWithManager(mgr); err != nil {
 		return nil, err
 	}
-	apps := &controllers.AppReconciler{Client: mgr.GetClient(), APIReader: mgr.GetAPIReader(), SecretsHashKey: secretsHashKey, Registry: &controllers.RegistryKeeper{URL: controllers.DefaultRegistryURL}}
+	apps := &controllers.AppReconciler{Client: mgr.GetClient(), APIReader: mgr.GetAPIReader(), SecretsHashKey: secretsHashKey,
+		Registry: &controllers.RegistryKeeper{URL: controllers.DefaultRegistryURL, Credentials: controllers.RegistryAdminCredentials(mgr.GetAPIReader())}}
 	if err := apps.SetupWithManager(mgr); err != nil {
 		return nil, err
+	}
+	// The registry's users and access control: a push credential per
+	// project, Kwerft's own, and zot's config (docs/phase2.md).
+	if registryAuth {
+		if err := (&controllers.RegistryAuthReconciler{Client: mgr.GetClient(), APIReader: mgr.GetAPIReader(),
+			Probe: controllers.RegistryProbe(controllers.DefaultRegistryURL, nil)}).SetupWithManager(mgr); err != nil {
+			return nil, err
+		}
 	}
 	// TrafficRules → CiliumNetworkPolicies, with Hubble's counts (Phase 4).
 	traffic.Client = mgr.GetClient()

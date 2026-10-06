@@ -2,9 +2,11 @@
 {{- $r := .Values.registry }}
 # zot, the in-cluster registry for images built from Git (Phase 2). Build pods
 # push to it, every node's containerd pulls from it through the k3s mirror for
-# registry.kwerft.internal:5000 (install.sh writes it). Plain HTTP and no
-# authentication: the CiliumNetworkPolicy below admits only build pods, the
-# console and the nodes.
+# registry.kwerft.internal:5000 (install.sh writes it). Plain HTTP; the
+# CiliumNetworkPolicy below admits only build pods, the console and the
+# nodes. Pulls need no credential; pushes do: each project's builds push with
+# the project's own, to its own repositories only, and Kwerft keeps tags with
+# its own (internal/controllers/registry_auth.go, docs/phase2.md).
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
@@ -94,9 +96,18 @@ spec:
         - name: data
           persistentVolumeClaim:
             claimName: kwerft-registry
+        # config.json (registry-config.yaml plus users and access control)
+        # and htpasswd, written by Kwerft's controller (--registry-auth),
+        # which keeps them up to date as projects come and go; zot reloads
+        # both when they change. On the first start the pod waits until
+        # the controller has written the Secret.
         - name: config
-          configMap:
-            name: kwerft-registry
+          secret:
+            secretName: kwerft-registry-auth
+            defaultMode: 0440
+            items:
+              - { key: config.json, path: config.json }
+              - { key: htpasswd, path: htpasswd }
         - name: tmp
           emptyDir: {}
 ---

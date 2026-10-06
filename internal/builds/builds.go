@@ -36,6 +36,26 @@ const (
 	// revision runs; the registry's retention keeps them.
 	KeepTagPrefix = "keep-"
 
+	// RegistrySecretPrefix + project is the project's registry credential, a
+	// Secret of type kubernetes.io/dockerconfigjson in Namespace. Only that
+	// project's build pods mount it (BuildKit pushes with it); zot lets its
+	// user push to <project>/** and nowhere else. Console users cannot read
+	// Secrets in Namespace.
+	RegistrySecretPrefix = "registry-"
+	// RegistryUserPrefix + project is the project's user name in zot.
+	RegistryUserPrefix = "project-"
+	// Keys of a registry credential Secret: the user, the password, and
+	// the user's htpasswd line (bcrypt), kept so zot's htpasswd file only
+	// changes when a credential does. Project Secrets also have
+	// corev1.DockerConfigJsonKey for BuildKit.
+	KeyRegistryUsername = "username"
+	KeyRegistryPassword = "password"
+	KeyRegistryHTPasswd = "htpasswd"
+	// LabelRegistryAuth marks build Jobs whose pods push with their
+	// project's credential. Jobs without it were created before the
+	// registry required one; see controllers.RegistryAuthReconciler.
+	LabelRegistryAuth = "kwerft.dev/registry-auth"
+
 	// LabelBuild marks a build Job and its pod with the Build's name; the
 	// Build's namespace is in LabelProject (controllers.LabelProject).
 	LabelBuild = "kwerft.dev/build"
@@ -66,6 +86,13 @@ var LogContainers = []string{ContainerClone, ContainerPrepare, ContainerBuild}
 
 // CredentialsSecret is the Secret name for a GitConnection.
 func CredentialsSecret(connection string) string { return SecretPrefix + connection }
+
+// RegistrySecret is the name of a project's registry credential Secret in
+// Namespace.
+func RegistrySecret(project string) string { return RegistrySecretPrefix + project }
+
+// RegistryUser is a project's user name in the registry.
+func RegistryUser(project string) string { return RegistryUserPrefix + project }
 
 // ImageRepository is where an App's builds are pushed:
 // registry.kwerft.internal:5000/<project>/<app>.

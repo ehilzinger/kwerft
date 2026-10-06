@@ -36,9 +36,15 @@ func fakeInstallationToken(_ context.Context, conn *kwerftv1.GitConnection, key 
 }
 
 // setupBuildInfra creates what the chart provides for builds: the
-// kwerft-builds namespace and the registry Service.
+// kwerft-builds namespace, the registry Service and zot's base config.
 func setupBuildInfra(ctx context.Context) error {
 	if err := k8s.Create(ctx, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: builds.Namespace}}); err != nil {
+		return err
+	}
+	if err := k8s.Create(ctx, &corev1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{Namespace: builds.RegistryNamespace, Name: builds.RegistryService},
+		Data:       map[string]string{registryConfigKey: testZotBaseConfig},
+	}); err != nil {
 		return err
 	}
 	return k8s.Create(ctx, &corev1.Service{
@@ -322,6 +328,36 @@ func TestBuildRendersJobAndDeploys(t *testing.T) {
 		if m.Name == "credentials" {
 			t.Error("the build container mounts the credentials")
 		}
+	}
+	// The push: the project's own registry credential, by reference, in
+	// the build container only.
+	if job.Labels[builds.LabelRegistryAuth] != "true" {
+		t.Errorf("job labels = %v", job.Labels)
+	}
+	var registry *corev1.Volume
+	for i, v := range pod.Volumes {
+		if v.Name == "registry" {
+			registry = &pod.Volumes[i]
+		}
+	}
+	if registry == nil || registry.Secret.SecretName != builds.RegistrySecret("bshop") || len(registry.Secret.Items) != 1 ||
+		registry.Secret.Items[0].Key != corev1.DockerConfigJsonKey || registry.Secret.Items[0].Path != "config.json" {
+		t.Errorf("registry volume = %+v", registry)
+	}
+	if !slices.ContainsFunc(build.VolumeMounts, func(m corev1.VolumeMount) bool {
+		return m.Name == "registry" && m.MountPath == registryConfigDir && m.ReadOnly
+	}) || envOf(build)["DOCKER_CONFIG"] != registryConfigDir {
+		t.Errorf("build mounts %+v, env %v", build.VolumeMounts, envOf(build))
+	}
+	if slices.ContainsFunc(clone.VolumeMounts, func(m corev1.VolumeMount) bool { return m.Name == "registry" }) {
+		t.Error("the clone mounts the registry credential")
+	}
+	var regCred corev1.Secret
+	if err := k8s.Get(ctx, client.ObjectKey{Namespace: builds.Namespace, Name: builds.RegistrySecret("bshop")}, &regCred); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(raw), string(regCred.Data[builds.KeyRegistryPassword])) {
+		t.Error("the registry password appears in the Job")
 	}
 
 	// Running, then success: the App rolls out the digest-pinned image.

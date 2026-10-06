@@ -137,7 +137,7 @@ func testRun(builder, auth string) *buildRun {
 		image: builds.ImageRef("shop", "api", b.Spec.Commit), cache: builds.CacheRef("shop", "api"),
 		buildkitImage: DefaultBuildKitImage, railpackImage: DefaultRailpackImage, registryIP: builds.RegistryClusterIP,
 		timeout: 20 * time.Minute, contextDir: "services/api", dockerfile: "Dockerfile",
-		auth: auth, credentials: "git-deploykey",
+		auth: auth, credentials: "git-deploykey", registrySecret: builds.RegistrySecret("shop"),
 	}
 }
 
@@ -317,11 +317,25 @@ type fakeRegistry struct {
 	mu        sync.Mutex
 	manifests map[string][]byte // digest → body
 	tags      map[string]string // tag → digest
+	// user and password, when set, are required for writes, as zot does
+	// with Kwerft's access control (reads stay anonymous).
+	user, password string
+}
+
+func newRegistryServer(t *testing.T, f *fakeRegistry) *httptest.Server {
+	srv := httptest.NewServer(f)
+	t.Cleanup(srv.Close)
+	return srv
 }
 
 func (f *fakeRegistry) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if u, p, _ := r.BasicAuth(); f.user != "" && r.Method != http.MethodGet && r.Method != http.MethodHead && (u != f.user || p != f.password) {
+		w.Header().Set("WWW-Authenticate", `Basic realm="zot"`)
+		w.WriteHeader(http.StatusUnauthorized)
+		return
+	}
 	rest, ok := strings.CutPrefix(r.URL.Path, "/v2/shop/api/")
 	if !ok {
 		http.NotFound(w, r)

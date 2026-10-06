@@ -60,6 +60,10 @@ securityContext:
 # reaches that name through the k3s mirror the installer writes to
 # /etc/rancher/k3s/registries.yaml, which points at registry.clusterIP.
 # install.sh sets the image tag and the address from the pins at its top.
+# Pulls need no credential; pushes do: Kwerft's controller (--registry-auth)
+# gives every project its own, confined to the project's repositories, and
+# writes zot's users and access control to the Secret kwerft-registry-auth
+# that zot runs with (docs/phase2.md › Registry credentials).
 registry:
   enabled: true
   image:

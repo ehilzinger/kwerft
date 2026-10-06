@@ -1267,9 +1267,13 @@ stage_kubernetes() {
 # kube-proxy replacement serves to host processes as well (socket load
 # balancing), on this node and every joined one. Plain HTTP: the traffic
 # stays inside the cluster (WireGuard between nodes) and zot admits only the
-# nodes, build pods and the console. Deliberately no NodePort: Cilium answers
-# NodePorts in eBPF before the nftables host firewall sees the packet, which
-# would publish an unauthenticated registry on the public address.
+# nodes, build pods and the console. The nodes pull without a credential;
+# pushes need one (each project's builds have their own, kept by the
+# controller: docs/phase2.md › Registry credentials), so this file carries
+# none and does not change with them. Deliberately no NodePort: Cilium
+# answers NodePorts in eBPF before the nftables host firewall sees the
+# packet, which would publish the registry's anonymous reads on the public
+# address.
 # ---------------------------------------------------------------------------
 registries_yaml() {
   cat <<EOF

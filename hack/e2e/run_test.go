@@ -33,6 +33,7 @@ type fakeRemote struct {
 	trusted     bool            // Let's Encrypt staging is trusted
 	restoreFail bool            // --restore cannot read the backups
 	uploads     map[string]string
+	registry    string // the registry check's answer; "" all as it should be
 }
 
 var (
@@ -86,6 +87,11 @@ func (f *fakeRemote) run(ctx context.Context, cmd string, stdout, stderr io.Writ
 		f.mu.Lock()
 		f.trusted = true
 		f.mu.Unlock()
+	case cmd == registryCheckScript:
+		f.mu.Lock()
+		answer := cmpOr(f.registry, "own=200 other=403 anonymous=401 pull=200")
+		f.mu.Unlock()
+		fmt.Fprintln(stdout, answer)
 	}
 	return 0, nil
 }
@@ -332,7 +338,8 @@ func TestFreshInstallPassesAndCleansUp(t *testing.T) {
 	h.assertCleanedUp(t)
 	res := resultsByName(h.runner.rep)
 	for _, name := range []string{"Create server", "SSH", "Install v0.5.0", "Console on HTTPS", "Owner from the setup token, sign in",
-		"Project and apps created", "App on HTTPS", "Task runs and restarts web", "Git build deploys", "Log search", "Metrics", "Crash loop alert"} {
+		"Project and apps created", "App on HTTPS", "Task runs and restarts web", "Git build deploys", "Registry refuses other projects' pushes",
+		"Log search", "Metrics", "Crash loop alert"} {
 		if res[name].Status != pass {
 			t.Errorf("%s: %+v", name, res[name])
 		}
@@ -446,8 +453,34 @@ func TestFailedCheckFailsRunButOthersReport(t *testing.T) {
 	for _, r := range h.runner.rep.Results {
 		names = append(names, r.Name)
 	}
-	if got := strings.Join(names[len(names)-6:], ","); got != "App on HTTPS,Task runs and restarts web,Log search,Git build deploys,Metrics,Crash loop alert" {
+	if got := strings.Join(names[len(names)-7:], ","); got != "App on HTTPS,Task runs and restarts web,Log search,Git build deploys,Registry refuses other projects' pushes,Metrics,Crash loop alert" {
 		t.Errorf("order: %s", got)
+	}
+}
+
+func TestOpenRegistryFailsTheCheck(t *testing.T) {
+	h := newHarness(t, "0.5.0", "")
+	h.remote.registry = "own=200 other=202 anonymous=202 pull=200"
+	h.runner.run(context.Background())
+
+	if h.runner.rep.passed() {
+		t.Fatal("passed although the registry takes anyone's pushes")
+	}
+	res := resultsByName(h.runner.rep)
+	if r := res["Registry refuses other projects' pushes"]; r.Status != fail || !strings.Contains(r.Detail, "other=202") {
+		t.Errorf("registry: %+v", r)
+	}
+	if res["Git build deploys"].Status != pass {
+		t.Errorf("build: %+v", res["Git build deploys"])
+	}
+	h.assertCleanedUp(t)
+
+	// A version without per-project credentials is not held to them.
+	h = newHarness(t, "0.5.0", "")
+	h.remote.registry = "no-credential"
+	h.runner.run(context.Background())
+	if r := resultsByName(h.runner.rep)["Registry refuses other projects' pushes"]; r.Status != pass || !strings.Contains(r.Detail, "not checked") {
+		t.Errorf("registry: %+v", r)
 	}
 }
 
