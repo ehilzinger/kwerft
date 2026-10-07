@@ -78,8 +78,9 @@ func TestNodesDiskHealth(t *testing.T) {
 		byName[n.Name] = n
 	}
 	d1 := byName["disk-dedi-1"].DiskHealth
-	if d1 == nil || d1.Health != healthBad || !d1.SMART || len(d1.Disks) != 1 || len(d1.Arrays) != 1 || d1.Disks[0].Serial != "S64" ||
-		d1.Arrays[0].Health != healthOK || d1.Summary != "1 disk failing" {
+	// Worn out (critical warning 0x04 alone): one to watch, not failing.
+	if d1 == nil || d1.Health != healthWarn || !d1.SMART || len(d1.Disks) != 1 || len(d1.Arrays) != 1 || d1.Disks[0].Serial != "S64" ||
+		d1.Arrays[0].Health != healthOK || d1.Summary != "1 disk to watch" {
 		t.Fatalf("disk-dedi-1: %+v", d1)
 	}
 	if d2 := byName["disk-dedi-2"].DiskHealth; d2 == nil || d2.Health != healthUnknown {

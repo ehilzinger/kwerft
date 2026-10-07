@@ -363,7 +363,9 @@ func TestDiskExpressions(t *testing.T) {
 	}
 	failing := Expr(&kwerftv1.AlertRuleSpec{Condition: kwerftv1.AlertDiskFailing})
 	for _, want := range []string{`max by (node, device) (smartctl_device_smart_status{job="kwerft-disk-health"}) == 0`,
-		`(smartctl_device_critical_warning{job="kwerft-disk-health"}) > 0`, `(smartctl_device_media_errors{job="kwerft-disk-health"}) > min_over_time((max by (node, device) (smartctl_device_media_errors{job="kwerft-disk-health"}))[1d:5m])`,
+		`== 0 unless on (node, device) max by (node, device) (smartctl_device_critical_warning{job="kwerft-disk-health"}) == 4)`,
+		`(smartctl_device_critical_warning{job="kwerft-disk-health"}) % 4 > 0`, `(smartctl_device_critical_warning{job="kwerft-disk-health"}) >= 8`,
+		`(smartctl_device_media_errors{job="kwerft-disk-health"}) > min_over_time((max by (node, device) (smartctl_device_media_errors{job="kwerft-disk-health"}))[1d:5m])`,
 		`group_left (model_name, serial_number)`} {
 		if !strings.Contains(failing, want) {
 			t.Errorf("failing: no %q in %s", want, failing)

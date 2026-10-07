@@ -256,6 +256,10 @@ func raidVerdict(r *raidJSON) {
 	}
 }
 
+// wearWarning is the NVMe critical warning bit "reliability degraded",
+// which a drive past its rated endurance sets.
+const wearWarning = 0x04
+
 // criticalWarnings names the NVMe critical warning bits.
 var criticalWarnings = []string{
 	"spare below threshold", "temperature out of range", "reliability degraded", "read-only",
@@ -277,18 +281,25 @@ func diskVerdict(d *diskJSON) {
 		d.Health = healthUnknown
 		d.Problems = append(d.Problems, "smartctl cannot read this disk.")
 	}
-	if d.SMARTPassed != nil && !*d.SMARTPassed {
+	// Wear alone (critical warning 0x04, from which smartctl also derives
+	// the overall FAILED) only warns, as in DiskFailing: the drive stays
+	// usable while its spare blocks are above their threshold.
+	w := ptrOr(d.CriticalWarning, 0)
+	if d.SMARTPassed != nil && !*d.SMARTPassed && w != wearWarning {
 		bad("SMART overall status: FAILED.")
 	}
-	if w := ptrOr(d.CriticalWarning, 0); w != 0 {
+	if w&wearWarning != 0 {
+		warn("Reliability degraded by wear (critical warning 0x04); usable while its spare blocks stay above their threshold.")
+	}
+	if rest := w &^ wearWarning; rest != 0 {
 		var names []string
 		for i, name := range criticalWarnings {
-			if w&(1<<i) != 0 {
+			if rest&(1<<i) != 0 {
 				names = append(names, name)
 			}
 		}
 		if len(names) == 0 {
-			names = append(names, "0x"+strconv.FormatInt(int64(w), 16))
+			names = append(names, "0x"+strconv.FormatInt(int64(rest), 16))
 		}
 		bad("Critical warning: " + strings.Join(names, ", ") + ".")
 	}

@@ -19,7 +19,8 @@ func diskSeries(v float64, kv ...string) metrics.Series {
 }
 
 // The readings of kwerft-dedi-1 on 2026-10-06 (both NVMe drives worn out,
-// SMART failed, critical warning 0x04, the RAID still whole), a node whose
+// SMART failed, critical warning 0x04, spare blocks at 100 %, the RAID still
+// whole: worn, not failing, as Hetzner judges them), a node whose
 // RAID lost a disk and is rebuilding, a dedicated server without readings
 // and a Cloud server without any.
 func TestDiskHealth(t *testing.T) {
@@ -57,15 +58,15 @@ func TestDiskHealth(t *testing.T) {
 	withDiskHealth(nodes, diskHealth(res))
 
 	d1 := nodes[0].DiskHealth
-	if d1 == nil || d1.Health != healthBad || d1.Summary != "2 disks failing" || !d1.SMART || len(d1.Arrays) != 2 || len(d1.Disks) != 2 {
+	if d1 == nil || d1.Health != healthWarn || d1.Summary != "2 disks to watch" || !d1.SMART || len(d1.Arrays) != 2 || len(d1.Disks) != 2 {
 		t.Fatalf("dedi-1: %+v", d1)
 	}
 	if a := d1.Arrays[0]; a.Device != "md0" || a.Health != healthOK || a.Active != 2 || a.Required != 2 || a.State != "active" {
 		t.Errorf("md0: %+v", a)
 	}
 	nvme := d1.Disks[0]
-	if nvme.Device != "nvme0" || nvme.Serial != "S-nvme0" || nvme.Model != "SAMSUNG MZVL2512HCJQ-00B00" || nvme.Health != healthBad || nvme.Unreadable ||
-		!slices.Equal(nvme.Problems, []string{"SMART overall status: FAILED.", "Critical warning: reliability degraded.", "115 % of its rated endurance used."}) {
+	if nvme.Device != "nvme0" || nvme.Serial != "S-nvme0" || nvme.Model != "SAMSUNG MZVL2512HCJQ-00B00" || nvme.Health != healthWarn || nvme.Unreadable ||
+		!slices.Equal(nvme.Problems, []string{"Reliability degraded by wear (critical warning 0x04); usable while its spare blocks stay above their threshold.", "115 % of its rated endurance used."}) {
 		t.Errorf("nvme0: %+v", nvme)
 	}
 
@@ -119,5 +120,28 @@ func TestDiskVerdicts(t *testing.T) {
 	raidVerdict(&inactive)
 	if inactive.Health != healthBad || inactive.Problem != "The array is inactive." {
 		t.Errorf("inactive: %+v", inactive)
+	}
+}
+
+// Wear alone warns; a critical warning bit besides wear, or a FAILED status
+// with another cause (a SATA disk has no critical warning), fails the disk.
+func TestDiskVerdictWear(t *testing.T) {
+	b := func(v bool) *bool { return &v }
+	i := func(v int) *int { return &v }
+	f := func(v float64) *float64 { return &v }
+	for name, c := range map[string]struct {
+		d    diskJSON
+		want string
+	}{
+		"worn":           {diskJSON{SMARTPassed: b(false), CriticalWarning: i(4), AvailableSpare: f(100), AvailableSpareThreshold: f(10)}, healthWarn},
+		"worn and spare": {diskJSON{SMARTPassed: b(false), CriticalWarning: i(5), AvailableSpare: f(5), AvailableSpareThreshold: f(10)}, healthBad},
+		"read-only":      {diskJSON{SMARTPassed: b(false), CriticalWarning: i(8)}, healthBad},
+		"sata failed":    {diskJSON{SMARTPassed: b(false)}, healthBad},
+		"healthy":        {diskJSON{SMARTPassed: b(true), CriticalWarning: i(0)}, healthOK},
+	} {
+		diskVerdict(&c.d)
+		if c.d.Health != c.want {
+			t.Errorf("%s: %s %v, want %s", name, c.d.Health, c.d.Problems, c.want)
+		}
 	}
 }

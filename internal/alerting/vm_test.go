@@ -101,15 +101,21 @@ func TestDiskAlertsAgainstVictoriaMetrics(t *testing.T) {
 		smart(node, "smartctl_device_media_errors", dev, mediaErrors)
 		smart(node, "smartctl_device_smartctl_exit_status", dev, constant(exit))
 	}
-	// dedi-a: nvme0 as on kwerft-dedi-1 (2026-10-06), nvme1 healthy but
-	// with new media errors; only nvme0 has its identity series.
+	// dedi-a: nvme0 as on kwerft-dedi-1 (2026-10-06): worn out (status
+	// FAILED from critical warning 0x04 alone, spare blocks at 100 %), which
+	// is DiskWearing, not DiskFailing; nvme1 healthy but with new media
+	// errors; nvme2 worn and below its spare threshold (warning 0x05); only
+	// nvme0 has its identity series.
 	disk("dedi-a", "nvme0", 0, 4, 115, constant(0), 8)
 	disk("dedi-a", "nvme1", 1, 0, 20, func(i int) float64 { return float64(2 + i/10) }, 0)
+	disk("dedi-a", "nvme2", 0, 5, 60, constant(0), 8)
 	sample(`smartctl_device{job="kwerft-disk-health",node="dedi-a",device="nvme0",model_name="SAMSUNG MZVL2512HCJQ-00B00",serial_number="S64",interface="nvme"}`, constant(1))
 	sample(`smartctl_devices{job="kwerft-disk-health",node="dedi-a"}`, constant(2))
-	// dedi-b: an old media error count (no alert) and a disk smartctl
-	// cannot open.
+	// dedi-b: an old media error count (no alert), a disk smartctl
+	// cannot open, and a SATA disk with status FAILED (no critical warning
+	// series).
 	disk("dedi-b", "sda", 1, 0, 0, constant(7), 0)
+	smart("dedi-b", "smartctl_device_smart_status", "sde", constant(0))
 	smart("dedi-b", "smartctl_device_smartctl_exit_status", "sdb", constant(2))
 	// sdc's exporter pod was replaced halfway: the new pod's series starts
 	// at the old count, which is no new media error.
@@ -151,7 +157,7 @@ func TestDiskAlertsAgainstVictoriaMetrics(t *testing.T) {
 	if got := firing(kwerftv1.AlertRAIDDegraded, "node", "device"); !slices.Equal(got, []string{"dedi-b/md0"}) {
 		t.Errorf("RAIDDegraded: %v", got)
 	}
-	if got := firing(kwerftv1.AlertDiskFailing, "node", "device", "serial_number"); !slices.Equal(got, []string{"dedi-a/nvme0/S64", "dedi-a/nvme1/"}) {
+	if got := firing(kwerftv1.AlertDiskFailing, "node", "device", "serial_number"); !slices.Equal(got, []string{"dedi-a/nvme1/", "dedi-a/nvme2/", "dedi-b/sde/"}) {
 		t.Errorf("DiskFailing: %v", got)
 	}
 	wear, err := c.Query(ctx, Expr(&kwerftv1.AlertRuleSpec{Condition: kwerftv1.AlertDiskWearing}), now, metrics.Unconfined())
@@ -168,7 +174,7 @@ func TestDiskAlertsAgainstVictoriaMetrics(t *testing.T) {
 		want int
 	}{
 		{metrics.RAIDDisks, 9}, {metrics.RAIDRequired, 3}, {metrics.RAIDState, 3}, {metrics.RAIDSynced, 3},
-		{metrics.SMARTStatus, 4}, {metrics.SMARTPercentageUsed, 4}, {metrics.SMARTExitStatus, 5}, {metrics.SMARTDevice, 1}, {metrics.SMARTDevices, 2},
+		{metrics.SMARTStatus, 6}, {metrics.SMARTPercentageUsed, 5}, {metrics.SMARTExitStatus, 6}, {metrics.SMARTDevice, 1}, {metrics.SMARTDevices, 2},
 	} {
 		got, err := c.Query(ctx, q.expr, now, metrics.Unconfined())
 		if err != nil || len(got) != q.want {

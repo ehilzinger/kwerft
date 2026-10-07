@@ -388,14 +388,25 @@ func Expr(spec *kwerftv1.AlertRuleSpec) string {
 		// good, so only a count above the window's lowest fires. Per disk
 		// before looking back, since a restarted exporter pod starts new
 		// series (increase() would count its first value as new).
+		//
+		// Wear alone is not failing (DiskWearing covers it): an NVMe drive
+		// past its rated endurance sets critical warning bit 0x04
+		// ("reliability degraded"), and smartctl reports the overall status
+		// FAILED for any critical warning. Hetzner counts such a drive as
+		// healthy while its spare blocks stay above their threshold
+		// (kwerft-dedi-1, 2026-10-07). So the status counts unless the
+		// warning is exactly 0x04, and of the warning bits only the others
+		// do: 0x01 spare, 0x02 temperature (PromQL has no bit operators:
+		// value % 4 > 0) and 0x08 and up (read-only, backup failures).
 		step := "5m"
 		if e.Window < 4*time.Hour {
 			step = "1m"
 		}
 		media := smart("smartctl_device_media_errors") + " > min_over_time((" + smart("smartctl_device_media_errors") +
 			")[" + promDuration(e.Window) + ":" + step + "])"
-		return withDiskInfo(smart("smartctl_device_smart_status") + " == 0 or " +
-			smart("smartctl_device_critical_warning") + " > 0 or " +
+		warning := smart("smartctl_device_critical_warning")
+		return withDiskInfo("(" + smart("smartctl_device_smart_status") + " == 0 unless on (node, device) " + warning + " == 4) or " +
+			warning + " % 4 > 0 or " + warning + " >= 8 or " +
 			smart("smartctl_device_available_spare") + " < " + smart("smartctl_device_available_spare_threshold") + " or " + media)
 	case kwerftv1.AlertDiskWearing:
 		// NVMe "percentage used" of the rated endurance; may pass 100.
@@ -630,11 +641,11 @@ func annotations(e Effective, rule string) (summary, description string) {
 				`replace the failed disk (on a Hetzner dedicated server: a support request in Robot with its serial number) and add the new one to the array with mdadm.`
 	case kwerftv1.AlertDiskFailing:
 		return diskTarget + ` is failing`,
-			`SMART reports the disk failing or about to: overall status FAILED, a critical warning, spare blocks below their threshold, or new media errors within ` +
+			`SMART reports the disk failing or about to: overall status FAILED, a critical warning other than wear, spare blocks below their threshold, or new media errors within ` +
 				Humanize(e.Window) + `.` + diskSerial + ` Replace it soon; Clusters › Nodes shows its readings and whether its RAID array is still whole.`
 	case kwerftv1.AlertDiskWearing:
 		return diskTarget + ` has used ` + pctValue + ` of its endurance`,
-			`The SSD has written more than ` + t + ` % of what its maker rates it for; worn drives fail more often. Plan its replacement.` + diskSerial
+			`The SSD has written more than ` + t + ` % of what its maker rates it for; worn drives fail more often. It stays usable while its spare blocks are above their threshold (Disk failing fires when they are not); plan its replacement.` + diskSerial
 	case kwerftv1.AlertDiskReadingsMissing:
 		return `{{ if $labels.device }}` + diskTarget + ` cannot be read{{ else }}Node {{ $labels.node }} reports no disk health{{ end }}`,
 			`{{ if $labels.device }}smartctl could not read the disk (exit status {{ $value }}).` +
