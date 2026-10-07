@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Enzo Hilzinger
+// SPDX-License-Identifier: AGPL-3.0-only
+
 // Client for the traffic API: a project's TrafficRules with Hubble's counts,
 // the connections policies dropped, and the project's isolation. The server
 // acts as the signed-in user, so a 403 is Kubernetes RBAC talking.

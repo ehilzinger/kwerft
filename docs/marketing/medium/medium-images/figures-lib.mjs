@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Enzo Hilzinger
+// SPDX-License-Identifier: AGPL-3.0-only
+
 // Shared drawing helpers for the Kwerft Medium posts, copied from the
 // hatchure-ios posts' figures so every diagram has the same style.
 // Each post has its own <slug>-figures.mjs that imports this:

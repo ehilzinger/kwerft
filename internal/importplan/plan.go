@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Enzo Hilzinger
+// SPDX-License-Identifier: AGPL-3.0-only
+
 // Package importplan is what a Compose import (internal/compose) and a
 // template (internal/templates) turn into: the Kwerft objects to create in
 // one project, with the warnings and renames to show before anything is

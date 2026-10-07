@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# SPDX-FileCopyrightText: 2026 Enzo Hilzinger
+# SPDX-License-Identifier: AGPL-3.0-only
+
 # Phase 7 spike, option A: Kwerft on `container k8s` (kind node image in an
 # Apple container VM), with Cilium as the CNI and the same platform charts the
 # installer uses.

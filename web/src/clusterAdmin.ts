@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Enzo Hilzinger
+// SPDX-License-Identifier: AGPL-3.0-only
+
 // Clusters (docs/phase5.md, W3): the clusters this console manages. A remote
 // cluster runs Kwerft in agent mode and connects to the console; the console
 // reaches its API through that connection. Owners and admins only.

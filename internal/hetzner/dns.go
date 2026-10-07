@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Enzo Hilzinger
+// SPDX-License-Identifier: AGPL-3.0-only
+
 // Package hetzner is a small client for Hetzner DNS, which lives in the
 // Hetzner Cloud API since the old DNS Console (dns.hetzner.com) was shut down
 // in May 2026: zones and RRsets at api.hetzner.cloud/v1, authorised with a

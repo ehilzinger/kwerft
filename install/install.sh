@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# SPDX-FileCopyrightText: 2026 Enzo Hilzinger
+# SPDX-License-Identifier: AGPL-3.0-only
+
 # Kwerft installer — turns a fresh Ubuntu server on Hetzner (Cloud or dedicated)
 # into a single-node Kubernetes cluster with the Kwerft console on top.
 #

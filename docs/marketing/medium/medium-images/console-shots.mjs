@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Enzo Hilzinger
+// SPDX-License-Identifier: AGPL-3.0-only
+
 // Console screenshots for the Medium posts: crops of the cards a post talks
 // about, from the real console with the homepage's demo data (a fictional
 // web shop, nothing from a real server).

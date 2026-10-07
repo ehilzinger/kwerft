@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Enzo Hilzinger
+// SPDX-License-Identifier: AGPL-3.0-only
+
 // Client for the workload API (projects and apps). The server acts as the
 // signed-in user against Kubernetes, so a 403 here is Kubernetes RBAC talking.
 import { request, type User } from "./api";

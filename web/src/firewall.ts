@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Enzo Hilzinger
+// SPDX-License-Identifier: AGPL-3.0-only
+
 // Server firewall (docs/phase4.md, W3): FirewallRules applied on every node
 // by the node agent, and the pending change that rolls back unless it is
 // confirmed. The server decides and checks everything (lock-out protection

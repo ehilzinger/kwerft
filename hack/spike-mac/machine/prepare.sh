@@ -1,4 +1,7 @@
 #!/bin/sh
+# SPDX-FileCopyrightText: 2026 Enzo Hilzinger
+# SPDX-License-Identifier: AGPL-3.0-only
+
 # Run once as root inside a fresh machine, before install.sh (see machine.sh).
 # Makes the VM look like a stock server to the unmodified installer. Each item
 # here is a finding the local profile has to handle for real.

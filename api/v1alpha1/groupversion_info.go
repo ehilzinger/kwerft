@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Enzo Hilzinger
+// SPDX-License-Identifier: AGPL-3.0-only
+
 // Package v1alpha1 contains the kwerft.dev/v1alpha1 API: the resources the
 // console reads and writes. Controllers render them into native objects.
 //

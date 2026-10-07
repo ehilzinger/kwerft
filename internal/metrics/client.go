@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Enzo Hilzinger
+// SPDX-License-Identifier: AGPL-3.0-only
+
 // Package metrics reads time series from VictoriaMetrics for the console: a
 // small client for /api/v1/query and /api/v1/query_range that confines every
 // query to the namespaces a user may see, and the catalog of queries behind

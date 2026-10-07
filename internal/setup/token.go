@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Enzo Hilzinger
+// SPDX-License-Identifier: AGPL-3.0-only
+
 // Package setup holds where the one-time setup token comes from. The
 // installer writes the token to /etc/kwerft/setup-token on the server and only
 // its sha256 hash into the cluster, so Kwerft never sees the token at rest.

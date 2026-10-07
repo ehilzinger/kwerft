@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Enzo Hilzinger
+// SPDX-License-Identifier: AGPL-3.0-only
+
 // The Overview's infrastructure map (docs/plan.md, "Overview map"): draws
 // the layout from topology.ts as SVG, with hover and click focus, pan and
 // zoom, the Traffic ↔ Placement change and an inspector beside the map.

@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2026 Enzo Hilzinger
+# SPDX-License-Identifier: AGPL-3.0-only
+
 # Shared helpers for the Phase 7 spike scripts. Sourced, not executed.
 # shellcheck shell=bash
 

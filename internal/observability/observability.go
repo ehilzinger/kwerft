@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Enzo Hilzinger
+// SPDX-License-Identifier: AGPL-3.0-only
+
 // Package observability holds what the console and the reconcilers share
 // about the metrics, logs and alerting stack the installer runs in
 // kwerft-observability: service addresses, the labels Kwerft relies on, and

@@ -1,3 +1,6 @@
+/* SPDX-FileCopyrightText: 2026 Enzo Hilzinger */
+/* SPDX-License-Identifier: AGPL-3.0-only */
+
 /* Replicas, live logs and shells. Classes mirror docs/blueprint.html (.logs, .toggle). */
 
 .sm-note { font-size: 12px; font-weight: 400; }

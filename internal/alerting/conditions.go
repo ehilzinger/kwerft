@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Enzo Hilzinger
+// SPDX-License-Identifier: AGPL-3.0-only
+
 // Package alerting turns AlertRules into vmalert expressions, explains them
 // in plain language, talks to Alertmanager's API and sends test
 // notifications. The reconcilers (internal/controllers/alerting_*.go) and the

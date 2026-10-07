@@ -1,3 +1,6 @@
+/* SPDX-FileCopyrightText: 2026 Enzo Hilzinger */
+/* SPDX-License-Identifier: AGPL-3.0-only */
+
 /* The Overview's infrastructure map (components/InfraMap.tsx). Colours come
    from tokens.css, so both themes follow; mirrors docs/blueprint.html. */
 .imap .ch-h { flex-wrap: wrap; }

@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Enzo Hilzinger
+// SPDX-License-Identifier: AGPL-3.0-only
+
 import { createContext, useContext, useState, type FormEvent, type ReactNode } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { ApiError, accountApi, api, type Account as AccountData, type AccountSession, type Passkey, type SSOIdentity, type TOTPSetup, type User } from "../api";

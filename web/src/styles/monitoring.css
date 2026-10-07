@@ -1,3 +1,6 @@
+/* SPDX-FileCopyrightText: 2026 Enzo Hilzinger */
+/* SPDX-License-Identifier: AGPL-3.0-only */
+
 /* Monitoring: alerts, alert rules, channels, and the Overview's "needs attention" feed. Classes mirror docs/blueprint.html. */
 .li .ico.bad { background: var(--bad-bg); color: var(--bad); }
 .li .ico.warn { background: var(--warn-bg); color: var(--warn); }

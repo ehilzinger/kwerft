@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Enzo Hilzinger
+// SPDX-License-Identifier: AGPL-3.0-only
+
 // Pods of Apps and Tasks: replicas, live logs and shells. The server reaches
 // Kubernetes as the signed-in user, so what a role may do is Kubernetes RBAC
 // talking; `access` in the replicas answer says so ahead of time.

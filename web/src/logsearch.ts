@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Enzo Hilzinger
+// SPDX-License-Identifier: AGPL-3.0-only
+
 // Log search over VictoriaLogs (GET /api/v1/logs, /api/v1/logs/tail; see
 // internal/server/api_logsearch.go). The server confines every query to the
 // projects the user may read; owners and admins may add the platform's

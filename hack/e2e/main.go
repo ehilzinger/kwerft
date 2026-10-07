@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Enzo Hilzinger
+// SPDX-License-Identifier: AGPL-3.0-only
+
 // Command e2e installs a published Kwerft release on a fresh Hetzner Cloud
 // server, checks that it works the way a user would use it, and always
 // deletes the server again. The e2e workflow (.github/workflows/e2e.yml)

@@ -1,3 +1,6 @@
+/* SPDX-FileCopyrightText: 2026 Enzo Hilzinger */
+/* SPDX-License-Identifier: AGPL-3.0-only */
+
 /* New App wizard: Docker Compose and Template sources (pages/DeployImport.tsx). */
 .imp-label { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .imp-upload { position: relative; overflow: hidden; cursor: pointer; }

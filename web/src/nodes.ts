@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Enzo Hilzinger
+// SPDX-License-Identifier: AGPL-3.0-only
+
 // Clusters › Nodes (docs/phase5.md, W2): node pools of Hetzner Cloud
 // servers, the cluster's nodes, join commands for dedicated servers. The
 // server checks everything (control-plane counts included); the helpers

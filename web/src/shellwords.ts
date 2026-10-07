@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Enzo Hilzinger
+// SPDX-License-Identifier: AGPL-3.0-only
+
 // Commands are typed as one line and split like a POSIX shell splits words,
 // without running a shell: no variables, globs, pipes or redirection — for
 // those, the command is `sh -c '…'`. This is what people expect from

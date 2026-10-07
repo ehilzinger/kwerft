@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Enzo Hilzinger
+// SPDX-License-Identifier: AGPL-3.0-only
+
 // Package backups holds what the console's backup code shares and that
 // needs no Kubernetes: the recovery key's format, a small S3 client (SigV4)
 // for the connection check and the etcd snapshot uploads (etcd.go), and a

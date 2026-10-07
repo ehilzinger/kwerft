@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Enzo Hilzinger
+// SPDX-License-Identifier: AGPL-3.0-only
+
 // Backups (docs/phase6.md): Settings › Backups (the bucket, its write-only
 // access keys, the recovery key shown once, etcd snapshots) and the Backups
 // page (plans, "Back up now", Velero's backups, restores). Owners and

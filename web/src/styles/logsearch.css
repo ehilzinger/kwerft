@@ -1,3 +1,6 @@
+/* SPDX-FileCopyrightText: 2026 Enzo Hilzinger */
+/* SPDX-License-Identifier: AGPL-3.0-only */
+
 /* Log search (components/LogSearch.tsx): the log history from VictoriaLogs,
    in the terminal panel of the live log viewer (pods.css). */
 

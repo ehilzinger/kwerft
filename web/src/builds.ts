@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Enzo Hilzinger
+// SPDX-License-Identifier: AGPL-3.0-only
+
 // Builds from Git (docs/phase2.md): an App's builds, their logs, and the Git
 // connections that give Kwerft access to private repositories. The server
 // acts as the signed-in user, so a 403 is Kubernetes RBAC talking.

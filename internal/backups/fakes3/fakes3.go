@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Enzo Hilzinger
+// SPDX-License-Identifier: AGPL-3.0-only
+
 // Package fakes3 is an S3-compatible bucket for tests: objects, listing
 // with pages, multipart uploads, and SSE-C as Hetzner Object Storage does
 // it (an object written with a customer key is read only with the same

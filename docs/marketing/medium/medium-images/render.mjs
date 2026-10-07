@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Enzo Hilzinger
+// SPDX-License-Identifier: AGPL-3.0-only
+
 // Renders every <name>.html next to this file (or those starting with the
 // given prefix) to <name>.png with headless Chrome at 2x, sized from the SVG.
 import fs from 'node:fs';

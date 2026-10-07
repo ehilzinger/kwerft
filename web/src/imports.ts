@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Enzo Hilzinger
+// SPDX-License-Identifier: AGPL-3.0-only
+
 // Compose import and templates (Phase 6): both answer with a plan — the
 // Apps, Volumes and secret sets to create, and warnings — first as a dry run,
 // then created as the signed-in user in one request (undone if a step

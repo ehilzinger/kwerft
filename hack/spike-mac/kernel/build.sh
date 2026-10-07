@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# SPDX-FileCopyrightText: 2026 Enzo Hilzinger
+# SPDX-License-Identifier: AGPL-3.0-only
+
 # Builds the spike kernel: apple/containerization's kernel config at a pinned
 # tag plus kwerft.config, compiled with a native arm64 image that has pahole.
 #

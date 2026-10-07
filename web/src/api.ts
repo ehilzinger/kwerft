@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Enzo Hilzinger
+// SPDX-License-Identifier: AGPL-3.0-only
+
 // Thin client for the Kwerft REST API. Every call goes through here so auth,
 // error shapes and status handling live in one place. Session cookies are
 // HttpOnly; the browser sends them, this code never sees them.

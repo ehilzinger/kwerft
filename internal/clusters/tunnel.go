@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Enzo Hilzinger
+// SPDX-License-Identifier: AGPL-3.0-only
+
 package clusters
 
 // The agent tunnel: how the console reaches the Kubernetes API of a remote

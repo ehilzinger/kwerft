@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Enzo Hilzinger
+// SPDX-License-Identifier: AGPL-3.0-only
+
 // Package gittest is an in-memory Git host for tests: the parts of the
 // GitHub (/api/v3, as GitHub Enterprise serves it), GitLab (/api/v4) and
 // Gitea (/api/v1) REST APIs that internal/git uses, and smart-HTTP ref

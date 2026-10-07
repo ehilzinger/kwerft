@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Enzo Hilzinger
+// SPDX-License-Identifier: AGPL-3.0-only
+
 // Clusters as the console's lists see them (Phase 5, docs/phase5.md): every
 // list item carries the cluster its project lives in, and GET
 // /cluster-status says which clusters exist and which can be reached now.

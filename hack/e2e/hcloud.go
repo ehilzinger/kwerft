@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Enzo Hilzinger
+// SPDX-License-Identifier: AGPL-3.0-only
+
 package main
 
 // A minimal Hetzner Cloud API client: just what the e2e runs need (servers,

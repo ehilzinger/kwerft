@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Enzo Hilzinger
+// SPDX-License-Identifier: AGPL-3.0-only
+
 // Passkeys in the browser. The server sends WebAuthn options as JSON with
 // binary fields in base64url; the browser API wants ArrayBuffers and returns
 // them. These helpers convert both ways, so they work in every browser that

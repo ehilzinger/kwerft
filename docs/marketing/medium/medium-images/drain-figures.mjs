@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Enzo Hilzinger
+// SPDX-License-Identifier: AGPL-3.0-only
+
 // Figures for medium-drain-2026-10-06.md (the preStop sleep post).
 //   node drain-figures.mjs && node render.mjs drain-
 // Measured numbers are only the ones the post quotes.

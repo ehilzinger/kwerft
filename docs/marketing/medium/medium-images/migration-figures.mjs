@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Enzo Hilzinger
+// SPDX-License-Identifier: AGPL-3.0-only
+
 // Diagrams for "Moving a real production stack from Docker Compose onto my
 // own Kubernetes platform" (medium-migration-2026-10-06.md). Every label is
 // taken from the post; the only measured numbers are the ones it quotes.

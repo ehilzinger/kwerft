@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Enzo Hilzinger
+// SPDX-License-Identifier: AGPL-3.0-only
+
 // Package store keeps the console's own data — users, sessions and the audit
 // log — in SQLite. Everything about workloads lives in Kubernetes instead.
 package store

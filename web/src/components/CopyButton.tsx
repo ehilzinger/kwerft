@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Enzo Hilzinger
+// SPDX-License-Identifier: AGPL-3.0-only
+
 import { useEffect, useState } from "react";
 
 // Copies text to the clipboard and says so for a moment. Where the clipboard

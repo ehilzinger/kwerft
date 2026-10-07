@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Enzo Hilzinger
+// SPDX-License-Identifier: AGPL-3.0-only
+
 // Secret sets (Phase 6): a project's write-only values. The server writes
 // them as the signed-in user; nothing here ever receives a value except
 // reveal (owners and admins, after their password).

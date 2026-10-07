@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Enzo Hilzinger
+// SPDX-License-Identifier: AGPL-3.0-only
+
 // Diagrams for the self-upgrade post (medium-upgrades-2026-10-06.md).
 // Every label is taken from the post; nothing here is measured data.
 //

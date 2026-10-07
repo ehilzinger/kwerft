@@ -1,4 +1,7 @@
 #!/usr/bin/env bats
+# SPDX-FileCopyrightText: 2026 Enzo Hilzinger
+# SPDX-License-Identifier: AGPL-3.0-only
+
 # hack/release.sh: the parts that need neither a registry nor ko.
 
 setup() {

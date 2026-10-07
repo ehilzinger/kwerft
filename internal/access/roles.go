@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Enzo Hilzinger
+// SPDX-License-Identifier: AGPL-3.0-only
+
 // Package access is the one description of what each console role may do.
 // The Access page's role matrix is rendered from it, the console API takes
 // its own checks (members, audit log) from it, and tests hold it against the

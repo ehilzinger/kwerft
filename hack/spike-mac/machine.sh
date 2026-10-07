@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# SPDX-FileCopyrightText: 2026 Enzo Hilzinger
+# SPDX-License-Identifier: AGPL-3.0-only
+
 # Phase 7 spike, option B: k3s inside a persistent `container machine`,
 # installed by the real install/install.sh. The machine mounts the Mac home
 # directory at the same path, so this checkout is visible inside it.

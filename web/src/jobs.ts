@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Enzo Hilzinger
+// SPDX-License-Identifier: AGPL-3.0-only
+
 // Client for the jobs API: shared Volumes, Tasks (one-off runs), Schedules and
 // the read-only Domains list. Like workloads.ts, the server acts as the
 // signed-in user, so a 403 is Kubernetes RBAC talking.

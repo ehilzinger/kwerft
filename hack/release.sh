@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# SPDX-FileCopyrightText: 2026 Enzo Hilzinger
+# SPDX-License-Identifier: AGPL-3.0-only
+
 # Release building blocks, shared by .github/workflows/release.yml and
 # `make release-dry-run` so a release can be rehearsed on a Mac without Docker.
 # See RELEASING.md.
@@ -536,7 +539,7 @@ main() {
     trailers)     cmd_trailers "$@" ;;
     crdcompat)    cmd_crdcompat "$@" ;;
     manifest)     cmd_manifest "$@" ;;
-    *) sed -n '2,30p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' >&2; exit 2 ;;
+    *) sed -n '5,33p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' >&2; exit 2 ;;
   esac
 }
 

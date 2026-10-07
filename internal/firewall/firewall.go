@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Enzo Hilzinger
+// SPDX-License-Identifier: AGPL-3.0-only
+
 // Package firewall turns FirewallRules into host rules on every node, safely.
 //
 // The installer's nftables table "inet kwerft" is the safety net: its base

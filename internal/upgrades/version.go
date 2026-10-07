@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Enzo Hilzinger
+// SPDX-License-Identifier: AGPL-3.0-only
+
 // Package upgrades is what the Upgrade controller, the release discovery and
 // `kwerft upgrade-runner` share (docs/phase6-upgrades.md): versions, the
 // release manifests in the public install repository, maintenance windows,
