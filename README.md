@@ -102,5 +102,10 @@ whoever offers a modified Kwerft to others over a network must publish their
 changes. A commercial license is available on request for companies that
 cannot use the AGPL. All dependencies are Apache-2.0 or MIT.
 
+Contributions are welcome after signing the [contributor license
+agreement](CLA.md) (see [CONTRIBUTING.md](CONTRIBUTING.md)). "Kwerft" is a
+trademark of Enzo Hilzinger; how the name may be used is in the
+[trademark policy](TRADEMARKS.md).
+
 Contributions need a contributor license agreement, which is being prepared;
 see [CONTRIBUTING.md](CONTRIBUTING.md). "Kwerft" is a trademark of its author.

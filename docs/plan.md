@@ -301,7 +301,9 @@ Decided 2026-10-05 (decision table: License, Business model).
 - **Kwerft for Mac (Phase 7).** Open source; the signed, notarised, auto-updating App Store build is paid.
 - **Later, only if larger customers ask:** paid add-ons that only organisations need (SAML/SCIM, long audit retention and SIEM export, compliance reports, fleet-scale cluster management) — never anything a single team needs to run safely.
 - **Not a business:** Hetzner's referral program pays in account credit; sponsorships are welcome but not planned for.
-- **Before the public beta:** license headers (the LICENSE file and the public repository are in place since 2026-10-05; pull requests wait for the CLA), CLA (with a CLA check on pull requests), trademark registration for "Kwerft", a "Support & hosting — get in touch" section on kwerft.dev to test demand before building billing.
+- **Before the public beta:** license headers (the LICENSE file and the public repository are in place since 2026-10-05), CLA (with a CLA check on pull requests), trademark registration for "Kwerft", a "Support & hosting — get in touch" section on kwerft.dev to test demand before building billing.
+  - Done 2026-10-07: SPDX headers on every source file, checked by `make lint`; [CLA.md](../CLA.md) (version 1.0, a license grant with the right to relicense, no copyright assignment, German law) and the `cla` check (`.github/workflows/cla.yml`: sign by commenting a sentence on the pull request; signatures in `signatures/cla-v1.json` on the branch `cla-signatures`); [TRADEMARKS.md](../TRADEMARKS.md).
+  - Still open: a lawyer's review of CLA.md and TRADEMARKS.md (both marked as drafts); requiring the `cla` status for main in the repository's branch protection; filing the trademark (the owner's: [docs/trademark-filing.md](trademark-filing.md)); the kwerft.dev section.
 
 ## Roadmap (~28 weeks to the public beta, then 8 for the Mac app; 1–2 engineers)
 

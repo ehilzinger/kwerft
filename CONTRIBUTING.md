@@ -5,9 +5,17 @@ Thank you for your interest. Kwerft is licensed under the
 under a commercial license. That dual licensing needs every contributor to
 sign a contributor license agreement (CLA) first.
 
-**The CLA is still being prepared, so pull requests cannot be merged yet.**
-Issues are welcome: bug reports, questions and ideas. Once the CLA is in
-place, a check on every pull request will ask you to sign it.
+The agreement is [CLA.md](CLA.md). You keep your copyright; you give the
+maintainer a license to use your contributions under the AGPL and the
+commercial license. When you open your first pull request, a check named
+**cla** asks you to sign by commenting one sentence on it; that covers all
+your later contributions. Contributing for an employer? See section 5 of the
+agreement. (The agreement is still a draft pending legal review.)
+
+Issues are welcome too: bug reports, questions and ideas.
+
+The name "Kwerft" and its logo are covered by the
+[trademark policy](TRADEMARKS.md), not by the code's license.
 
 Security problems: please do not open a public issue; write to the address
 on the author's GitHub profile instead.
