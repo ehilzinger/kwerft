@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Enzo Hilzinger
+// SPDX-License-Identifier: AGPL-3.0-only
+
 // Package hubble reads Cilium's flow log from the Hubble relay and keeps what
 // the console shows about it: per policy, the connections it allowed in the
 // last hour, and the connections policies dropped.

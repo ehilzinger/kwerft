@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Enzo Hilzinger
+// SPDX-License-Identifier: AGPL-3.0-only
+
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Terminal as XTerm } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";

@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Enzo Hilzinger
+// SPDX-License-Identifier: AGPL-3.0-only
+
 // Mounts of an App or Task that the console edits: shared Volumes of the
 // project and Secrets as files. Disks per replica (size) are kept as they are.
 

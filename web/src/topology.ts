@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Enzo Hilzinger
+// SPDX-License-Identifier: AGPL-3.0-only
+
 // The Overview's infrastructure map (docs/plan.md, "Overview map"): one
 // cluster's apps, jobs, volumes, domains, traffic rules and servers from
 // GET /topology, turned into a model of entities and links, and laid out

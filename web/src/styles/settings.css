@@ -1,3 +1,6 @@
+/* SPDX-FileCopyrightText: 2026 Enzo Hilzinger */
+/* SPDX-License-Identifier: AGPL-3.0-only */
+
 /* Settings page. Radio options follow the blueprint's setup wizard. */
 .settings { max-width: 920px; }
 .settings .current { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }

@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Enzo Hilzinger
+// SPDX-License-Identifier: AGPL-3.0-only
+
 // Package controllers holds the reconcilers that turn kwerft.dev resources into
 // native Kubernetes objects. All writes use server-side apply with the "kwerft"
 // field manager, so hand edits to fields Kwerft does not manage survive.

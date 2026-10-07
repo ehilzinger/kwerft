@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Enzo Hilzinger
+// SPDX-License-Identifier: AGPL-3.0-only
+
 // Inline stroke icons shared by the console. 16×16 grid, currentColor.
 const paths = {
   logo: <><path d="M5 9h22l-4 11H9z" /><path d="M9 14h14" /><path d="M3 27l26-4" /></>,

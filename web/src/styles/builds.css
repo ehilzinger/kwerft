@@ -1,3 +1,6 @@
+/* SPDX-FileCopyrightText: 2026 Enzo Hilzinger */
+/* SPDX-License-Identifier: AGPL-3.0-only */
+
 /* Builds tab, Git source fields and Git connections. Classes mirror docs/blueprint.html. */
 .small-note { font-size: 12.5px; }
 .toolbar .push { margin-left: auto; }

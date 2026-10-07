@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Enzo Hilzinger
+// SPDX-License-Identifier: AGPL-3.0-only
+
 // Cover images for the five Kwerft posts: the first image of each post, which
 // Medium also uses as the preview in feeds and when the post is shared.
 // 720×378 (1.9:1, the usual link-preview shape), rendered at 2x.

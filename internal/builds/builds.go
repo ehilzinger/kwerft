@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Enzo Hilzinger
+// SPDX-License-Identifier: AGPL-3.0-only
+
 // Package builds holds what the Build reconciler, the webhook handler and
 // the console share about Git builds: where builds run, where images go, and
 // how a Build is created.

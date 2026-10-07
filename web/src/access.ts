@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Enzo Hilzinger
+// SPDX-License-Identifier: AGPL-3.0-only
+
 // Members, invites, roles and the audit log: the API behind the Access page
 // and the public invite page.
 

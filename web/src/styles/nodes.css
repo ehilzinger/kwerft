@@ -1,3 +1,6 @@
+/* SPDX-FileCopyrightText: 2026 Enzo Hilzinger */
+/* SPDX-License-Identifier: AGPL-3.0-only */
+
 /* Clusters › Nodes */
 .nodes-pools { display: grid; gap: 12px; margin-bottom: 18px; }
 .nodes-empty { margin-bottom: 18px; }

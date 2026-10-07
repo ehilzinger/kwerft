@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Enzo Hilzinger
+// SPDX-License-Identifier: AGPL-3.0-only
+
 import { LOCAL, useClusters } from "../clusters";
 import { Icon } from "./Icon";
 import "../styles/workloads.css";

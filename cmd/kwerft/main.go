@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Enzo Hilzinger
+// SPDX-License-Identifier: AGPL-3.0-only
+
 // Command kwerft runs the Kwerft console: REST/WebSocket API, the reconcilers
 // for kwerft.dev resources, and the embedded web UI — one binary. `kwerft
 // agent` runs the reconcilers in a remote cluster with a tunnel to the

@@ -1,3 +1,6 @@
+/* SPDX-FileCopyrightText: 2026 Enzo Hilzinger */
+/* SPDX-License-Identifier: AGPL-3.0-only */
+
 /* Access page (members, roles, audit) and the invite page. Classes mirror docs/blueprint.html. */
 .matrix td.c, .matrix th.c { text-align: center; }
 .matrix .yes { color: var(--ok); font-weight: 600; }

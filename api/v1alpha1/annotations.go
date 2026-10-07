@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Enzo Hilzinger
+// SPDX-License-Identifier: AGPL-3.0-only
+
 package v1alpha1
 
 // AnnotationRestartedAt on an App asks for a rolling restart: the App

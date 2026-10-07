@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Enzo Hilzinger
+// SPDX-License-Identifier: AGPL-3.0-only
+
 // Package jointoken issues and checks the short-lived tokens that let a
 // server join a cluster (docs/phase5.md › Join material).
 //

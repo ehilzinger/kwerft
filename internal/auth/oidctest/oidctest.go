@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Enzo Hilzinger
+// SPDX-License-Identifier: AGPL-3.0-only
+
 // Package oidctest is an in-process OpenID Connect provider for tests:
 // discovery, signing keys, an authorization step without a browser and a
 // token endpoint that checks the client, the redirect URI and PKCE.

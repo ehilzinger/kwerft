@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Enzo Hilzinger
+// SPDX-License-Identifier: AGPL-3.0-only
+
 // Package templates is the catalog of ready-made Apps the New App wizard
 // offers (PostgreSQL, Redis, MinIO, n8n, Plausible, …). Each template is one
 // YAML file compiled into the binary: its parameters (with defaults and

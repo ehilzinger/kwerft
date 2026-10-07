@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Enzo Hilzinger
+// SPDX-License-Identifier: AGPL-3.0-only
+
 // Settings: the console's hostname, the apps base domain and how app
 // certificates are issued (ConsoleSettings in the cluster). Everyone reads
 // them; owners and admins change them. The DNS token is write-only.

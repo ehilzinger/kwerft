@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Enzo Hilzinger
+// SPDX-License-Identifier: AGPL-3.0-only
+
 // Command crdcompat checks that the chart's CRDs stay compatible with those
 // of an earlier release, so a rollback to that release keeps working: an
 // upgrade rolls back the Helm releases but never the CRDs

@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Enzo Hilzinger
+// SPDX-License-Identifier: AGPL-3.0-only
+
 // Package auth holds password hashing, session tokens and the request
 // checks the HTTP API relies on.
 package auth

@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Enzo Hilzinger
+// SPDX-License-Identifier: AGPL-3.0-only
+
 // Alerting (docs/phase3.md, W3's API): firing, silenced and resolved alerts,
 // alert rules and notification channels, plus the helpers the Monitoring tabs
 // and the Overview's "needs attention" feed share. The server is the

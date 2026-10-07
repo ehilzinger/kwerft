@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Enzo Hilzinger
+// SPDX-License-Identifier: AGPL-3.0-only
+
 // Package install embeds the installer and join.sh, which the console
 // serves at /install.sh and /join.sh: a node joining a cluster runs the
 // installer of the console's own version (the same k3s and Cilium pins).

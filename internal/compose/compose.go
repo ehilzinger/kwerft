@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Enzo Hilzinger
+// SPDX-License-Identifier: AGPL-3.0-only
+
 // Package compose turns a Docker Compose file into Kwerft objects
 // (importplan.Plan): every service becomes an App, named volumes become
 // Volumes, environment values whose names look secret go into the App's own

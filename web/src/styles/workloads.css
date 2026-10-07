@@ -1,3 +1,6 @@
+/* SPDX-FileCopyrightText: 2026 Enzo Hilzinger */
+/* SPDX-License-Identifier: AGPL-3.0-only */
+
 /* Apps, app detail and the deploy wizard. Classes mirror docs/blueprint.html. */
 .ph h1 { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .ph .sub { margin: 2px 0 0; color: var(--muted); font-size: 13px; }

@@ -1,3 +1,6 @@
+/* SPDX-FileCopyrightText: 2026 Enzo Hilzinger */
+/* SPDX-License-Identifier: AGPL-3.0-only */
+
 /* Settings › Backups and the Backups page. */
 .backup-state { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; font-size: 13px; }
 .backup-state .end { margin-left: auto; font-size: 13px; }

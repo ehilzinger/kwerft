@@ -1,3 +1,6 @@
+/* SPDX-FileCopyrightText: 2026 Enzo Hilzinger */
+/* SPDX-License-Identifier: AGPL-3.0-only */
+
 /* Network › Server firewall */
 .fw-toolbar .push { margin-left: auto; }
 .fw-table .row-acts { text-align: right; white-space: nowrap; }

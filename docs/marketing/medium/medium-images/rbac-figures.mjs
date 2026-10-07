@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Enzo Hilzinger
+// SPDX-License-Identifier: AGPL-3.0-only
+
 // Diagrams for medium-impersonation-2026-10-06.md (Kubernetes RBAC as the
 // authorization layer, write-only secrets). Every label comes from the post;
 // nothing here is measured data.

@@ -1,4 +1,7 @@
 #!/usr/bin/env bats
+# SPDX-FileCopyrightText: 2026 Enzo Hilzinger
+# SPDX-License-Identifier: AGPL-3.0-only
+
 # Unit tests for install.sh that run anywhere (no root, no Ubuntu needed).
 # Stage behaviour on real servers is covered by test/e2e.
 

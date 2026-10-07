@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Enzo Hilzinger
+// SPDX-License-Identifier: AGPL-3.0-only
+
 // Package web embeds the built console UI (web/dist) into the Go binary.
 //
 // Run `npm run build` in this directory (or `make web`) before `go build`.

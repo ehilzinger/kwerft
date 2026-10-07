@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Enzo Hilzinger
+// SPDX-License-Identifier: AGPL-3.0-only
+
 // Package hetznertest is an in-memory Hetzner Cloud DNS API for tests: zones
 // and their RRsets, behind one token.
 package hetznertest

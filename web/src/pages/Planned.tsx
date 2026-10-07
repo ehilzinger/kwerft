@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Enzo Hilzinger
+// SPDX-License-Identifier: AGPL-3.0-only
+
 // Placeholder for sections that land in later roadmap phases (docs/plan.md).
 export function Planned({ title, phase, summary }: { title: string; phase: string; summary: string }) {
   return (

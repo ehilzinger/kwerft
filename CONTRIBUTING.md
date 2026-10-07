@@ -19,3 +19,12 @@ The name "Kwerft" and its logo are covered by the
 
 Security problems: please do not open a public issue; write to the address
 on the author's GitHub profile instead.
+
+## License headers
+
+Every source file (`.go`, `.ts`, `.tsx`, `.js`, `.mjs`, `.css`, `.sh`,
+`.bats`) starts with the lines `SPDX-FileCopyrightText: 2026 Enzo Hilzinger`
+and `SPDX-License-Identifier: AGPL-3.0-only` in its comment syntax (after a
+shebang, if any); `make lint` and CI run `hack/check-license-headers.sh` to
+enforce it, and `make generate` adds them to generated Go files from
+`hack/boilerplate.go.txt`.

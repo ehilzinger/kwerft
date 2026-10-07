@@ -1,3 +1,6 @@
+/* SPDX-FileCopyrightText: 2026 Enzo Hilzinger */
+/* SPDX-License-Identifier: AGPL-3.0-only */
+
 /* Network › Traffic rules (docs/blueprint.html, Network view). */
 .t tr.off td { color: var(--muted); }
 .tr-table .nm, .tr-table td.mono { white-space: nowrap; }

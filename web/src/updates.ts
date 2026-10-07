@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Enzo Hilzinger
+// SPDX-License-Identifier: AGPL-3.0-only
+
 // Settings › Updates (docs/phase6-upgrades.md › API and UI): the versions
 // each cluster runs, what could be installed, the update policy, upgrades
 // with their live progress, and the history. Owners start and cancel

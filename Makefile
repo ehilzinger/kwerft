@@ -41,10 +41,10 @@ release-dry-run: web ## Build release artifacts into dist/release without publis
 
 .PHONY: generate
 generate: ## Regenerate deepcopy, apply configurations and CRDs from api/v1alpha1
-	$(CONTROLLER_GEN) object paths=./api/...
+	$(CONTROLLER_GEN) object:headerFile=hack/boilerplate.go.txt paths=./api/...
 	@# controller-gen leaves files of removed types behind; start from scratch.
 	rm -rf api/applyconfiguration
-	$(CONTROLLER_GEN) applyconfiguration paths=./api/...
+	$(CONTROLLER_GEN) applyconfiguration:headerFile=hack/boilerplate.go.txt paths=./api/...
 	$(CONTROLLER_GEN) crd paths=./api/... output:crd:dir=charts/kwerft/crds
 
 .PHONY: verify-generate
@@ -57,15 +57,19 @@ verify-generate: generate ## Fail if generated files are out of date
 test: dist-stub ## Run Go tests, incl. controller tests against a real API server
 	KUBEBUILDER_ASSETS="$$($(SETUP_ENVTEST) use $(ENVTEST_K8S) --bin-dir $(CURDIR)/bin/envtest -p path)" $(GO) test ./...
 
+.PHONY: license-headers
+license-headers: ## Fail if a source file lacks its SPDX license header
+	hack/check-license-headers.sh
+
 .PHONY: lint
-lint: dist-stub ## gofmt, go vet, web typecheck and unit tests
+lint: dist-stub license-headers ## License headers, gofmt, go vet, web typecheck and unit tests
 	@files=$$(gofmt -l . | grep -vE '^(web/node_modules|\.claude/worktrees|dist)/'); test -z "$$files" || { echo "$$files"; exit 1; }
 	$(GO) vet ./...
 	cd web && npm run typecheck && npm test
 
 .PHONY: test-install
 test-install: ## shellcheck + bats for the installer
-	shellcheck install/install.sh install/join.sh hack/dev-server.sh hack/release.sh
+	shellcheck install/install.sh install/join.sh hack/dev-server.sh hack/release.sh hack/check-license-headers.sh
 	bats install/test
 
 .PHONY: helm-lint

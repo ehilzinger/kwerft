@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# SPDX-FileCopyrightText: 2026 Enzo Hilzinger
+# SPDX-License-Identifier: AGPL-3.0-only
+
 # Served by the console at https://<console>/join.sh with __CONSOLE_URL__
 # replaced. Fetches the installer that matches the console's version and runs
 # it in join mode, so a node never runs a newer or older installer than the

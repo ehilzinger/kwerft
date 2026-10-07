@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Enzo Hilzinger
+// SPDX-License-Identifier: AGPL-3.0-only
+
 // Package git talks to Git hosts on behalf of a GitConnection: it checks
 // credentials, resolves branch heads, finds Dockerfiles, creates the webhooks
 // that trigger builds and reports build results back as commit statuses or

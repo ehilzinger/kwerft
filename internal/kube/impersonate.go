@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Enzo Hilzinger
+// SPDX-License-Identifier: AGPL-3.0-only
+
 // Package kube gives the console Kubernetes clients that act as the signed-in
 // user. Kubernetes RBAC, not the console, is the final gate for everything a
 // user does: the console's own service account only holds the right to

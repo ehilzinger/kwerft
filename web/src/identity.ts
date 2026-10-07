@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Enzo Hilzinger
+// SPDX-License-Identifier: AGPL-3.0-only
+
 // Identity: single sign-on (the sign-in button, linked identities and the
 // owner's settings), API tokens and kubeconfigs, and the data key that
 // encrypts authenticator-app secrets.

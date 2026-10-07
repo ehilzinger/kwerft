@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Enzo Hilzinger
+// SPDX-License-Identifier: AGPL-3.0-only
+
 // Metrics API (internal/server/api_metrics.go) and the pure helpers behind
 // the charts: number formats, axis ticks, gaps. Values come from
 // VictoriaMetrics; points are [unix seconds, value].

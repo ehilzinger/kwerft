@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# SPDX-FileCopyrightText: 2026 Enzo Hilzinger
+# SPDX-License-Identifier: AGPL-3.0-only
+
 # Install or upgrade Kwerft on a test server from this checkout — no Docker and
 # no registry needed. Builds the UI and a console image locally (with ko),
 # copies the installer, chart and image over SSH, and runs the installer with

@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Enzo Hilzinger
+// SPDX-License-Identifier: AGPL-3.0-only
+
 // Package clusters is the seam between the multi-cluster parts of Kwerft:
 // the agent tunnel (which knows how to reach a remote cluster's Kubernetes
 // API) and the console (which acts as the signed-in user in whichever
