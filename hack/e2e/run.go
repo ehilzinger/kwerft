@@ -559,7 +559,7 @@ func (r *runner) createMachine(ctx context.Context, name string, locations []str
 				Networks: networks,
 			}
 			req.PublicNet.EnableIPv4, req.PublicNet.EnableIPv6 = true, true
-			srv, err := r.cloud.createServer(ctx, req)
+			srv, err := r.createWithinLimits(ctx, req)
 			var ae *apiError
 			if errors.As(err, &ae) && unavailable(ae) {
 				tried = append(tried, fmt.Sprintf("%s in %s: %s", typ, loc, ae.Code))
@@ -582,6 +582,32 @@ func (r *runner) createMachine(ctx context.Context, name string, locations []str
 		}
 	}
 	return nil, fmt.Errorf("no server could be created: %s", strings.Join(tried, "; "))
+}
+
+// limitWait is how long a server waits for the project's resource limits
+// (cores, primary IPs) to free up.
+const limitWait = 15 * time.Minute
+
+// createWithinLimits creates the server, asking again while the project is
+// at one of its resource limits: the e2e runs of a release, and runs of the
+// release before still cleaning up, share one project, so a limit is usually
+// gone within minutes (v0.6.0-rc.8, rc.9 and rc.12 each lost a run to it).
+func (r *runner) createWithinLimits(ctx context.Context, req createServerRequest) (*hServer, error) {
+	var srv *hServer
+	start := r.now()
+	err := r.waitFor(ctx, limitWait, func(ctx context.Context) (bool, error) {
+		var err error
+		srv, err = r.cloud.createServer(ctx, req)
+		var ae *apiError
+		if errors.As(err, &ae) && ae.Code == "resource_limit_exceeded" {
+			return false, err
+		}
+		return true, err
+	})
+	if waited := r.now().Sub(start); err == nil && waited >= r.cfg.Poll {
+		r.rep.note("%s waited %s for the project's resource limits (another run held servers).", req.Name, fmtDuration(waited))
+	}
+	return srv, err
 }
 
 // describe adds a server to the report's server line.

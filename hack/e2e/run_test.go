@@ -571,6 +571,20 @@ func TestServerTypeAndLocationFallback(t *testing.T) {
 	}
 }
 
+// A project at its resource limits (other runs hold servers) is asked again
+// until they free up.
+func TestServerWaitsForProjectLimits(t *testing.T) {
+	h := newHarness(t, "0.5.0", "")
+	h.cloud.atLimit = 3
+	h.runner.run(context.Background())
+	if !h.runner.rep.passed() {
+		t.Fatalf("run failed:\n%s", h.markdown())
+	}
+	if h.cloud.atLimit != 0 || !strings.Contains(h.markdown(), "for the project's resource limits") {
+		t.Errorf("limit left %d; report:\n%s", h.cloud.atLimit, h.markdown())
+	}
+}
+
 func TestNoServerAvailable(t *testing.T) {
 	h := newHarness(t, "0.5.0", "")
 	for _, c := range []string{"cx33/nbg1", "cx33/fsn1", "cx43/nbg1", "cx43/fsn1"} {

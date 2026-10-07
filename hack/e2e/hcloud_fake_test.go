@@ -39,6 +39,9 @@ type fakeCloud struct {
 	images   map[string]bool
 	// unavailable "type/location" combinations answer resource_unavailable.
 	unavailable map[string]bool
+	// atLimit: server creations answer resource_limit_exceeded this many
+	// more times.
+	atLimit int
 	// userData of each created server, by id.
 	userData map[int64]string
 	// failDeletes makes server deletions fail with 500.
@@ -172,6 +175,11 @@ func (f *fakeCloud) serve(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewDecoder(r.Body).Decode(&in)
 		if f.unavailable[in.ServerType+"/"+in.Location] {
 			apiErr(w, 412, "resource_unavailable", "server type not available here")
+			return
+		}
+		if f.atLimit > 0 {
+			f.atLimit--
+			apiErr(w, 403, "resource_limit_exceeded", "shared core limit exceeded")
 			return
 		}
 		if _, ok := f.types[in.ServerType]; !ok || !f.images[in.Image] || len(in.SSHKeys) == 0 {
