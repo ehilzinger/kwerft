@@ -216,8 +216,12 @@ func (c *Client) DeleteRRSet(ctx context.Context, zone, name, typ string) error 
 	return err
 }
 
+// rrsetPath addresses one RRset. Hetzner matches the name literally, and
+// url.PathEscape writes a wildcard's "*" as %2A, which it answers with 404
+// (cloud.kwerft.dev's *.apps record, 2026-10-07, when a second node's
+// address was added): "*" stays as it is, as RFC 3986 allows in a path.
 func rrsetPath(zone, name, typ string) string {
-	return "/zones/" + url.PathEscape(zone) + "/rrsets/" + url.PathEscape(name) + "/" + url.PathEscape(typ)
+	return "/zones/" + url.PathEscape(zone) + "/rrsets/" + strings.ReplaceAll(url.PathEscape(name), "%2A", "*") + "/" + url.PathEscape(typ)
 }
 
 type meta struct {

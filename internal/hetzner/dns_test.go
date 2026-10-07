@@ -71,6 +71,27 @@ func TestClientAgainstFake(t *testing.T) {
 		t.Errorf("deleting a missing RRset: %v", err)
 	}
 
+	// A wildcard RRset is changed and deleted by its literal name.
+	if err := c.CreateRRSet(ctx, "example.com", hetzner.RRSet{Name: "*.apps", Type: "A", TTL: &ttl,
+		Records: []hetzner.Record{{Value: "203.0.113.24"}}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.SetRecords(ctx, "example.com", "*.apps", "A", []hetzner.Record{{Value: "203.0.113.24"}, {Value: "198.51.100.7"}}); err != nil {
+		t.Fatalf("set records of *.apps: %v", err)
+	}
+	if err := c.SetLabels(ctx, "example.com", "*.apps", "A", map[string]string{"kwerft.dev/managed-by": "kwerft"}); err != nil {
+		t.Fatalf("set labels of *.apps: %v", err)
+	}
+	if sets, err := c.RRSets(ctx, "example.com", "A"); err != nil || len(sets) != 1 || len(sets[0].Values()) != 2 {
+		t.Errorf("*.apps = %+v, %v", sets, err)
+	}
+	if err := c.DeleteRRSet(ctx, "example.com", "*.apps", "A"); err != nil {
+		t.Fatal(err)
+	}
+	if sets, _ := c.RRSets(ctx, "example.com", "A"); len(sets) != 0 {
+		t.Errorf("*.apps not deleted: %+v", sets)
+	}
+
 	srv.SetToken("other")
 	if _, err := c.Zones(ctx); !errors.Is(err, hetzner.ErrTokenRejected) {
 		t.Errorf("wrong token: %v", err)

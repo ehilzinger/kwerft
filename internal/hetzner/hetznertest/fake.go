@@ -183,7 +183,9 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusUnauthorized, "unauthorized", "unable to authenticate")
 		return
 	}
-	parts := strings.Split(strings.Trim(r.URL.Path, "/"), "/")
+	// The path as sent, not decoded: like Hetzner's API, an RRset name is
+	// matched literally, so a wildcard sent as %2A.apps is not *.apps.
+	parts := strings.Split(strings.Trim(r.URL.EscapedPath(), "/"), "/")
 	if h, ok := s.handlers[parts[0]]; ok {
 		if s.State == nil {
 			s.State = map[string]any{}
