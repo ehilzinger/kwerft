@@ -422,6 +422,10 @@ Work split and contracts: `docs/phase2.md`.
 Things found while building Phases 1–4 that are not done yet. Pick them up
 before the beta or move them into a phase.
 
+**Rebalance after adding nodes (decided 2026-10-07)**
+- Kubernetes never moves running pods: a new node gets DaemonSets and newly created pods, while existing Apps stay where they are until their next rollout (new revision, Restart, a changed secret value, scaling up). Kwerft renders no spread rules of its own; "Replicas spread across nodes when possible" is the scheduler's default soft spreading (`ScheduleAnyway`), so two replicas can still share a node.
+- **A "Rebalance" action on a cluster's Nodes page** (chosen over running the Kubernetes descheduler, which would restart pods nobody asked to move): it lists the Apps it can move and those it cannot (pinned to a local-nvme Volume or a stateful App's own local disk; Apps sharing a Volume with its pods' node preference), then rolls the movable ones out one at a time, as Restart does (rolling update, PodDisruptionBudgets respected), waiting for each to be Ready before the next, and reports where replicas ended up. Owners and admins only, audited, cancellable; skips Apps with one replica unless asked (a restart of those is a short outage without a health check). Consider at the same time: real spreading for multi-replica Apps (a `topologySpreadConstraints` on `kubernetes.io/hostname`, `ScheduleAnyway`), so a rollout actually lands replicas on different nodes, and offering Rebalance right after a node joins.
+
 **Node pools (found on `kwerft-dev-test`, 2026-10-05)**
 - Why both workers stopped reporting at once (≈10 min after the rc.2 → rc.3 installer re-run) is still unknown: the pool's code only explains why they were then replaced together (repairs had no limit). Repairs now go one at a time and hold while most nodes are NotReady, and the Nodes of deleted servers are deleted (`docs/phase6-upgrades.md` › As built (G1)). If it happens again, look at the workers' `journalctl -u k3s-agent` and the server's nftables before the 15 minutes run out.
 
