@@ -657,12 +657,7 @@ func waitForRestore(t *testing.T, name string, check func(*kwerftv1.RestoreStatu
 // send in headers (the storage answers 400 otherwise).
 func serveContents(t *testing.T, restore string, body []byte) {
 	t.Helper()
-	key, err := backups.SSECustomerKey(backups.NewRecoveryKey())
-	if err != nil {
-		t.Fatal(err)
-	}
-	putSecret(t, VeleroNamespace, BackupEncryptionSecret, map[string][]byte{BackupEncryptionSecretKey: key})
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	serveDownload(t, restore, func(w http.ResponseWriter, r *http.Request) {
 		// The key the Secret holds now: a backup target an earlier test
 		// configured may still be writing its own key there.
 		want := http.Header{}
@@ -680,7 +675,18 @@ func serveContents(t *testing.T, restore string, body []byte) {
 			}
 		}
 		_, _ = w.Write(body)
-	}))
+	})
+}
+
+// serveDownload hands out a DownloadRequest whose URL handler answers.
+func serveDownload(t *testing.T, restore string, handler http.HandlerFunc) {
+	t.Helper()
+	key, err := backups.SSECustomerKey(backups.NewRecoveryKey())
+	if err != nil {
+		t.Fatal(err)
+	}
+	putSecret(t, VeleroNamespace, BackupEncryptionSecret, map[string][]byte{BackupEncryptionSecretKey: key})
+	srv := httptest.NewServer(handler)
 	t.Cleanup(srv.Close)
 	name := VeleroRestoreName(restore) + "-contents"
 	eventually(t, func() error {
@@ -872,6 +878,26 @@ func TestRestoreRefused(t *testing.T) {
 	serveContents(t, "rs-no-app", tarball(t, map[string]any{}))
 	waitForRestore(t, "rs-no-app", func(st *kwerftv1.RestoreStatus) error {
 		if st.Phase != RestoreFailed || !strings.Contains(st.Message, "app ghost") {
+			return fmt.Errorf("%+v", st)
+		}
+		return nil
+	})
+}
+
+// A download the storage keeps refusing is said in the Restore's status,
+// without the pre-signed URL, rather than "Reading the backup's contents."
+// for good.
+func TestRestoreSaysWhyTheDownloadFails(t *testing.T) {
+	requireEnvtest(t)
+	backupProject(t, "rs-refused", kwerftv1.ProjectSpec{})
+	veleroBackup(t, "kwerft-refused-1", "Completed", "rs-refused")
+	restore(t, "rs-refused-dl", kwerftv1.RestoreSpec{Backup: "kwerft-refused-1", Project: "rs-refused", Apps: []string{"web"}})
+	serveDownload(t, "rs-refused-dl", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusForbidden)
+		_, _ = w.Write([]byte("<Error><Code>AccessDenied</Code></Error>"))
+	})
+	waitForRestore(t, "rs-refused-dl", func(st *kwerftv1.RestoreStatus) error {
+		if st.Phase != RestorePending || !strings.Contains(st.Message, "the storage answered 403") || strings.Contains(st.Message, "X-Amz") {
 			return fmt.Errorf("%+v", st)
 		}
 		return nil

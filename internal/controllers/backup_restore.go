@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"slices"
 	"strings"
 	"sync"
@@ -558,14 +559,25 @@ func (r *RestoreReconciler) backupContents(ctx context.Context, rs *kwerftv1.Res
 	if nestedString(dr, "status", "phase") != "Processed" || downloadURL == "" {
 		if r.now().Sub(dr.GetCreationTimestamp().Time) > contentsWait {
 			_ = r.Delete(ctx, dr)
-			return nil, errors.New("Velero did not hand out the backup's contents within 2 minutes")
+			return nil, failRestore("Velero did not hand out the backup's contents within 2 minutes.")
 		}
 		rs.Status.Message = "Reading the backup's contents."
 		return nil, errWait
 	}
 	c, err = r.download(ctx, downloadURL)
 	if err != nil {
-		return nil, err
+		// Said in the status, not only retried: a download that keeps
+		// failing (the storage refusing the encryption key, say) left the
+		// Restore at "Reading the backup's contents." for good. The error
+		// never carries the pre-signed URL.
+		msg := downloadError(err)
+		if r.now().Sub(dr.GetCreationTimestamp().Time) > contentsWait {
+			_ = r.Delete(ctx, dr)
+			return nil, failRestore("Could not read the backup's contents: %s.", msg)
+		}
+		log.FromContext(ctx).Info("reading the backup's contents failed; retrying", "restore", rs.Name, "err", msg)
+		rs.Status.Message = "Reading the backup's contents failed, retrying: " + msg + "."
+		return nil, errWait
 	}
 	r.mu.Lock()
 	if r.contents == nil {
@@ -575,6 +587,16 @@ func (r *RestoreReconciler) backupContents(ctx context.Context, rs *kwerftv1.Res
 	r.mu.Unlock()
 	_ = client.IgnoreNotFound(r.Delete(ctx, dr))
 	return c, nil
+}
+
+// downloadError says what went wrong with a download without its URL, which
+// is pre-signed (a credential until it expires): net/http's errors carry it.
+func downloadError(err error) string {
+	var ue *url.Error
+	if errors.As(err, &ue) {
+		err = ue.Err
+	}
+	return strings.TrimSuffix(err.Error(), ".")
 }
 
 func (r *RestoreReconciler) download(ctx context.Context, u string) (*backups.Contents, error) {
